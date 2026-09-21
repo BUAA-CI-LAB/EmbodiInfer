@@ -72,6 +72,10 @@ class PolicyService:
         return self.adapter.action_space
 
     def open_session(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        # Schema strings are the wire contract with clients: every payload is
+        # tagged "embodiinfer.<area>.<name>.v<version>" and is validated
+        # verbatim. Bumping a shape requires a new ".vN" suffix, never a silent
+        # change to an existing one.
         if request.get("schema") != "embodiinfer.policy.session.v1":
             raise ServeError(400, "unsupported_schema", "unsupported session schema")
         robot_id = _identifier(request.get("robot_id"), "robot_id")

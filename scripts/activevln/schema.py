@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+# Reference bundles produced by these scripts carry this schema name in their
+# manifest; parity loaders reject bundles tagged with any other name.
 SCHEMA_NAME = "embodiinfer.activevln.reference"
 SCHEMA_VERSION = 1
 PRODUCERS = {"hf_full", "hf_incremental", "official_vllm"}
