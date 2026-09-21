@@ -1,0 +1,4 @@
+/.venv/
+/runs/
+/reports/
+/__pycache__/

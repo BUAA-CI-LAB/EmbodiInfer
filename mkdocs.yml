@@ -1,0 +1,99 @@
+site_name: EmbodiInfer
+site_description: An inference and RL-rollout engine for embodied models
+site_url: https://embodiinfer.readthedocs.io/
+repo_url: https://github.com/BUAA-CI-LAB/EmbodiInfer
+repo_name: BUAA-CI-LAB/EmbodiInfer
+# English and Simplified Chinese are parallel trees. `docs/zh/` and
+# `mkdocs.zh.yml` belong to the Chinese build; the shared assets, stylesheet,
+# and `requirements.txt` stay at the `docs/` root.
+docs_dir: docs/en
+
+theme:
+  name: material
+  language: en
+  logo: assets/mark.svg
+  favicon: assets/mark.svg
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.instant.progress
+    - content.code.copy
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: installation.md
+      - Quick start: quickstart.md
+  - Models:
+      - Supported models: models.md
+  - Serving:
+      - Serving: serving.md
+      - Parallelism: parallelism.md
+  - Performance: benchmark.md
+  - Design:
+      - Architecture: architecture.md
+  - Reference:
+      - Python API: api.md
+  - Project:
+      - Contributing: contributing.md
+      - Code of Conduct: code-of-conduct.md
+      - License: license.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: false
+            heading_level: 3
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
+            filters: ["!^_"]

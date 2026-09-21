@@ -1,0 +1,4 @@
+.venv/
+runs/
+reports/
+*.tar.gz

@@ -1,0 +1,24 @@
+schema_version: 1
+model: cosmos
+checkpoint: /models/benchmark/cosmos
+vae_checkpoint: /models/benchmark/cosmos/Wan2.1_VAE.pth
+vae_repository: nvidia/Cosmos-Predict2-2B-Video2World
+vae_revision: f50c09f5d8ab133a90cac3f4886a6471e9ba3f18
+vae_sha256: 38071ab59bd94681c686fa51d75a1968f64e470262043be31f7a094e442fd981
+device: cuda:0
+dtype: bfloat16
+seed: 42
+warmup_calls: 10
+repeats: 1
+cuda_graph: true
+num_steps: 5
+dataset:
+  name: LIBERO-10
+  repository: yifengzhu-hf/LIBERO-datasets
+  revision: f13aa24a3da8c43c7225569f28c562979fa0e35a
+  root: /benchmark-data/libero/libero_10
+  task_limit: 10
+  demos_per_task: 10
+  frames_per_demo: 16
+  sample_limit: null
+output: runs/cosmos-libero10.json

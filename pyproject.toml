@@ -1,0 +1,189 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embodiinfer"
+version = "0.1.0"
+description = "EmbodiInfer: a vLLM-class inference & RL-rollout engine specialized for VLA / WAM / pi0.5 embodied models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "EmbodiInfer contributors" }]
+keywords = ["embodied-ai", "vla", "wam", "inference-engine", "cuda-graph", "triton"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "torch>=2.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/BUAA-CI-LAB/EmbodiInfer"
+Repository = "https://github.com/BUAA-CI-LAB/EmbodiInfer"
+Issues = "https://github.com/BUAA-CI-LAB/EmbodiInfer/issues"
+Documentation = "https://embodiinfer.readthedocs.io/"
+
+[project.optional-dependencies]
+serve = ["websockets>=12.0", "msgpack>=1.0"]
+# Optional WirelessComm data plane. WirelessComm is not distributed here,
+# so this extra stays empty: the public lock never requires a private
+# repository. Install the transport separately on nodes that need it.
+wireless = ["wireless-comm @ git+https://github.com/BUAA-CI-LAB/WirelessComm@v0.1.0"]
+
+[dependency-groups]
+dev = ["pytest>=7.0", "ruff>=0.10"]
+# pi0.5 adapter: pinned — the adapter reuses lerobot internals, so parity is
+# tied to this version (see tests/test_pi05_parity.py).
+pi05 = ["lerobot[pi]==0.5.1"]
+# CPU-only Orbax preparation plus OpenPI's SentencePiece tokenizer. No JAX CUDA
+# runtime is installed; converted checkpoints use the existing Torch decoder.
+pi05-openpi = ["jax==0.5.3", "orbax-checkpoint==0.11.13", "sentencepiece==0.2.0"]
+# GR00T N1.7 adapter: fully integrated — the action head is vendored and the
+# backbone is stock transformers Qwen3-VL, so embodiinfer imports NO gr00t package at
+# runtime. Reference dumps must be produced in the upstream GR00T environment;
+# its architecture-specific stack intentionally does not enter this lock file.
+# OpenVLA-OFT adapter: the LLM forward is embodiinfer-owned (self-hosted Llama-2 over the
+# stock LlamaForCausalLM modules); the DINOv2+SigLIP vision backbone is a vendored
+# timm leaf. timm is pinned <1.0.0 to match the checkpoint — its bundled modeling
+# hard-requires timm 0.9.x and the vision numerics differ across the 0.9/1.0 boundary
+# (verified: max|Δ vision| = 0 vs the checkpoint under timm 0.9.16).
+openvla-oft = ["timm>=0.9.10,<1.0.0", "torchvision", "safetensors"]
+# LingBot-VLA adapter: package-free (runs in vvla_env) — the transformer
+# forward (Qwen2.5-VL VL stream + vendored Qwen2 action expert, MoT shared attention) is
+# embodiinfer-owned; the VL backbone is stock transformers Qwen2.5-VL, weights loaded directly from
+# robbyant/lingbot-vla-4b. embodiinfer imports NO lingbotvla package at runtime (its LeRobot-v3/torch-2.8
+# stack conflicts with the vvla_env reference env), same posture as GR00T. The lingbotvla package is only needed in
+# a dedicated env to produce the parity reference dump.
+lingbot-vla = ["transformers>=4.49", "torchvision", "safetensors"]
+# ActiveVLN numerical parity is anchored to the checkpoint's transformers version.
+# Install this group in a dedicated environment; GR00T and other adapters may need
+# incompatible transformers versions for their own reference generation.
+activevln = ["transformers==4.51.3", "torchvision", "safetensors"]
+# StreamVLN is self-hosted: VVLA owns the Qwen2 execution, KV cache, visual
+# pooling, multimodal splice, and recurrent policy state. Keep its optimized
+# Torch/Triton runtime isolated from model profiles with incompatible pins.
+# Torch 2.10.0 selects its matching Triton 3.6.0 wheel on Linux.
+streamvln = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "transformers==4.51.3",
+    "safetensors",
+    "Pillow",
+]
+qwen25-vln = ["transformers==4.57.1", "torchvision", "safetensors", "Pillow"]
+# Offline benchmarks reuse published observations; HDF5 loading never needs LIBERO/Habitat.
+benchmark = ["PyYAML>=6", "h5py>=3.10"]
+# The measured Thor/cu132 and 4090/cu129 Torch 2.13 environments use each
+# benchmark's setup_env.py and requirements files, outside this cu130 lock.
+# Cosmos Policy (WAM) adapter: the first world-action model. The Cosmos-Predict2 2B DiT
+# forward is embodiinfer-owned (self-hosted, no TransformerEngine/megatron), and the Wan2.1 VAE is
+# a vendored leaf (:mod:`embodiinfer.policies.cosmos.vae_wan`, needs einops). embodiinfer imports NO
+# cosmos_policy package at runtime (its TransformerEngine/megatron stack pins torch 2.7 and
+# conflicts with the vvla_env reference env) — the cosmos-policy repo is only needed in a dedicated env to
+# produce the parity reference (see docs/proposals/0006). Checkpoints:
+# nvidia/Cosmos-Policy-LIBERO-Predict2-2B (DiT) + Cosmos-Predict2-2B-Video2World/tokenizer (VAE).
+cosmos = ["einops", "transformers>=4.40"]
+dm05 = []
+
+[tool.uv]
+required-version = ">=0.12.0,<0.13"
+default-groups = ["dev"]
+# Preserve the main development/runtime lock's Torch upper bound without
+# excluding the separately verified Torch 2.13 benchmark environments from
+# the installable core package metadata.
+constraint-dependencies = ["torch<2.11"]
+# Each model profile is a complete, isolated environment. uv refuses commands
+# that accidentally combine profiles whose Torch/Transformers stacks may differ.
+conflicts = [
+    [
+        { group = "pi05" },
+        { group = "openvla-oft" },
+        { group = "lingbot-vla" },
+        { group = "activevln" },
+        { group = "streamvln" },
+        { group = "qwen25-vln" },
+        { group = "cosmos" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.dependency-groups]
+# LeRobot 0.5.1 supports Python 3.12+, while embodiinfer core remains Python 3.10+.
+pi05 = { requires-python = ">=3.12" }
+
+[project.scripts]
+embodiinfer-serve = "embodiinfer.engine.serve.http_server:main"
+embodiinfer-http-serve = "embodiinfer.engine.serve.http_server:main"
+embodiinfer-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
+# Compatibility aliases for existing deployments.
+vvla-serve = "embodiinfer.engine.serve.http_server:main"
+vvla-http-serve = "embodiinfer.engine.serve.http_server:main"
+vvla-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
+
+[tool.setuptools.packages.find]
+include = ["embodiinfer*", "vvla"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: requires a CUDA device (run on the box, not in CI)",
+    "pi05: requires CUDA + a pi0.5 checkpoint + lerobot (run on the box)",
+    "gr00t: requires CUDA + a GR00T checkpoint + Cosmos backbone + a gr00t-native reference dump (run on the box)",
+    "openvla_oft: requires CUDA + an OpenVLA-OFT checkpoint + timm 0.9.x (run on the box)",
+    "lingbot_vla: requires CUDA + a LingBot-VLA checkpoint + the lingbotvla package (run on the box)",
+    "cosmos: requires CUDA + the Cosmos Policy LIBERO Predict2-2B checkpoint + the Wan2.1 VAE (run on the box)",
+    "dm05: requires CUDA + OpenDM + a DM0.5 checkpoint and norm_stats.json (run in a dedicated env)",
+    "activevln: requires CUDA + the pinned ActiveVLN R2R checkpoint and reference bundle (run on the box)",
+    "streamvln: requires CUDA + the StreamVLN checkpoint (run on the box)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["embodiinfer", "tests"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, UP pyupgrade, B bugbear, C4 comprehensions, SIM simplify.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+# E501 (line length) is left to the formatter; B905 (zip strict=) is noise for our fixed-shape zips;
+# C408 keeps the readable dict(key=value) form for config-preset tables.
+ignore = ["E501", "B905", "C408"]
+
+[tool.ruff.format]
+# wan.py is a faithful, verbatim copy of the Wan2.1 VAE. Reformatting it would
+# break the byte correspondence with upstream, so it is checked but never
+# reformatted; its lint exceptions stay in force below.
+exclude = ["embodiinfer/models/video_vae/wan.py"]
+
+[tool.ruff.lint.per-file-ignores]
+# vae_wan.py is a verbatim vendored copy of the Wan2.1 VAE: the mutable-default
+# `feat_idx=[0]` accumulators are load-bearing for its streaming feat-cache indexing
+# (changing them would break parity), so B006 is expected here.
+"embodiinfer/models/video_vae/wan.py" = ["B006"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["embodiinfer"]

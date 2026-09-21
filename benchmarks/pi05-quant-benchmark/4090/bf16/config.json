@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "model": "pi05",
+  "checkpoint": "/models/pi05_libero_finetuned_v044_gitcode",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 42,
+  "warmup_calls": 1600,
+  "repeats": 1,
+  "compile_backend": "inductor",
+  "quantization": null,
+  "cuda_graph": true,
+  "num_steps": 10,
+  "dataset": {
+    "name": "LIBERO-10",
+    "repository": "yifengzhu-hf/LIBERO-datasets",
+    "revision": "f13aa24a3da8c43c7225569f28c562979fa0e35a",
+    "root": "/datasets/libero/libero_10",
+    "task_limit": 10,
+    "demos_per_task": 10,
+    "frames_per_demo": 16,
+    "sample_limit": null
+  },
+  "output": "runs/libero10.result.json",
+  "native_inference": true,
+  "prefix_cuda_graph": true,
+  "denoise_attention": "triton",
+  "prefix_attention": "triton"
+}

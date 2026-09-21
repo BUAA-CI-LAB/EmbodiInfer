@@ -1,0 +1,69 @@
+/* EmbodiInfer documentation theme.
+ *
+ * The palette is taken from the project mark: the orange of its chevrons and
+ * the near-black of the wordmark. Everything else is left to Material.
+ */
+
+:root {
+  --md-primary-fg-color: #14202e;
+  --md-primary-fg-color--light: #35506b;
+  --md-primary-fg-color--dark: #0b131c;
+  --md-accent-fg-color: #f25c3b;
+  --md-typeset-a-color: #c8391a;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #0b131c;
+  --md-accent-fg-color: #ff7a5c;
+  --md-typeset-a-color: #ff8f74;
+}
+
+/* The landing page supplies its own hero, so the theme adds no title there. */
+.md-typeset .hero {
+  margin: 1.6rem 0 2.4rem;
+  text-align: center;
+}
+
+.md-typeset .hero > h1 {
+  font-size: 2.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.2rem;
+}
+
+.md-typeset .hero > p {
+  font-size: 1.05rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .hero .md-button {
+  margin: 0.2rem 0.25rem 0;
+}
+
+/* The hero heading carries the wordmark, so the permalink glyph only adds noise. */
+.md-typeset .hero-title .headerlink {
+  display: none;
+}
+
+/* The wordmark sits in the hero; the header keeps the square mark. */
+.md-typeset .hero-title {
+  margin: 0 0 1rem;
+}
+
+.md-typeset .hero-logo {
+  height: 3.0rem;
+  width: auto;
+}
+
+/* The wordmark is dark on light. On the dark scheme it needs a plate, or the
+ * type disappears into the background. */
+[data-md-color-scheme="slate"] .hero-logo {
+  background: #ffffff;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.9rem;
+}
+
+/* Each card ends in one or two actions; keep them tight against the edge. */
+.md-typeset .grid.cards > ul > li > p:last-child {
+  margin-bottom: 0;
+}

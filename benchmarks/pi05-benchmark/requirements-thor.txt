@@ -1,0 +1,21 @@
+# CUDA wheels are copied from the verified Thor environment by setup_env.py.
+torch==2.13.0+cu132
+torchvision==0.28.0+cu132
+triton==3.7.1
+numpy==2.2.6
+Pillow==12.3.0
+PyYAML==6.0.3
+h5py>=3.10
+safetensors==0.8.0
+filelock
+fsspec
+networkx
+Jinja2
+sympy==1.14.0
+typing_extensions
+# LeRobot 0.5.1 is copied from the Thor runtime snapshot. Its Torch upper bounds
+# conflict with Thor's CUDA 13.2 wheels; dependency-check.json records this override.
+transformers==5.3.0
+# Required only to prepare and validate the native tokenizer cache.
+sentencepiece==0.2.2
+protobuf==7.35.1

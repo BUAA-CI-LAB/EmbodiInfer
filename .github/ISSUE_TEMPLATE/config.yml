@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Architecture
+    url: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/docs/en/architecture.md
+    about: Engine contracts, mechanisms, package layout, and the ownership boundary.
+  - name: Security report
+    url: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/SECURITY.md
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Contributing guide
+    url: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/CONTRIBUTING.md
+    about: Engineering principles, the change flow from proposal to merge, setup, and how to report issues.

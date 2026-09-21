@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: CPU tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.x"
+          enable-cache: true
+
+      # The CPU suite needs PyYAML from the `benchmark` group and Transformers
+      # from `lingbot-vla`; a plain sync leaves both out and the suite fails to
+      # collect. On Linux the lock also pins the CUDA 13 build of Torch, which a
+      # CPU runner does not need and which is several gigabytes, so install
+      # everything else from the lock and then swap in the CPU build.
+      - name: Sync the locked environment without the accelerator build of Torch
+        run: >
+          uv sync --frozen
+          --no-install-package torch --no-install-package torchvision
+          --group benchmark --group lingbot-vla
+
+      - name: Install the CPU build of Torch
+        run: uv pip install --index-url https://download.pytorch.org/whl/cpu "torch<2.11" "torchvision<0.26"
+
+      - name: Run the CPU test suite
+        run: .venv/bin/python -m pytest tests -q
+
+      - name: Check the public entry points
+        run: |
+          .venv/bin/embodiinfer-http-serve --help > /dev/null
+          .venv/bin/python -c "import embodiinfer; from embodiinfer import EmbodiInfer, Observation, EngineConfig"
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.x"
+          enable-cache: true
+
+      # The dev group alone: ruff and pytest, without the accelerator stack.
+      - name: Install the lint tooling
+        run: uv sync --frozen --only-group dev --no-install-project
+
+      - name: Check
+        run: |
+          .venv/bin/ruff check embodiinfer tests
+          .venv/bin/ruff format --check embodiinfer tests
+
+  docs:
+    name: Docs (strict)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build the documentation
+        run: |
+          pip install -r docs/requirements.txt
+          mkdocs build --strict
+
+      # The Simplified Chinese site is a separate Read the Docs project built
+      # from this repository, so it has to keep building here.
+      - name: Build the Simplified Chinese documentation
+        run: mkdocs build --strict -f mkdocs.zh.yml

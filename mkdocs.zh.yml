@@ -1,0 +1,109 @@
+# Simplified Chinese site. Read the Docs builds this as a translation of the
+# `embodiinfer` project, from the same repository and branch. The root
+# `.readthedocs.yaml` selects this file when READTHEDOCS_LANGUAGE is `zh-cn`.
+#
+# Keep this file in step with mkdocs.yml: only the language, the docs_dir, the
+# navigation and the page set differ.
+site_name: EmbodiInfer
+site_description: 面向具身模型的推理与 RL rollout 引擎
+site_url: https://embodiinfer.readthedocs.io/zh-cn/latest/
+repo_url: https://github.com/BUAA-CI-LAB/EmbodiInfer
+repo_name: BUAA-CI-LAB/EmbodiInfer
+
+# `docs/zh/assets` and `docs/zh/stylesheets` are symlinks to their `docs/`
+# counterparts, which is how both builds share one logo, favicon, and
+# stylesheet. Check out with symlinks enabled (`git config core.symlinks true`).
+docs_dir: docs/zh
+site_dir: site-zh
+
+theme:
+  name: material
+  language: zh
+  logo: assets/mark.svg
+  favicon: assets/mark.svg
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.instant.progress
+    - content.code.copy
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+
+# The navigation mirrors mkdocs.yml. Keep the two in step: a page entry here
+# without a matching docs/zh/<page>.md fails the strict build on purpose.
+nav:
+  - 首页: index.md
+  - 快速开始:
+      - 安装: installation.md
+      - 快速开始: quickstart.md
+  - 模型:
+      - 支持的模型: models.md
+  - 推理部署:
+      - 部署推理服务: serving.md
+      - 多 GPU 并行推理: parallelism.md
+  - 性能测试: benchmark.md
+  - 引擎设计:
+      - 推理引擎架构: architecture.md
+  - 参考:
+      - Python API: api.md
+  - 项目:
+      - 参与贡献（英文）: https://embodiinfer.readthedocs.io/en/latest/contributing/
+      - 行为准则（英文）: https://embodiinfer.readthedocs.io/en/latest/code-of-conduct/
+      - 许可证（英文）: https://embodiinfer.readthedocs.io/en/latest/license/
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: false
+            heading_level: 3
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
+            filters: ["!^_"]

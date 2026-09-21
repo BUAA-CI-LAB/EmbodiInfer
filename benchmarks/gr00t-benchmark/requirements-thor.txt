@@ -1,0 +1,19 @@
+# CUDA wheels are copied from the verified Thor environment by setup_env.py.
+torch==2.13.0+cu132
+torchvision==0.28.0+cu132
+triton==3.7.1
+numpy==2.2.6
+Pillow==12.3.0
+PyYAML==6.0.3
+h5py>=3.10
+safetensors==0.8.0
+filelock
+fsspec
+networkx
+Jinja2
+sympy==1.14.0
+typing_extensions
+transformers==5.3.0
+diffusers==0.35.2
+opencv-python-headless
+huggingface_hub

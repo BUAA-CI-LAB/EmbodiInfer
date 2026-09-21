@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "model": "pi05",
+  "checkpoint": "/tmp/quantization-81003d6/assets/models/pi05_libero_finetuned_v044_gitcode",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 42,
+  "warmup_calls": 10,
+  "repeats": 1,
+  "compile_backend": "none",
+  "quantization": {
+    "method": "int8",
+    "backend": "native"
+  },
+  "cuda_graph": true,
+  "num_steps": 10,
+  "dataset": {
+    "name": "LIBERO-10",
+    "repository": "yifengzhu-hf/LIBERO-datasets",
+    "revision": "f13aa24a3da8c43c7225569f28c562979fa0e35a",
+    "root": "/tmp/quantization-81003d6/assets/datasets/libero/libero_10",
+    "task_limit": 10,
+    "demos_per_task": 10,
+    "frames_per_demo": 16,
+    "sample_limit": null
+  },
+  "output": "runs/libero10.result.json",
+  "load_device": "cuda:0",
+  "low_cpu_mem_usage": true
+}

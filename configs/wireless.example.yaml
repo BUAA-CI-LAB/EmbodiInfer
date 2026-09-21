@@ -1,0 +1,14 @@
+local:
+  node_id: inference-1
+  host: 192.168.1.20
+  bind_host: 0.0.0.0
+  port: 9100
+
+peers:
+  - node_id: robot-1
+    host: 192.168.1.10
+    port: 9101
+
+comm:
+  max_peer_queued_messages: 1024
+  max_peer_queued_bytes: 134217728

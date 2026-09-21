@@ -1,0 +1,68 @@
+name: Feature request
+description: Propose a model adapter, backend, kernel, or engine capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New models are added through a design document under `docs/proposals/`,
+        parity tooling, and an end-to-end run; see
+        [CONTRIBUTING.md](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/CONTRIBUTING.md).
+        A model is not called supported from code presence alone.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: The capability in one sentence.
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem and motivation
+      description: >
+        What you cannot run today, who needs it, and why the existing contracts
+        or adapters cannot already express it.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - new model adapter or policy contract
+        - kernel, layer, or backend capability
+        - engine, batching, session, or CUDA-graph behaviour
+        - parallel replicas or tensor parallelism
+        - rollout, weight sync, or RL capability
+        - serving frontend (HTTP or websocket)
+        - performance, memory, or compile time
+        - documentation, benchmarks, or examples
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: >
+        Include the reference implementation, checkpoint, hardware, and intended
+        dependency profile group if you know them.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, and why they are not enough.
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues, `docs/proposals/`, and the design document.
+          required: true
+        - label: I can contribute an implementation, weights, or a test run.
+          required: false

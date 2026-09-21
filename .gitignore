@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+*.log
+*.pt
+*.ckpt
+*.mp4
+.DS_Store
+results/
+*.json.local
+
+# Local-only working material: operational scripts, machine-specific writeups,
+# working notes, and agent instruction files. None of it ships.
+scripts/box_*.sh
+docs/RESULTS.md
+dev-docs/
+CLAUDE.md
+
+# logo working files: only the main logo is tracked (mark/favicon/dark variant
+# and codex concept renders stay local)
+assets/*
+!assets/vvla-logo.svg
+
+# Documentation build output
+site/
+site-zh/

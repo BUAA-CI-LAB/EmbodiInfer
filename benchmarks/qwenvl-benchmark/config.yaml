@@ -1,0 +1,49 @@
+schema_version: 1
+model: qwenvl
+device: cuda:0
+dtype: bfloat16
+seed: 42
+warmup_calls: 10
+repeats: 1
+cuda_graph: true
+warmup_all_samples: true
+history_frames: 4
+samples_per_episode: 4
+models:
+  low:
+    checkpoint: /models/benchmark/qwen-low
+    revision: fb14e7e3672c5da5f4694ac170a54e983a50ccf3
+    max_new_tokens: 1
+    compile_backend: inductor
+    attention_backend: torch_sdpa
+    compile_text_buckets: [768, 1024, 1280, 1536, 2048]
+    history_image_cache: rgb_bytes
+  panoramic:
+    checkpoint: /models/benchmark/qwen-panoramic
+    revision: f7f4d90aa17cb5168d38981b641066d113a826f8
+    max_new_tokens: 1
+    compile_backend: inductor
+    attention_backend: torch_sdpa
+    compile_text_buckets: [2048, 2560, 3072, 4096]
+    history_image_cache: rgb_bytes
+  navida:
+    checkpoint: /models/benchmark/navida
+    revision: 0ccd8b6b3cd0826c5dd67374415ceedf51adb9e2
+    max_new_tokens: 512
+    compile_backend: none
+datasets:
+  - name: R2R
+    repository: cywan/StreamVLN-Trajectory-Data
+    revision: dc61ee9b4e90aa7ba63c1163b2134df5610dccb9
+    split: published_training_trajectories
+    root: /benchmark-data/navigation/R2R
+    annotations: /benchmark-data/navigation/R2R/annotations_v1-3.json
+    episode_limit: 48
+  - name: RxR
+    repository: cywan/StreamVLN-Trajectory-Data
+    revision: dc61ee9b4e90aa7ba63c1163b2134df5610dccb9
+    split: published_training_trajectories
+    root: /benchmark-data/navigation/RxR
+    annotations: /benchmark-data/navigation/RxR/annotations.json
+    episode_limit: 48
+output_dir: runs

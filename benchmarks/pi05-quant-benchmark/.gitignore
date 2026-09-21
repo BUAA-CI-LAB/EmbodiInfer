@@ -1,0 +1,11 @@
+/.venv*/
+/runs/
+/reports/
+/snapshots/
+__pycache__/
+**/runs/
+*.result.json
+*.comparison.json
+*.failure.json
+*.log
+*.tar.gz

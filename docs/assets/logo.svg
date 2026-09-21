@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 12 300 40" width="480" height="64" role="img" aria-label="EmbodiInfer">
+  <polyline points="12,18 26,32 12,46" fill="none" stroke="#f25c3b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="26,18 40,32 26,46" fill="none" stroke="#f25c3b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="54" y="45" font-family="SF Pro Display, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif" font-size="40" font-weight="700" letter-spacing="-1.6" fill="#14202e">EmbodiInfer</text>
+</svg>

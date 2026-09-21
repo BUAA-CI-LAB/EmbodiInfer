@@ -1,0 +1,19 @@
+diff --git a/models/pi05.cpp b/models/pi05.cpp
+--- a/models/pi05.cpp
++++ b/models/pi05.cpp
+@@ -818,8 +818,15 @@ std::vector<float> Pi05ModelArch::predict(const Inputs& in) {
+                  runtime->noise, runtime->suffix_pos, runtime->full_mask}) {
+             ggml_set_input(input);
+         }
++        // These values are uploaded once and reused with the persistent graph.
++        // INPUT alone does not prevent gallocr from reusing their storage.
++        for (ggml_tensor * constant : {
++                 runtime->prefix_pos, runtime->suffix_pos, runtime->full_mask}) {
++            ggml_set_output(constant);
++        }
+         runtime->time.resize(num_steps);
+         for (int step = 0; step < num_steps; ++step) {
+             runtime->time[step] = ggml_new_tensor_2d(C, GGML_TYPE_F32, hidden_ex, 1);
+             ggml_set_input(runtime->time[step]);
++            ggml_set_output(runtime->time[step]);
+         }
