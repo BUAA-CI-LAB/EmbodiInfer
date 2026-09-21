@@ -133,7 +133,7 @@ def main() -> None:
                 if batch_number % 25 == 0:
                     print(json.dumps({"batch": batch_number, "e2e_ms": elapsed}), flush=True)
     after = engine.runtime()
-    if isinstance(engine, (compare.Vvla, compare.PhyAI)) and before != after:
+    if isinstance(engine, (compare.EmbodiInfer, compare.PhyAI)) and before != after:
         raise RuntimeError("new graph capture during formal batching; extend warmup")
     observation_count = sum(row["observations"] for row in rows)
     seconds = sum(row["e2e_ms"] for row in rows) / 1000

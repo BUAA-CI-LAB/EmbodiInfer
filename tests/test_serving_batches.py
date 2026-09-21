@@ -108,7 +108,11 @@ def test_session_idempotency_survives_cross_session_batching():
     requests = []
     for i in range(3):
         session = service.open_session(
-            {"schema": "vvla.policy.session.v1", "robot_id": str(i), "action_space": adapter.action_space}
+            {
+                "schema": "embodiinfer.policy.session.v1",
+                "robot_id": str(i),
+                "action_space": adapter.action_space,
+            }
         )
         requests.append(replace(request(i), session_id=session["session_id"]))
     try:
@@ -128,7 +132,7 @@ def test_reset_waits_for_admitted_step():
     batched = BatchedServingAdapter(adapter, max_batch=1)
     service = PolicyService(batched)
     session = service.open_session(
-        {"schema": "vvla.policy.session.v1", "robot_id": "robot", "action_space": adapter.action_space}
+        {"schema": "embodiinfer.policy.session.v1", "robot_id": "robot", "action_space": adapter.action_space}
     )["session_id"]
     try:
         with ThreadPoolExecutor(2) as pool:

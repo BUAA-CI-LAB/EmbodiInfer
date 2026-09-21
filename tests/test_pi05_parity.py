@@ -1,7 +1,7 @@
 """pi0.5 adapter parity vs LeRobot (box tier: CUDA + lerobot + a checkpoint).
 
 Marked ``pi05`` and skipped unless a checkpoint is provided via the
-``VVLA_PI05_CKPT`` env var (so no checkpoint path lives in the repo). Verifies
+``EMBODIINFER_PI05_CKPT`` env var (so no checkpoint path lives in the repo). Verifies
 that our ``Pi05Policy`` reproduces LeRobot's ``PI05Policy`` bit-for-bit with the
 ``eager`` backend, and losslessly with the fused ``sdpa`` backend (no monkeypatch).
 """
@@ -17,10 +17,10 @@ from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
 pytestmark = pytest.mark.pi05
 
-CKPT = os.environ.get("VVLA_PI05_CKPT")
+CKPT = os.environ.get("EMBODIINFER_PI05_CKPT")
 _skip = pytest.mark.skipif(
     not (CKPT and torch.cuda.is_available()),
-    reason="set VVLA_PI05_CKPT and run on CUDA",
+    reason="set EMBODIINFER_PI05_CKPT and run on CUDA",
 )
 
 

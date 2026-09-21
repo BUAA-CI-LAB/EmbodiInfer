@@ -1,4 +1,4 @@
-"""VVLA-owned Triton kernels."""
+"""EmbodiInfer-owned Triton kernels."""
 
 from embodiinfer.backend.triton.activation import gated_gelu, supports_swiglu, swiglu
 from embodiinfer.backend.triton.attention import gqa_decode_graph, graph_gqa_available

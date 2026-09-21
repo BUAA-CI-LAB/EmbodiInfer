@@ -334,7 +334,7 @@ def flash_prefill_attention(
     scale: float | None = None,
     enable_gqa: bool = False,
 ) -> torch.Tensor:
-    """Run VVLA Triton FlashAttention for prefill, with an SDPA fallback."""
+    """Run EmbodiInfer Triton FlashAttention for prefill, with an SDPA fallback."""
 
     if not supports_flash_prefill_attention(
         query,
@@ -434,7 +434,7 @@ def flash_prefill_attention_graph(
         or position.numel() != 1
         or key_bucket > key_cache.shape[2]
     ):
-        raise ValueError("unsupported input for VVLA graph prefill attention")
+        raise ValueError("unsupported input for EmbodiInfer graph prefill attention")
     output = torch.empty_like(query)
     batch_size, num_query_heads, query_length, head_dim = query.shape
     block_m = 32

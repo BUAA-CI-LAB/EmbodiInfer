@@ -99,8 +99,8 @@ The Inductor configuration used `backend=inductor`, `fullgraph=true`, `dynamic=f
 
 ## Artifacts
 
-- Manifests and provenance: `/benchmark-artifacts/vvla-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822`
-- Admitted Torch/CUDA Graph JSON and logs: `/benchmark-artifacts/vvla-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822/results-torch-only-v9-admitted`
-- Low Inductor diagnostic: `/benchmark-artifacts/vvla-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822/results-torch-only-v7-final/kernel-low-inductor.json`
-- NaViDA diagnostic: `/benchmark-artifacts/vvla-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822/results-torch-only-v10-navida/full-navida-none.json`
+- Manifests and provenance: `/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822`
+- Admitted Torch/CUDA Graph JSON and logs: `/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822/results-torch-only-v9-admitted`
+- Low Inductor diagnostic: `/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822/results-torch-only-v7-final/kernel-low-inductor.json`
+- NaViDA diagnostic: `/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/commit7-r2r-vlnce-aligned-real-rgb-v3-20260822/results-torch-only-v10-navida/full-navida-none.json`
 

@@ -85,7 +85,7 @@ def test_http_client_opens_steps_and_closes_authenticated_session(
             assert result.returncode == 0, result.stderr
         if not infer_fails:
             reply = json.loads(result.stdout)
-            assert reply["schema"] == "vvla.policy.step.result.v1"
+            assert reply["schema"] == "embodiinfer.policy.step.result.v1"
             assert reply["step_id"] == 0
             assert reply["actions"][0]["values"]["data"] == [[0.1, 0.2]]
         assert len(adapter.requests) == 1

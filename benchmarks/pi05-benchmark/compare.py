@@ -90,7 +90,7 @@ def noise_for(index: int, batch: int, dtype: torch.dtype) -> torch.Tensor:
 
 
 class EmbodiInfer:
-    """Execute the unchanged VVLA model and complete Euler loop."""
+    """Execute the unchanged EmbodiInfer model and complete Euler loop."""
 
     def __init__(self, config: dict, processor: Processor):
         from embodiinfer.engine.config import EngineConfig
@@ -441,7 +441,7 @@ def main() -> None:
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     if args.mode == "calibrate" and (config["engine"], config["dtype"]) != ("embodiinfer", "float32"):
-        raise ValueError("calibration uses VVLA FP32 arithmetic on BF16-rounded weights/inputs")
+        raise ValueError("calibration uses EmbodiInfer FP32 arithmetic on BF16-rounded weights/inputs")
     if config["batch_size"] != 1:
         raise ValueError("this runner currently requires batch_size=1")
     profile = bench.digest_json({k: v for k, v in config.items() if k not in ("output", "gate_report")})
@@ -460,9 +460,9 @@ def main() -> None:
         gate = measurement_gate(config, profile, args.allow_numerical_mismatch)
     processor = Processor(Path(config["checkpoint"]))
     started = time.perf_counter()
-    engine = {"embodiinfer": EmbodiInfer, "vlacpp": VlaCpp, "phyai": PhyAI, "embodied": Embodied}[config["engine"]](
-        config, processor
-    )
+    engine = {"embodiinfer": EmbodiInfer, "vlacpp": VlaCpp, "phyai": PhyAI, "embodied": Embodied}[
+        config["engine"]
+    ](config, processor)
     load_seconds = time.perf_counter() - started
     reference_dir = Path(config["reference_dir"])
     if args.mode == "reference":
@@ -494,7 +494,7 @@ def main() -> None:
             fixture = reference_dir / f"{index:04d}.npz"
             if args.mode == "reference":
                 if not isinstance(engine, EmbodiInfer):
-                    raise ValueError("only VVLA generates the reference")
+                    raise ValueError("only EmbodiInfer generates the reference")
                 native_post = engine.native_processor.restore_actions(
                     torch.from_numpy(normalized), prepared["state"]
                 )
@@ -574,7 +574,7 @@ def main() -> None:
     }
     if args.mode == "calibrate":
         report["tolerance_contract"] = {
-            "reference": "VVLA BF16 vs FP32 with identical BF16-rounded weights/inputs/noise",
+            "reference": "EmbodiInfer BF16 vs FP32 with identical BF16-rounded weights/inputs/noise",
             "comparison": "first 50x7 normalized action columns",
             "factor": 2,
             "max_abs_tolerance": max(1e-4, 2 * max(c["max_abs"] for c in checks)),

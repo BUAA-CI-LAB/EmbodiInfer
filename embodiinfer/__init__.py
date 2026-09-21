@@ -30,7 +30,6 @@ from .engine.rollout.refit import (
     refit_state_dict,
 )
 from .engine.serve import EmbodiInfer
-from .engine.serve import EmbodiInfer as Vvla  # deprecated alias
 from .exceptions import (
     EmbodiInferError,
     ObservationError,
@@ -51,7 +50,6 @@ from .types import ActionChunk, Observation, SampleParams, TrajectoryRecord
 __version__ = "0.1.0"
 __all__ = [
     "EmbodiInfer",
-    "Vvla",  # deprecated alias
     "EngineCore",
     "AsyncEngine",
     "DataParallelEngine",

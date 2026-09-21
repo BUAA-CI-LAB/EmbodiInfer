@@ -1,4 +1,4 @@
-"""Compare LeRobot and VVLA on local recorded observations, without a robot service."""
+"""Compare LeRobot and EmbodiInfer on local recorded observations, without a robot service."""
 
 from __future__ import annotations
 
@@ -21,7 +21,13 @@ from embodiinfer.policies.pi05.checkpoints.lerobot import load_lerobot_checkpoin
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
-MODES = ("lerobot", "vvla_eager", "vvla_eager_graph", "vvla_sdpa", "vvla_sdpa_graph")
+MODES = (
+    "lerobot",
+    "embodiinfer_eager",
+    "embodiinfer_eager_graph",
+    "embodiinfer_sdpa",
+    "embodiinfer_sdpa_graph",
+)
 
 
 def read_observation(path: Path) -> dict[str, Any]:

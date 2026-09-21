@@ -9,7 +9,7 @@
 - Software: PyTorch `2.13.0+cu130`, CUDA `13.0`, Triton `3.7.1`
 - Workload: B1, `limit=1`, seed `41`, warmup `3`, timed iterations `10`
 - Input: real RGB files loaded through the strict Habitat manifest path
-- Artifact directory: `/benchmark-artifacts/vvla-benchmarks/navigation-3b/torch-compile-v2-real-image-20260822/final`
+- Artifact directory: `/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/torch-compile-v2-real-image-20260822/final`
 
 The manifest proves the real-file loader, processor, model, parser, and benchmark
 paths without a synthetic fallback. Its Habitat image is not a complete R2R

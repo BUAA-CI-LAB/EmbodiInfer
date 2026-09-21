@@ -13,10 +13,10 @@ import torch
 @pytest.mark.activevln
 @torch.inference_mode()
 def test_activevln_incremental_logprobs_match_reference():
-    checkpoint = os.environ.get("VVLA_ACTIVEVLN_CKPT")
-    reference = os.environ.get("VVLA_ACTIVEVLN_REF")
+    checkpoint = os.environ.get("EMBODIINFER_ACTIVEVLN_CKPT")
+    reference = os.environ.get("EMBODIINFER_ACTIVEVLN_REF")
     if not checkpoint or not reference or not torch.cuda.is_available():
-        pytest.skip("set VVLA_ACTIVEVLN_CKPT + VVLA_ACTIVEVLN_REF and run on CUDA")
+        pytest.skip("set EMBODIINFER_ACTIVEVLN_CKPT + EMBODIINFER_ACTIVEVLN_REF and run on CUDA")
 
     from safetensors.torch import load_file
     from scripts.activevln.schema import validate_bundle
@@ -119,9 +119,9 @@ def test_activevln_incremental_logprobs_match_reference():
 @torch.inference_mode()
 def test_activevln_greedy_raw_observations_match_reference():
     """Exercise processor + decoder, not only teacher-forced re-scoring."""
-    checkpoint = os.environ.get("VVLA_ACTIVEVLN_CKPT")
-    reference = os.environ.get("VVLA_ACTIVEVLN_GREEDY_REF")
-    input_manifest = os.environ.get("VVLA_ACTIVEVLN_INPUTS")
+    checkpoint = os.environ.get("EMBODIINFER_ACTIVEVLN_CKPT")
+    reference = os.environ.get("EMBODIINFER_ACTIVEVLN_GREEDY_REF")
+    input_manifest = os.environ.get("EMBODIINFER_ACTIVEVLN_INPUTS")
     if not checkpoint or not reference or not input_manifest or not torch.cuda.is_available():
         pytest.skip("set checkpoint, greedy reference, input manifest, and run on CUDA")
 
@@ -225,10 +225,10 @@ def test_activevln_greedy_raw_observations_match_reference():
 @torch.inference_mode()
 def test_activevln_true_weight_incremental_prefix_sharing_and_logprob():
     """Cover incremental parity, prefix sharing and logprob recomputation."""
-    checkpoint = os.environ.get("VVLA_ACTIVEVLN_CKPT")
-    input_manifest = os.environ.get("VVLA_ACTIVEVLN_INPUTS")
+    checkpoint = os.environ.get("EMBODIINFER_ACTIVEVLN_CKPT")
+    input_manifest = os.environ.get("EMBODIINFER_ACTIVEVLN_INPUTS")
     if not checkpoint or not input_manifest or not torch.cuda.is_available():
-        pytest.skip("set VVLA_ACTIVEVLN_CKPT + VVLA_ACTIVEVLN_INPUTS and run on CUDA")
+        pytest.skip("set EMBODIINFER_ACTIVEVLN_CKPT + EMBODIINFER_ACTIVEVLN_INPUTS and run on CUDA")
 
     from PIL import Image
 
@@ -320,10 +320,10 @@ def test_activevln_true_weight_incremental_prefix_sharing_and_logprob():
 @pytest.mark.gpu
 @pytest.mark.activevln
 def test_activevln_true_weight_local_grpo_health_step():
-    checkpoint = os.environ.get("VVLA_ACTIVEVLN_CKPT")
-    input_manifest = os.environ.get("VVLA_ACTIVEVLN_INPUTS")
+    checkpoint = os.environ.get("EMBODIINFER_ACTIVEVLN_CKPT")
+    input_manifest = os.environ.get("EMBODIINFER_ACTIVEVLN_INPUTS")
     if not checkpoint or not input_manifest or not torch.cuda.is_available():
-        pytest.skip("set VVLA_ACTIVEVLN_CKPT + VVLA_ACTIVEVLN_INPUTS and run on CUDA")
+        pytest.skip("set EMBODIINFER_ACTIVEVLN_CKPT + EMBODIINFER_ACTIVEVLN_INPUTS and run on CUDA")
 
     from PIL import Image
 

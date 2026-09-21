@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-SCHEMA_NAME = "vvla.activevln.reference"
+SCHEMA_NAME = "embodiinfer.activevln.reference"
 SCHEMA_VERSION = 1
 PRODUCERS = {"hf_full", "hf_incremental", "official_vllm"}
 LOCK_PATH = Path(__file__).with_name("source_lock.json")

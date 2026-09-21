@@ -193,7 +193,7 @@ reference.
   1.14×; the 2B DiT is compute-bound so the gain is in per-step launch, diluted because
   the 2ab multistep host-side float64 step stays out of the graph, while a single
   DiT-forward microbenchmark is 1.36×.
-- **Engine action path.** `Vvla("cosmos").act(obs)` runs end to end: `collate`
+- **Engine action path.** `EmbodiInfer("cosmos").act(obs)` runs end to end: `collate`
   (`Observation` to `CosmosBatch`, mapping two cameras from `[0,1]` to `[-1,1]`,
   rescaling proprioception, and taking the precomputed-instruction fast path to T5
   cross-attention), then `encode_prefix`, then diffusion denoising, then an

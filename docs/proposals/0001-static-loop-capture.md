@@ -96,7 +96,7 @@ $$\max_i \lVert \Delta a_i \rVert_\infty = 0,$$
 
 - **CPU（mock policy，默认 CI 口径）**：验证静态调度预计算的正确性——`t_all` 与逐步 `torch.full(t_val)` 序列逐位相等；以 mock policy 在 Python 展开循环上验证「预计算路径」与「现状逐步路径」数值一致（CPU 无 CUDA graph，此处只验预计算与循环等价逻辑，不验捕获本身）。
 - **GPU（`@pytest.mark.gpu`）**：真实捕获 parity，达成 §6 的 `max|Δaction| = 0`；`(bucket, num_steps)` 缓存命中与回退分支的行为。
-- **pi0.5（`@pytest.mark.pi05`）**：真实权重下的端到端 parity（`LoopGraph` 对单步 eager），复用 `tests/test_pi05_parity.py` 的门控方式（`VVLA_PI05_CKPT`）。
+- **pi0.5（`@pytest.mark.pi05`）**：真实权重下的端到端 parity（`LoopGraph` 对单步 eager），复用 `tests/test_pi05_parity.py` 的门控方式（`EMBODIINFER_PI05_CKPT`）。
 
 ## 9. 基准计划
 

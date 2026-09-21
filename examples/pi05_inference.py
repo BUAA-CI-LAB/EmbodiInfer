@@ -1,6 +1,6 @@
 """Real pi0.5 inference through the engine (single GPU or data-parallel).
 
-Loads a LeRobot ``pi05`` checkpoint as a first-class vvla policy (vvla owns the
+Loads a LeRobot ``pi05`` checkpoint as a first-class embodiinfer policy (embodiinfer owns the
 transformer forward; LeRobot only builds and loads the weights) and runs a batch
 of observations through :class:`EngineCore`. With ``--gpus > 1`` it holds one
 replica per GPU behind a :class:`DataParallelEngine` for lossless throughput

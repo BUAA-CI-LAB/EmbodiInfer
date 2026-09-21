@@ -49,7 +49,7 @@ Cosmos 是 sigma-空间 EDM 扩散 + 2ab multistep（**带前步记忆**）+ sam
 - VAE 作 vendored leaf（跑一次 encode），不在优化环内 op-level 复刻——同 GR00T/OFT/pi0.5 的 vision leaf。
 
 ## 6. 无损性与精度判据（对齐 cosmos-policy 自身推理，非 RLinf）
-口径：同权重、固定初始 noise `x_sigma_max`、byte-identical obs、bf16（权重即 bf16）。参照 = box `.venv`（cosmos-policy 原生 env）跑 `CosmosPolicyVideo2WorldModel.generate_samples_from_batch`（LIBERO Predict2-2B）预存 reference，vvla_env 侧比对（跨环境 reference，同 GR00T/OFT/LingBot）。**实测（单 H200，bf16，num_steps=5）**：
+口径：同权重、固定初始 noise `x_sigma_max`、byte-identical obs、bf16（权重即 bf16）。参照 = box `.venv`（cosmos-policy 原生 env）跑 `CosmosPolicyVideo2WorldModel.generate_samples_from_batch`（LIBERO Predict2-2B）预存 reference，embodiinfer_env 侧比对（跨环境 reference，同 GR00T/OFT/LingBot）。**实测（单 H200，bf16，num_steps=5）**：
 
 | 通路 | max\|Δ\| | 说明 |
 |---|---|---|
@@ -65,14 +65,14 @@ bf16 权重下无 bit-exact；残差在 bf16 交叉实现噪声底内（同 GR00
 - 可复用组件（引擎无关、不 import policies/engine）上提为独立层：`embodiinfer/models/video_dit/{base,cosmos_predict2}.py`（`VideoDiT` 类别 + `CosmosPredict2DiT` family + `register_video_dit` 注册表）、`embodiinfer/models/video_vae/{base,wan}.py`（`VideoVAE` + `WanVAE`）、`embodiinfer/schedulers/diffusion.py`（扩散采样数学）。policy 层薄组合：`embodiinfer/policies/cosmos/{modeling_cosmos,processor_cosmos}.py`（`CosmosPolicy` 选/建 DiT+VAE+scheduler + frame-replace/planning）。`pyproject.toml` 加 `[cosmos]` extra（einops）+ `cosmos` mark；`embodiinfer/policies/__init__` 已导入注册。
 - 分层依据（参照 Diffusers `models/schedulers/pipelines` 三分 + vLLM/vllm-omni：sampler 自成子系统非 layer、model 引擎无关、policy=pipeline 组合）：`models/`=纯网络（按 family 组织，不 import policies/engine）、`schedulers/`=无权重采样数学（`ActionDecoder` 驱动）、`policies/`=引擎契约 + 组合。前 4 个 action-head policy 为单消费者自持前向、不动（LeRobot 式"共享才上提"）。
 - T5 text encoder（`models/text_encoders/t5.py`，`T5TextEncoder` leaf，默认 `google-t5/t5-11b`）：lazy-load，逐 op 复刻 cosmos `encode_prompts`（pad max_length=512 + 超长位置置 0）→ `[B,512,1024]`。cosmos 侧 `CosmosTextEmbedder`：预计算 pkl 快路径（40 个 LIBERO 任务，与 T5 输出一致）+ pkl 外指令 lazy T5 fallback + cache。online-vs-pkl GPU 对拍暂跳（t5-11b 45GB；pkl 已验、代码逐 op 复刻，对拍只再确认同一 T5）。
-- 引擎集成：`CosmosPolicy.collate`（`Observation`→`CosmosBatch`：images[0]=wrist/[1]=primary [0,1]→[-1,1]、blank→-1；proprio rescale；instruction→T5 crossattn）+ `pad`（bucket 复用）；`produce_chunk` 返回 dataset-scale 动作（`unnormalize_actions`）；`_build_cosmos` 加载 `dataset_statistics.json` + `t5_embeddings.pkl`。**box 验证 `Vvla("cosmos").act(obs)` 端到端跑通**（collate→encode_prefix→扩散去噪→`ActionChunk (16,7)`，batched 亦 OK；文本走 pkl 快路径）。LIBERO 精确图像预处理（flip/JPEG-q95/center-crop）为 serving 前端步骤、假定在 Observation 上游完成（同 pi0.5 tokenize 注记）。
+- 引擎集成：`CosmosPolicy.collate`（`Observation`→`CosmosBatch`：images[0]=wrist/[1]=primary [0,1]→[-1,1]、blank→-1；proprio rescale；instruction→T5 crossattn）+ `pad`（bucket 复用）；`produce_chunk` 返回 dataset-scale 动作（`unnormalize_actions`）；`_build_cosmos` 加载 `dataset_statistics.json` + `t5_embeddings.pkl`。**box 验证 `EmbodiInfer("cosmos").act(obs)` 端到端跑通**（collate→encode_prefix→扩散去噪→`ActionChunk (16,7)`，batched 亦 OK；文本走 pkl 快路径）。LIBERO 精确图像预处理（flip/JPEG-q95/center-crop）为 serving 前端步骤、假定在 Observation 上游完成（同 pi0.5 tokenize 注记）。
 - CUDA-graph：`CosmosDiffusionDecoder` 经 `_CosmosDenoiseGraph` 捕获 per-step `denoise`（预条件+DiT+frame-replace），static prefix 拷入一次、每步 replay（`allocate_static_prefix`/`copy_prefix_into`），opt-in `policy.use_cuda_graph`。**box：graph vs eager latent `max|Δ|=0`（逐位一致）、action `max|Δ|=0`；sample_latent(5 步) 157.6→138.2ms=1.14×**（DiT 2B compute-bound，收益在 per-step launch；2ab host 侧 float64 步不入图故稀释，单 DiT-forward microbench 1.36×）。
 - checkpoint：`nvidia/Cosmos-Policy-LIBERO-Predict2-2B`（DiT `.pt`，`net.*` bf16）+ `Cosmos-Predict2-2B-Video2World/tokenizer/tokenizer.pth`（Wan2.1 VAE）+ `libero_t5_embeddings.pkl`（预计算 T5，推理无需 text encoder）+ `libero_dataset_statistics.json`（归一化）。
 - 蓝图：按源码逐 op 核实。
 
 ## 8. 测试计划
 - **CI（CPU）**：注册 + 缺 checkpoint 抛 `ValueError`；latent inject/readout round-trip；rectified-flow scaling / Karras schedule 纯函数（无权重）。
-- **box（`cosmos` mark，门控 `VVLA_COSMOS_CKPT` / `VVLA_COSMOS_VAE` / `VVLA_COSMOS_REF`）**：读预存 reference，跑 EmbodiInfer 自持 encode_prefix + 采样器，断言 action/value < 5e-2（bf16 底）。
+- **box（`cosmos` mark，门控 `EMBODIINFER_COSMOS_CKPT` / `EMBODIINFER_COSMOS_VAE` / `EMBODIINFER_COSMOS_REF`）**：读预存 reference，跑 EmbodiInfer 自持 encode_prefix + 采样器，断言 action/value < 5e-2（bf16 底）。
 
 ## 9. 基准（planning 演示，单 H200，bf16，N 候选）
 - prefix encode（VAE+text，一次）**68.9 ms**；单候选采样（5 步 DiT）**159.6 ms**。

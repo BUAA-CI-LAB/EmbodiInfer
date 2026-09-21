@@ -181,7 +181,7 @@ def parse_step(
     if metadata_body is None:
         raise ServeError(400, "invalid_multipart", "metadata part is required")
     metadata = parse_json(metadata_body, "metadata")
-    if metadata.get("schema") != "vvla.policy.step.v1":
+    if metadata.get("schema") != "embodiinfer.policy.step.v1":
         raise ServeError(400, "unsupported_schema", "unsupported step schema")
     session_id = _identifier(metadata.get("session_id"), "session_id")
     request_id = _identifier(metadata.get("request_id"), "request_id")
@@ -233,7 +233,7 @@ def parse_structured_step(
     """Validate a transport-neutral structured policy step payload."""
 
     metadata = _object(payload, "step request")
-    if metadata.get("schema") != "vvla.policy.step.v1":
+    if metadata.get("schema") != "embodiinfer.policy.step.v1":
         raise ServeError(400, "unsupported_schema", "unsupported step schema")
     session_id = _identifier(metadata.get("session_id"), "session_id")
     request_id = _identifier(metadata.get("request_id"), "request_id")

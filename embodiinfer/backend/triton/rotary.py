@@ -1,4 +1,4 @@
-"""Decode-only fused RoPE and KV-cache update kernels owned by VVLA."""
+"""Decode-only fused RoPE and KV-cache update kernels owned by EmbodiInfer."""
 
 from __future__ import annotations
 
@@ -276,7 +276,7 @@ def fused_rope_cache(
     position: int,
 ) -> torch.Tensor:
     if not supports_fused_rope_cache(queries, keys, values, key_cache, value_cache):
-        raise ValueError("unsupported input for VVLA Triton RoPE cache update")
+        raise ValueError("unsupported input for EmbodiInfer Triton RoPE cache update")
     output = torch.empty(queries.shape, dtype=queries.dtype, device=queries.device)
     batch_size, num_query_heads, _, head_dim = queries.shape
     _rope_cache_kernel[(batch_size * num_query_heads,)](
@@ -333,7 +333,7 @@ def fused_rope_cache_graph(
         or position.numel() != 1
         or not position.is_cuda
     ):
-        raise ValueError("unsupported input for VVLA graph RoPE cache update")
+        raise ValueError("unsupported input for EmbodiInfer graph RoPE cache update")
     output = torch.empty(queries.shape, dtype=queries.dtype, device=queries.device)
     batch_size, num_query_heads, _, head_dim = queries.shape
     _rope_cache_kernel[(batch_size * num_query_heads,)](
@@ -401,7 +401,7 @@ def fused_prefill_rope_cache_graph(
         or position.numel() != 1
         or not position.is_cuda
     ):
-        raise ValueError("unsupported input for VVLA graph prefill RoPE update")
+        raise ValueError("unsupported input for EmbodiInfer graph prefill RoPE update")
     output = torch.empty_like(queries)
     batch_size, num_query_heads, query_length, head_dim = queries.shape
     block_t = 8

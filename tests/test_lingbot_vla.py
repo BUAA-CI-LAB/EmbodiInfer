@@ -1,7 +1,7 @@
 """LingBot-VLA policy tests.
 
 CPU: registration + friendly errors (no weights / no lingbotvla package needed). Box
-(``lingbot_vla`` mark, gated on ``VVLA_LINGBOT_VLA_CKPT``): build from a real checkpoint,
+(``lingbot_vla`` mark, gated on ``EMBODIINFER_LINGBOT_VLA_CKPT``): build from a real checkpoint,
 run the self-hosted VL prefill + expert denoise, and assert bit-exact/≤ε parity vs the
 RLinf ``LingbotvlaActionModel`` eager rollout (num_steps=10, flow_sde) — driven by
 ``dev/scripts/lingbot_*`` on the box (see docs/proposals/0005).
@@ -27,10 +27,10 @@ def test_lingbot_vla_requires_checkpoint():
 
 @pytest.mark.lingbot_vla
 def test_lingbot_vla_matches_native_reference():
-    ckpt = os.environ.get("VVLA_LINGBOT_VLA_CKPT")
-    ref = os.environ.get("VVLA_LINGBOT_VLA_REF")
+    ckpt = os.environ.get("EMBODIINFER_LINGBOT_VLA_CKPT")
+    ref = os.environ.get("EMBODIINFER_LINGBOT_VLA_REF")
     if not ckpt or not ref:
-        pytest.skip("set VVLA_LINGBOT_VLA_CKPT + VVLA_LINGBOT_VLA_REF (native reference dump)")
+        pytest.skip("set EMBODIINFER_LINGBOT_VLA_CKPT + EMBODIINFER_LINGBOT_VLA_REF (native reference dump)")
     # Box parity: load the saved reference (inputs + fixed x0 + per-step noise + ref_actions),
     # run the embodiinfer self-hosted forward, assert max|Δa| within the bf16 cross-impl floor.
     data = torch.load(ref)

@@ -1,8 +1,8 @@
 """Cosmos Policy (WAM) tests.
 
 CPU: registration + friendly errors + the model-agnostic latent inject/readout and the
-diffusion schedule (no weights needed). Box (``cosmos`` mark, gated on ``VVLA_COSMOS_CKPT``
-/ ``VVLA_COSMOS_VAE`` / ``VVLA_COSMOS_REF``): build from the real LIBERO Predict2-2B
+diffusion schedule (no weights needed). Box (``cosmos`` mark, gated on ``EMBODIINFER_COSMOS_CKPT``
+/ ``EMBODIINFER_COSMOS_VAE`` / ``EMBODIINFER_COSMOS_REF``): build from the real LIBERO Predict2-2B
 checkpoint + Wan2.1 VAE and assert the self-hosted DiT + rectified-flow sampler reproduce
 cosmos-policy's own inference within the bf16 floor (see docs/proposals/0006).
 """
@@ -62,11 +62,13 @@ def test_cosmos_karras_schedule():
 
 @pytest.mark.cosmos
 def test_cosmos_matches_native_reference():
-    dit = os.environ.get("VVLA_COSMOS_CKPT")
-    vae = os.environ.get("VVLA_COSMOS_VAE")
-    ref = os.environ.get("VVLA_COSMOS_REF")
+    dit = os.environ.get("EMBODIINFER_COSMOS_CKPT")
+    vae = os.environ.get("EMBODIINFER_COSMOS_VAE")
+    ref = os.environ.get("EMBODIINFER_COSMOS_REF")
     if not dit or not vae or not ref:
-        pytest.skip("set VVLA_COSMOS_CKPT + VVLA_COSMOS_VAE + VVLA_COSMOS_REF (native reference dump)")
+        pytest.skip(
+            "set EMBODIINFER_COSMOS_CKPT + EMBODIINFER_COSMOS_VAE + EMBODIINFER_COSMOS_REF (native reference dump)"
+        )
     from embodiinfer.policies.cosmos.modeling_cosmos import _build_cosmos
     from embodiinfer.policies.cosmos.processor_cosmos import CosmosBatch
 

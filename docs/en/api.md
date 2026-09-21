@@ -71,7 +71,7 @@ that embed the engine in Python.
 ::: embodiinfer
     options:
       members:
-        - VvlaError
+        - EmbodiInferError
         - ReplicaExecutionError
         - PolicyNotFoundError
         - ObservationError
@@ -137,7 +137,7 @@ that policy before retrying.
 
 ```python
 # Copy-based integrations may map source names without teaching embodiinfer about the framework.
-engine.policy.refit(actor_weights, name_map=actor_to_vvla_name, version=learner_step)
+engine.policy.refit(actor_weights, name_map=actor_to_embodiinfer_name, version=learner_step)
 ```
 
 Copy-based refit validates names, shapes, the requested version, and exact tied
@@ -161,7 +161,7 @@ ActiveVLN currently uses explicit single-session backend execution:
 from embodiinfer import EngineConfig, EmbodiInfer
 from embodiinfer.types import SessionKey
 
-engine = Vvla(
+engine = EmbodiInfer(
     "activevln",
     checkpoint="/models/activevln",
     engine_config=EngineConfig(

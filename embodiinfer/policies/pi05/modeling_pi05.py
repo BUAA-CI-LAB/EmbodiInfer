@@ -16,7 +16,7 @@ What we own (touching only the loaded weight modules):
   * the split into ``encode_prefix`` (build the prefix KV once) and
     ``denoise_step`` (expert attends cached prefix KV + its own suffix KV).
 
-With ``native_embeddings=True``, VVLA also owns per-camera SigLIP, token/time
+With ``native_embeddings=True``, EmbodiInfer also owns per-camera SigLIP, token/time
 embeddings, default RoPE and masks. The default keeps the existing embedding
 path and optimized batched-camera/compiled routes. Native embeddings preserve
 per-camera execution order, including for SDPA comparisons.
@@ -218,14 +218,14 @@ def _fused_linear_pair(x: torch.Tensor, first: Any, second: Any) -> tuple[torch.
         packed = _packed_quantized_projection(
             (first, second),
             first,
-            "_vvla_fused_pair_quantized",
+            "_embodiinfer_fused_pair_quantized",
         )
         fused = packed(x)
         return fused.split((first.out_features, second.out_features), dim=-1)
-    weight = getattr(first, "_vvla_fused_pair_weight", None)
+    weight = getattr(first, "_embodiinfer_fused_pair_weight", None)
     if weight is None or weight.device != first.weight.device or weight.dtype != first.weight.dtype:
         weight = torch.cat((first.weight, second.weight), dim=0).contiguous()
-        first._vvla_fused_pair_weight = weight
+        first._embodiinfer_fused_pair_weight = weight
     fused = F.linear(x, weight)
     return fused.split((first.out_features, second.out_features), dim=-1)
 
@@ -241,18 +241,18 @@ def _fused_qkv(attn: Any, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
         packed = _packed_quantized_projection(
             projections,
             attn.q_proj,
-            "_vvla_fused_qkv_quantized",
+            "_embodiinfer_fused_qkv_quantized",
         )
         fused = packed(x)
         return fused.split(tuple(projection.out_features for projection in projections), dim=-1)
-    weight = getattr(attn.q_proj, "_vvla_fused_qkv_weight", None)
+    weight = getattr(attn.q_proj, "_embodiinfer_fused_qkv_weight", None)
     if (
         weight is None
         or weight.device != attn.q_proj.weight.device
         or weight.dtype != attn.q_proj.weight.dtype
     ):
         weight = torch.cat((attn.q_proj.weight, attn.k_proj.weight, attn.v_proj.weight), dim=0).contiguous()
-        attn.q_proj._vvla_fused_qkv_weight = weight
+        attn.q_proj._embodiinfer_fused_qkv_weight = weight
     fused = F.linear(x, weight)
     return fused.split(
         (
@@ -272,12 +272,12 @@ def _prepare_fused_projection_weights(tower: Any) -> None:
             _packed_quantized_projection(
                 attention_projections,
                 attn.q_proj,
-                "_vvla_fused_qkv_quantized",
+                "_embodiinfer_fused_qkv_quantized",
             )
         elif not any(isinstance(projection, QuantizedLinear) for projection in attention_projections) and (
-            getattr(attn.q_proj, "_vvla_fused_qkv_weight", None) is None
+            getattr(attn.q_proj, "_embodiinfer_fused_qkv_weight", None) is None
         ):
-            attn.q_proj._vvla_fused_qkv_weight = torch.cat(
+            attn.q_proj._embodiinfer_fused_qkv_weight = torch.cat(
                 (attn.q_proj.weight, attn.k_proj.weight, attn.v_proj.weight), dim=0
             ).contiguous()
         mlp = layer.mlp
@@ -286,12 +286,12 @@ def _prepare_fused_projection_weights(tower: Any) -> None:
             _packed_quantized_projection(
                 mlp_projections,
                 mlp.gate_proj,
-                "_vvla_fused_pair_quantized",
+                "_embodiinfer_fused_pair_quantized",
             )
         elif not any(isinstance(projection, QuantizedLinear) for projection in mlp_projections) and (
-            getattr(mlp.gate_proj, "_vvla_fused_pair_weight", None) is None
+            getattr(mlp.gate_proj, "_embodiinfer_fused_pair_weight", None) is None
         ):
-            mlp.gate_proj._vvla_fused_pair_weight = torch.cat(
+            mlp.gate_proj._embodiinfer_fused_pair_weight = torch.cat(
                 (mlp.gate_proj.weight, mlp.up_proj.weight), dim=0
             ).contiguous()
 
@@ -528,7 +528,7 @@ class Pi05Policy(FlowVLAPolicy):
         return self._m.action_in_proj.weight.dtype
 
     def _embed_image(self, image: torch.Tensor) -> torch.Tensor:
-        """VVLA SigLIP forward over loaded weights, without HF model forwards."""
+        """EmbodiInfer SigLIP forward over loaded weights, without HF model forwards."""
         pg = self._m.paligemma_with_expert.paligemma.model
         vision = pg.vision_tower.vision_model
         emb = vision.embeddings
@@ -593,10 +593,10 @@ class Pi05Policy(FlowVLAPolicy):
             _COMPILED_IMAGE_ENCODERS.pop(id(model), None)
         for module in self.modules():
             for name in (
-                "_vvla_fused_qkv_weight",
-                "_vvla_fused_pair_weight",
-                "_vvla_fused_qkv_quantized",
-                "_vvla_fused_pair_quantized",
+                "_embodiinfer_fused_qkv_weight",
+                "_embodiinfer_fused_pair_weight",
+                "_embodiinfer_fused_qkv_quantized",
+                "_embodiinfer_fused_pair_quantized",
             ):
                 module.__dict__.pop(name, None)
 

@@ -42,7 +42,7 @@ WirelessComm 已提供静态 peer directory、持久全双工 TCP、bytes segmen
 Wireless RPC 使用固定 request/response tag 和 piggypayload envelope：
 
 ```text
-schema: vvla.policy.rpc.v1
+schema: embodiinfer.policy.rpc.v1
 kind: request | response
 rpc_id: 每次网络请求的 correlation ID
 method: health | capabilities | open_session | step | reset | close

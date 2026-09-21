@@ -173,9 +173,9 @@ update are part of the recurrent transaction and are committed only after decodi
 succeeds.
 
 ```python
-from embodiinfer import Vvla
+from embodiinfer import EmbodiInfer
 
-model = Vvla(
+model = EmbodiInfer(
     "streamvln",
     checkpoint="/models/streamvln",
     dtype="bfloat16",
