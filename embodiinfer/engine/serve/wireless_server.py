@@ -18,8 +18,11 @@ if TYPE_CHECKING:
     from wireless_comm import Comm, Peer
 
 RPC_SCHEMA = "embodiinfer.policy.rpc.v1"
-REQUEST_TAG = 0x56564C41
-RESPONSE_TAG = 0x56564C42
+# Wire-identity magic tags for the WirelessComm handshake. The hex values spell
+# out the service name (request "EMBI", response "EMBJ"), so the request and
+# response pairing stays obvious at the byte level.
+REQUEST_TAG = 0x454D4249  # b"EMBI"
+RESPONSE_TAG = 0x454D424A  # b"EMBJ"
 
 # A peer closing its connection ends that session, not the server. Wait briefly
 # before receiving again so a peer that is gone for good cannot spin this loop.

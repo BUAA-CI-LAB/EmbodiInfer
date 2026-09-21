@@ -209,7 +209,13 @@ def _packed_quantized_projection(
 
 
 def _fused_linear_pair(x: torch.Tensor, first: Any, second: Any) -> tuple[torch.Tensor, torch.Tensor]:
-    """Evaluate two bias-free projections as one GEMM and split the result."""
+    """Evaluate two bias-free projections as one GEMM and split the result.
+
+    The fused weight and the quantization marker are runtime-only caches kept
+    in ``module.__dict__`` (never registered buffers or parameters), so they do
+    not appear in state dicts and are dropped wholesale by
+    ``_clear_inference_caches`` on refit or device moves.
+    """
     if torch.is_grad_enabled() or first.training or second.training:
         return first(x), second(x)
     if isinstance(first, QuantizedLinear) or isinstance(second, QuantizedLinear):
