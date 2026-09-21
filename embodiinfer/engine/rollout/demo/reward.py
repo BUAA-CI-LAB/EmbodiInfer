@@ -7,7 +7,7 @@ from (a toy scorer here; a LIBERO task success / dense reward later).
 
 Keeping the scorer a pure function of the observation (rather than stepping a
 live env) keeps the demo's learning signal deterministic and cheap, so the
-measured cost is the *generation* path, which is what vvla optimizes.
+measured cost is the *generation* path, which is what embodiinfer optimizes.
 """
 
 from __future__ import annotations

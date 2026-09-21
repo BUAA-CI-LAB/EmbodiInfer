@@ -7,27 +7,30 @@ import gc
 import hashlib
 import json
 import os
-from pathlib import Path
 import random
 import statistics
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 import torch
-
 from dataset import PROFILES, LoadedManifest, ManifestSample, load_manifest, profile_kind
+
 from embodiinfer import make_policy
 from embodiinfer.policies.navida.modeling_navida import NaViDAMemory, _parse_navida_actions
 from embodiinfer.policies.qwen_r2r_low.modeling_qwen_r2r_low import (
     QwenVLNMemory as LowLevelMemory,
+)
+from embodiinfer.policies.qwen_r2r_low.modeling_qwen_r2r_low import (
     _parse_low_level_action,
 )
 from embodiinfer.policies.qwen_r2r_panoramic.modeling_qwen_r2r_panoramic import (
     QwenR2RPanoramicMemory as PanoramicMemory,
+)
+from embodiinfer.policies.qwen_r2r_panoramic.modeling_qwen_r2r_panoramic import (
     parse_panoramic_action,
 )
-
 
 MAX_GRAPH_SHAPES = 8
 
@@ -97,10 +100,8 @@ def _signature(
 
 
 def _derived_seed(seed: int, sample_id: str, iteration: int) -> int:
-    payload = f"{seed}\0{sample_id}\0{iteration}".encode("utf-8")
-    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") & (
-        (1 << 63) - 1
-    )
+    payload = f"{seed}\0{sample_id}\0{iteration}".encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") & ((1 << 63) - 1)
 
 
 def _seed_everything(seed: int) -> None:
@@ -140,9 +141,7 @@ def _paired_signature_exact(
     return all(value == values[0] for value in values[1:])
 
 
-def _summary(
-    latencies_ms: list[float], generated_tokens: list[int]
-) -> dict[str, Any]:
+def _summary(latencies_ms: list[float], generated_tokens: list[int]) -> dict[str, Any]:
     ordered = sorted(latencies_ms)
     p95_index = max(0, int(0.95 * len(ordered) + 0.999999) - 1)
     elapsed_ms = sum(latencies_ms)
@@ -173,9 +172,7 @@ def _graph_counters(stats: dict[str, Any]) -> tuple[int, int, int]:
     )
 
 
-def _attention_backend_record(
-    runner, requested: str, profile: str
-) -> dict[str, Any]:
+def _attention_backend_record(runner, requested: str, profile: str) -> dict[str, Any]:
     backend = runner.manual_graph_stats().get("attention_backend")
     if backend is None:
         return {
@@ -208,9 +205,7 @@ def _torch_compile_record(runner, requested: str) -> dict[str, Any]:
         else "qwen25_vl_next_token_forward",
     )
     record["abi"] = record.get("compile_abi")
-    record["first_call_wall_ms"] = [
-        float(entry.get("first_call_wall_ms", 0.0)) for entry in entries
-    ]
+    record["first_call_wall_ms"] = [float(entry.get("first_call_wall_ms", 0.0)) for entry in entries]
     return record
 
 
@@ -222,18 +217,14 @@ def _compile_counters(runner, requested: str) -> dict[str, Any]:
         "configured": bool(persistent.get("configured", False)),
         "schema": persistent.get("schema"),
         "root": persistent.get("root"),
-        "launcher_contract_asserted": bool(
-            persistent.get("launcher_contract_asserted", False)
-        ),
+        "launcher_contract_asserted": bool(persistent.get("launcher_contract_asserted", False)),
         "libdevice": persistent.get("libdevice"),
         "entries": int(persistent.get("entries", 0)),
         "fingerprint": persistent.get("fingerprint"),
         "manifest_key": persistent.get("manifest_key"),
         "artifact_loaded": bool(persistent.get("artifact_loaded", False)),
         "artifact_published": bool(persistent.get("artifact_published", False)),
-        "artifact_publish_skipped": bool(
-            persistent.get("artifact_publish_skipped", False)
-        ),
+        "artifact_publish_skipped": bool(persistent.get("artifact_publish_skipped", False)),
         "artifact_sha256": persistent.get("artifact_sha256"),
         "artifact_bytes": int(persistent.get("artifact_bytes", 0)),
         "load_cache_info": persistent.get("load_cache_info"),
@@ -257,26 +248,16 @@ def _compile_counters(runner, requested: str) -> dict[str, Any]:
             raise RuntimeError("compile cache has no execution-scoped entry")
         if (
             not persistent_state["fingerprint"]
-            or persistent_state["manifest_key"]
-            != persistent_state["fingerprint"]
+            or persistent_state["manifest_key"] != persistent_state["fingerprint"]
         ):
             raise RuntimeError("compile cache fingerprint/manifest key is invalid")
         if persistent_state["quarantine_reason"] is not None:
             raise RuntimeError("compile cache quarantined an artifact")
-        if (
-            not persistent_state["artifact_sha256"]
-            or persistent_state["artifact_bytes"] <= 0
-        ):
+        if not persistent_state["artifact_sha256"] or persistent_state["artifact_bytes"] <= 0:
             raise RuntimeError("compile cache has no validated content-addressed blob")
-        if not (
-            persistent_state["artifact_loaded"]
-            or persistent_state["artifact_published"]
-        ):
+        if not (persistent_state["artifact_loaded"] or persistent_state["artifact_published"]):
             raise RuntimeError("compile cache neither loaded nor published an artifact")
-        if (
-            persistent_state["artifact_publish_skipped"]
-            and not persistent_state["artifact_loaded"]
-        ):
+        if persistent_state["artifact_publish_skipped"] and not persistent_state["artifact_loaded"]:
             raise RuntimeError("only a loaded cache hit may skip artifact publish")
         admission = persistent_state["persistent_hit_admission"]
         if persistent_state["artifact_loaded"] and (
@@ -293,19 +274,11 @@ def _compile_counters(runner, requested: str) -> dict[str, Any]:
                 raise RuntimeError("compile cache execution entry was quarantined")
             if entry.get("artifact_loaded"):
                 entry_admission = entry.get("persistent_hit_admission", {})
-                if (
-                    not isinstance(entry_admission, dict)
-                    or not entry_admission.get("admitted")
-                ):
-                    raise RuntimeError(
-                        "loaded execution entry did not satisfy FX/AOT admission"
-                    )
+                if not isinstance(entry_admission, dict) or not entry_admission.get("admitted"):
+                    raise RuntimeError("loaded execution entry did not satisfy FX/AOT admission")
             elif not entry.get("artifact_published"):
                 raise RuntimeError("cold execution entry did not publish an artifact")
-    return {
-        key: int(record.get(key, 0))
-        for key in ("cache_entries", "attempts", "failures")
-    } | {
+    return {key: int(record.get(key, 0)) for key in ("cache_entries", "attempts", "failures")} | {
         "bucket_ids": record.get("bucket_ids", []),
         "persistent_cache": persistent_state,
     }
@@ -328,13 +301,9 @@ def _parse_compile_text_buckets(value: str) -> tuple[int, ...]:
             "compile text buckets must be comma-separated positive integers"
         ) from exc
     if not buckets or any(value <= 0 for value in buckets):
-        raise argparse.ArgumentTypeError(
-            "compile text buckets must be comma-separated positive integers"
-        )
+        raise argparse.ArgumentTypeError("compile text buckets must be comma-separated positive integers")
     if buckets != tuple(sorted(set(buckets))):
-        raise argparse.ArgumentTypeError(
-            "compile text buckets must be strictly increasing and unique"
-        )
+        raise argparse.ArgumentTypeError("compile text buckets must be strictly increasing and unique")
     return buckets
 
 
@@ -362,9 +331,7 @@ def _shape_cohorts(
     groups: dict[str, dict[str, Any]] = {}
     with torch.inference_mode():
         for sample in manifest.samples:
-            encoded = runner._encode_batch(
-                [sample.observation], [_memory(kind, sample)]
-            )
+            encoded = runner._encode_batch([sample.observation], [_memory(kind, sample)])
             description = _encoded_description(encoded)
             key = json.dumps(description, sort_keys=True, separators=(",", ":"))
             group = groups.setdefault(
@@ -381,10 +348,7 @@ def _shape_cohorts(
             f"the manual graph cache admits at most {MAX_GRAPH_SHAPES}. "
             "Split the manifest into shape-homogeneous runs."
         )
-    return [
-        {"cohort": index, **group}
-        for index, group in enumerate(groups.values())
-    ]
+    return [{"cohort": index, **group} for index, group in enumerate(groups.values())]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -436,19 +400,14 @@ def main() -> int:
         parser.error("--compile-cache-dir requires --compile-backend=inductor")
     if args.compile_text_buckets and args.profile == "navida":
         parser.error("--compile-text-buckets is only supported for Low/Panoramic")
-    if (
-        args.compile_backend != "none"
-        and args.profile != "navida"
-        and args.attention_backend != "torch_sdpa"
-    ):
+    if args.compile_backend != "none" and args.profile != "navida" and args.attention_backend != "torch_sdpa":
         parser.error(
             "--compile-backend=inductor for Low/Panoramic requires "
             "--attention-backend=torch_sdpa; compile never falls back"
         )
     if args.profile == "navida" and args.attention_backend != "torch_sdpa":
         parser.error(
-            "NaViDA does not support --attention-backend; use torch_sdpa or "
-            "select a Low/Panoramic profile"
+            "NaViDA does not support --attention-backend; use torch_sdpa or select a Low/Panoramic profile"
         )
     if args.warmup <= 0:
         parser.error("--warmup must be positive so graph capture is outside timing")
@@ -471,21 +430,12 @@ def main() -> int:
     if device.type != "cuda" or not torch.cuda.is_available():
         parser.error("the real-image 3B benchmark requires an available CUDA device")
     actual_physical_gpu = _physical_gpu(device)
-    if (
-        args.expected_physical_gpu is not None
-        and args.expected_physical_gpu != actual_physical_gpu
-    ):
-        parser.error(
-            f"expected physical GPU {args.expected_physical_gpu}, "
-            f"got {actual_physical_gpu}"
-        )
+    if args.expected_physical_gpu is not None and args.expected_physical_gpu != actual_physical_gpu:
+        parser.error(f"expected physical GPU {args.expected_physical_gpu}, got {actual_physical_gpu}")
 
     torch.cuda.set_device(device)
     kind = profile_kind(args.profile)
-    independent_reference_required = (
-        args.profile != "navida"
-        and args.compile_backend == "inductor"
-    )
+    independent_reference_required = args.profile != "navida" and args.compile_backend == "inductor"
     reference_signatures: dict[str, dict[str, Any]] = {}
     reference_gate: dict[str, Any] = {
         "required": independent_reference_required,
@@ -577,9 +527,7 @@ def main() -> int:
             {
                 "id": sample.sample_id,
                 "seed": paired_seed,
-                "reference_torch_sdpa_compile_none": reference_signatures.get(
-                    sample.sample_id
-                ),
+                "reference_torch_sdpa_compile_none": reference_signatures.get(sample.sample_id),
                 "eager": eager_signature,
                 "manual_cudagraph": graph_signature,
                 "token_text_action_exact": _paired_signature_exact(
@@ -611,29 +559,21 @@ def main() -> int:
             counters_before = _graph_counters(runner.manual_graph_stats())
             warmup_latencies: list[float] = []
             for _ in range(args.warmup):
-                warmup_ms, _, _ = _run_once(
-                    runner, sample, memory, kind, device
-                )
+                warmup_ms, _, _ = _run_once(runner, sample, memory, kind, device)
                 warmup_latencies.append(warmup_ms)
             counters_after_warmup = _graph_counters(runner.manual_graph_stats())
-            compile_before_timed = _compile_counters(
-                runner, args.compile_backend
-            )
+            compile_before_timed = _compile_counters(runner, args.compile_backend)
 
             signatures: list[dict[str, Any]] = []
             sample_latencies: list[float] = []
             sample_tokens: list[int] = []
             for _ in range(args.iters):
-                elapsed_ms, signature, generated = _run_once(
-                    runner, sample, memory, kind, device
-                )
+                elapsed_ms, signature, generated = _run_once(runner, sample, memory, kind, device)
                 sample_latencies.append(elapsed_ms)
                 sample_tokens.append(generated)
                 signatures.append(signature)
             counters_after_timed = _graph_counters(runner.manual_graph_stats())
-            compile_after_timed = _compile_counters(
-                runner, args.compile_backend
-            )
+            compile_after_timed = _compile_counters(runner, args.compile_backend)
             if compile_before_timed != compile_after_timed:
                 raise RuntimeError(
                     "torch.compile cache changed inside the timed window: "
@@ -648,18 +588,10 @@ def main() -> int:
                     "image_paths": sample.image_paths,
                     "memory_source": sample.memory_source,
                     "warmup_latencies_ms": warmup_latencies,
-                    "capture_warmup_delta": (
-                        counters_after_warmup[0] - counters_before[0]
-                    ),
-                    "replay_warmup_delta": (
-                        counters_after_warmup[1] - counters_before[1]
-                    ),
-                    "entry_warmup_delta": (
-                        counters_after_warmup[2] - counters_before[2]
-                    ),
-                    "capture_timed_delta": (
-                        counters_after_timed[0] - counters_after_warmup[0]
-                    ),
+                    "capture_warmup_delta": (counters_after_warmup[0] - counters_before[0]),
+                    "replay_warmup_delta": (counters_after_warmup[1] - counters_before[1]),
+                    "entry_warmup_delta": (counters_after_warmup[2] - counters_before[2]),
+                    "capture_timed_delta": (counters_after_timed[0] - counters_after_warmup[0]),
                     "compile_before_timed": compile_before_timed,
                     "compile_after_timed": compile_after_timed,
                     "runtime_mode": mode,
@@ -674,19 +606,9 @@ def main() -> int:
         }
         mode_records[mode] = records
 
-    eager_by_id = {
-        record["id"]: record
-        for record in mode_records[runtime_modes["uncaptured"]]
-    }
-    graph_by_id = {
-        record["id"]: record
-        for record in mode_records[runtime_modes["captured"]]
-    }
-    mismatch_ids = [
-        record["id"]
-        for record in paired_seeded_records
-        if not record["token_text_action_exact"]
-    ]
+    eager_by_id = {record["id"]: record for record in mode_records[runtime_modes["uncaptured"]]}
+    graph_by_id = {record["id"]: record for record in mode_records[runtime_modes["captured"]]}
+    mismatch_ids = [record["id"] for record in paired_seeded_records if not record["token_text_action_exact"]]
     invalid_action_ids: list[str] = []
     unstable_ids: list[str] = []
     timed_capture_count = 0
@@ -709,35 +631,21 @@ def main() -> int:
             record["manual_cudagraph"],
         ]
         if record["reference_torch_sdpa_compile_none"] is not None:
-            validation_signatures.insert(
-                0, record["reference_torch_sdpa_compile_none"]
-            )
-        if any(
-            signature["action_error"] is not None
-            for signature in validation_signatures
-        ) and record["id"] not in invalid_action_ids:
+            validation_signatures.insert(0, record["reference_torch_sdpa_compile_none"])
+        if (
+            any(signature["action_error"] is not None for signature in validation_signatures)
+            and record["id"] not in invalid_action_ids
+        ):
             invalid_action_ids.append(record["id"])
 
-    paired_capture_count = sum(
-        int(record["capture_delta"]) for record in paired_seeded_records
-    )
+    paired_capture_count = sum(int(record["capture_delta"]) for record in paired_seeded_records)
     paired_seeded_parity = not mismatch_ids and paired_capture_count == 0
     stability_gate_passed = not stability_required or not unstable_ids
     parity = (
-        paired_seeded_parity
-        and not invalid_action_ids
-        and stability_gate_passed
-        and timed_capture_count == 0
+        paired_seeded_parity and not invalid_action_ids and stability_gate_passed and timed_capture_count == 0
     )
-    formal_admitted = (
-        manifest.provenance["status"] == "verified"
-        and manifest.provenance["formal"]
-    )
-    status = (
-        ("pass" if formal_admitted else "unverified")
-        if parity
-        else "parity_failure"
-    )
+    formal_admitted = manifest.provenance["status"] == "verified" and manifest.provenance["formal"]
+    status = ("pass" if formal_admitted else "unverified") if parity else "parity_failure"
     sample_trace = [
         {
             "id": sample.sample_id,
@@ -755,9 +663,7 @@ def main() -> int:
             "action parser; excludes EngineCore, recurrent commit, and simulator"
         ),
         "visual_source": (
-            "provenance_consistent_r2r_aligned_rgb"
-            if formal_admitted
-            else "unverified_manifest_images"
+            "provenance_consistent_r2r_aligned_rgb" if formal_admitted else "unverified_manifest_images"
         ),
         "synthetic": manifest.provenance["synthetic_pixels"],
         "profile": args.profile,
@@ -778,10 +684,7 @@ def main() -> int:
         "warmup_per_sample_per_mode": args.warmup,
         "iterations_per_sample_per_mode": args.iters,
         "timing_contract": {
-            "clock": (
-                "time.perf_counter_ns with CUDA synchronization around each "
-                "runner.infer_batch call"
-            ),
+            "clock": ("time.perf_counter_ns with CUDA synchronization around each runner.infer_batch call"),
             "included": [
                 "prompt construction",
                 "processor",
@@ -825,23 +728,17 @@ def main() -> int:
         },
         "capture_preparation": capture_preparation,
         "outputs": mode_records,
-        "attention_backend": _attention_backend_record(
-            runner, args.attention_backend, args.profile
-        ),
+        "attention_backend": _attention_backend_record(runner, args.attention_backend, args.profile),
         "torch_compile": _torch_compile_record(runner, args.compile_backend),
         "compile_shape_cache": {
             "requested_text_buckets": list(args.compile_text_buckets),
             "compile_cache_dir": (
-                str(args.compile_cache_dir.resolve())
-                if args.compile_cache_dir is not None
-                else None
+                str(args.compile_cache_dir.resolve()) if args.compile_cache_dir is not None else None
             ),
-            "observed_bucket_ids": _torch_compile_record(
-                runner, args.compile_backend
-            ).get("bucket_ids", []),
-            "persistent_cache": _torch_compile_record(
-                runner, args.compile_backend
-            ).get("persistent_cache", {}),
+            "observed_bucket_ids": _torch_compile_record(runner, args.compile_backend).get("bucket_ids", []),
+            "persistent_cache": _torch_compile_record(runner, args.compile_backend).get(
+                "persistent_cache", {}
+            ),
         },
         "runtime_mode": runtime_modes,
         "manual_graph": runner.manual_graph_stats(),

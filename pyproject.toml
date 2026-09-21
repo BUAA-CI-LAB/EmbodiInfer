@@ -60,18 +60,18 @@ pi05-openpi = ["jax==0.5.3", "orbax-checkpoint==0.11.13", "sentencepiece==0.2.0"
 # hard-requires timm 0.9.x and the vision numerics differ across the 0.9/1.0 boundary
 # (verified: max|Δ vision| = 0 vs the checkpoint under timm 0.9.16).
 openvla-oft = ["timm>=0.9.10,<1.0.0", "torchvision", "safetensors"]
-# LingBot-VLA adapter: package-free (runs in vvla_env) — the transformer
+# LingBot-VLA adapter: package-free (runs in embodiinfer_env) — the transformer
 # forward (Qwen2.5-VL VL stream + vendored Qwen2 action expert, MoT shared attention) is
 # embodiinfer-owned; the VL backbone is stock transformers Qwen2.5-VL, weights loaded directly from
 # robbyant/lingbot-vla-4b. embodiinfer imports NO lingbotvla package at runtime (its LeRobot-v3/torch-2.8
-# stack conflicts with the vvla_env reference env), same posture as GR00T. The lingbotvla package is only needed in
+# stack conflicts with the embodiinfer_env reference env), same posture as GR00T. The lingbotvla package is only needed in
 # a dedicated env to produce the parity reference dump.
 lingbot-vla = ["transformers>=4.49", "torchvision", "safetensors"]
 # ActiveVLN numerical parity is anchored to the checkpoint's transformers version.
 # Install this group in a dedicated environment; GR00T and other adapters may need
 # incompatible transformers versions for their own reference generation.
 activevln = ["transformers==4.51.3", "torchvision", "safetensors"]
-# StreamVLN is self-hosted: VVLA owns the Qwen2 execution, KV cache, visual
+# StreamVLN is self-hosted: EmbodiInfer owns the Qwen2 execution, KV cache, visual
 # pooling, multimodal splice, and recurrent policy state. Keep its optimized
 # Torch/Triton runtime isolated from model profiles with incompatible pins.
 # Torch 2.10.0 selects its matching Triton 3.6.0 wheel on Linux.
@@ -91,7 +91,7 @@ benchmark = ["PyYAML>=6", "h5py>=3.10"]
 # forward is embodiinfer-owned (self-hosted, no TransformerEngine/megatron), and the Wan2.1 VAE is
 # a vendored leaf (:mod:`embodiinfer.policies.cosmos.vae_wan`, needs einops). embodiinfer imports NO
 # cosmos_policy package at runtime (its TransformerEngine/megatron stack pins torch 2.7 and
-# conflicts with the vvla_env reference env) — the cosmos-policy repo is only needed in a dedicated env to
+# conflicts with the embodiinfer_env reference env) — the cosmos-policy repo is only needed in a dedicated env to
 # produce the parity reference (see docs/proposals/0006). Checkpoints:
 # nvidia/Cosmos-Policy-LIBERO-Predict2-2B (DiT) + Cosmos-Predict2-2B-Video2World/tokenizer (VAE).
 cosmos = ["einops", "transformers>=4.40"]
@@ -139,13 +139,8 @@ pi05 = { requires-python = ">=3.12" }
 embodiinfer-serve = "embodiinfer.engine.serve.http_server:main"
 embodiinfer-http-serve = "embodiinfer.engine.serve.http_server:main"
 embodiinfer-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
-# Compatibility aliases for existing deployments.
-vvla-serve = "embodiinfer.engine.serve.http_server:main"
-vvla-http-serve = "embodiinfer.engine.serve.http_server:main"
-vvla-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
-
 [tool.setuptools.packages.find]
-include = ["embodiinfer*", "vvla"]
+include = ["embodiinfer*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

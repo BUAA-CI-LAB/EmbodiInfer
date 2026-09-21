@@ -159,9 +159,9 @@ StreamVLN 是一种有状态策略，每个副本分配一个 episode。
 历史特征和 KV 更新都包含在会话事务中，仅在解码成功后提交。
 
 ```python
-from embodiinfer import Vvla
+from embodiinfer import EmbodiInfer
 
-model = Vvla(
+model = EmbodiInfer(
     "streamvln",
     checkpoint="/models/streamvln",
     dtype="bfloat16",

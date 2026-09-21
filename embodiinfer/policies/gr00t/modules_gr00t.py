@@ -5,7 +5,7 @@ building blocks (``gr00t/model/modules/dit.py`` and
 ``embodiment_conditioned_mlp.py``, Apache-2.0), so embodiinfer can **build the module
 tree + load the checkpoint weights without importing the ``gr00t`` package** —
 and thus without dragging in gr00t's heavy training/deployment pins (tensorrt,
-deepspeed, flash-attn, ...) that would fracture the single vvla env. Only the
+deepspeed, flash-attn, ...) that would fracture the single embodiinfer env. Only the
 inference-relevant structure is kept (training/print/Spark-SDPA paths dropped).
 
 Two roles:

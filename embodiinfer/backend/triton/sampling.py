@@ -1,4 +1,4 @@
-"""Full-vocabulary greedy projection and sampling kernels owned by VVLA."""
+"""Full-vocabulary greedy projection and sampling kernels owned by EmbodiInfer."""
 
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ def mark_penalized(workspace: GreedyWorkspace, token: torch.Tensor) -> None:
         or token.dtype != torch.long
         or token.device != workspace.penalized.device
     ):
-        raise ValueError("unsupported token for VVLA Triton repetition state")
+        raise ValueError("unsupported token for EmbodiInfer Triton repetition state")
     _mark_penalized_kernel[(1,)](
         workspace.penalized,
         token,
@@ -220,7 +220,7 @@ def fused_greedy(
     repetition_penalty: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if not supports_fused_greedy(logits, workspace):
-        raise ValueError("unsupported input for VVLA Triton greedy sampling")
+        raise ValueError("unsupported input for EmbodiInfer Triton greedy sampling")
     num_blocks = triton.cdiv(workspace.vocab_size, LOGIT_BLOCK_SIZE)
     _greedy_blocks_kernel[(num_blocks,)](
         logits,
@@ -244,7 +244,7 @@ def fused_lm_head_greedy(
     repetition_penalty: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if not supports_fused_lm_head(hidden, weight, workspace):
-        raise ValueError("unsupported input for VVLA Triton LM-head greedy sampling")
+        raise ValueError("unsupported input for EmbodiInfer Triton LM-head greedy sampling")
     num_blocks = triton.cdiv(workspace.vocab_size, LM_HEAD_BLOCK_SIZE)
     _lm_head_blocks_kernel[(num_blocks,)](
         hidden,

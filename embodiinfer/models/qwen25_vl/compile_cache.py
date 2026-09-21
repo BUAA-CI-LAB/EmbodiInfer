@@ -19,7 +19,7 @@ from threading import Lock, RLock
 import torch
 
 QWEN25_VL_PERSISTENT_CACHE_SCHEMA = "qwen25_vl_inductor_execution_cache_v3"
-QWEN25_VL_CACHE_BOOTSTRAP_ENV = "VVLA_COMPILE_CACHE_BOOTSTRAP_ASSERTION"
+QWEN25_VL_CACHE_BOOTSTRAP_ENV = "EMBODIINFER_COMPILE_CACHE_BOOTSTRAP_ASSERTION"
 QWEN25_VL_CACHE_BOOTSTRAP_TOKEN = "qwen25_vl_compile_cache_preimport_v1"
 
 _PROCESS_ROOT_LOCK = Lock()
@@ -235,9 +235,9 @@ class Qwen25VLPersistentCompileCache:
     def __init__(self, root: str | Path, identity: Mapping[str, object]) -> None:
         self.root, self._libdevice_identity = _assert_launcher_contract(root)
         self._identity = _json_value(dict(identity))
-        self._entries_dir = self.root / "vvla-execution-entries"
-        self._blobs_dir = self.root / "vvla-content-blobs"
-        self._quarantine_dir = self.root / "vvla-quarantine"
+        self._entries_dir = self.root / "embodiinfer-execution-entries"
+        self._blobs_dir = self.root / "embodiinfer-content-blobs"
+        self._quarantine_dir = self.root / "embodiinfer-quarantine"
         for directory in (
             self._entries_dir,
             self._blobs_dir,
@@ -492,7 +492,9 @@ class Qwen25VLPersistentCompileCache:
     def _file_lock(self) -> Iterator[None]:
         import fcntl
 
-        lock_path = self._bounded_child(self.root, ".vvla-compile-cache.lock", label="compile cache lock")
+        lock_path = self._bounded_child(
+            self.root, ".embodiinfer-compile-cache.lock", label="compile cache lock"
+        )
         flags = os.O_RDWR | os.O_CREAT
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC

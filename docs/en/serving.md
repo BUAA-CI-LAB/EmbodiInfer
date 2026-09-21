@@ -52,7 +52,7 @@ uv run --no-sync python examples/http_client.py \
 The [client example](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/examples/http_client.py)
 reads capabilities, opens a session, sends step zero as multipart data with
 its idempotency header, prints the JSON response, and closes the session.
-Response fields include `schema: vvla.policy.step.result.v1`, `step_id: 0`,
+Response fields include `schema: embodiinfer.policy.step.result.v1`, `step_id: 0`,
 `session_id`, `action_space`, `actions`, and `timing`; action dimensions depend
 on the checkpoint.
 
@@ -132,7 +132,7 @@ WirelessComm-only flags include `--comm-config` (required), `--token`, and
 
 Both transports share one transport-neutral session and step service.
 
-- A session is opened with the session schema `vvla.policy.session.v1`; the server
+- A session is opened with the session schema `embodiinfer.policy.session.v1`; the server
   assigns a `session_id` and starts `session_revision` at 0. Past `--max-sessions`
   it returns `429 too_many_sessions`.
 - Each step carries a `request_id` and a `step_id`. Steps within one session are
@@ -149,7 +149,7 @@ Both transports share one transport-neutral session and step service.
   cached step responses, sets `next_step_id` back to 0, and increments
   `session_revision`.
 - An unknown or closed `session_id` returns `404 session_not_found`.
-- A step response uses the schema `vvla.policy.step.result.v1` and reports
+- A step response uses the schema `embodiinfer.policy.step.result.v1` and reports
   `session_revision`, `action_space`, `actions`, `timing`, and `policy_revision`.
 
 ## Adapter JSON
@@ -185,10 +185,10 @@ from its binding and deployment configuration.
 
 ## Registering EmbodiInfer as a rollout backend
 
-The fork [BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/vvla-rollout-backend)
-registers EmbodiInfer as a rollout backend on its `vvla-rollout-backend` branch
-(`rollout.model.model_type` = `embodiinfer` / `vvla_gr00t` /
-`vvla_openvla_oft` / `vvla_lingbotvla`): EmbodiInfer serves rollout inside PPO/GRPO,
+The fork [BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/embodiinfer-rollout-backend)
+registers EmbodiInfer as a rollout backend on its `embodiinfer-rollout-backend` branch
+(`rollout.model.model_type` = `embodiinfer` / `embodiinfer_gr00t` /
+`embodiinfer_openvla_oft` / `embodiinfer_lingbotvla`): EmbodiInfer serves rollout inside PPO/GRPO,
 the actor uses the native model. The adapters use EmbodiInfer's policy factory
 and refit API for model construction and weight updates. The integrations cover
 π0.5, GR00T, and OpenVLA-OFT on LIBERO, and LingBot-VLA on RoboTwin.

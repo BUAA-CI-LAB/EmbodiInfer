@@ -170,7 +170,7 @@ uv run --no-sync python examples/pi05_inference.py \
 
 | 用途 | 接口 | 入口 |
 |---|---|---|
-| 在应用内推理 | `Vvla.act(observation)` 或 `Vvla.act(observations)` | [Python API](docs/zh/api.md) |
+| 在应用内推理 | `EmbodiInfer.act(observation)` 或 `EmbodiInfer.act(observations)` | [Python API](docs/zh/api.md) |
 | 为机器人运行时提供网络推理 | HTTP / WirelessComm 会话 | [服务与首次观测请求](docs/zh/serving.md) |
 | RL rollout 与权重更新 | Rollout / refit 接口 | [RL 集成](docs/zh/api.md#generating-rl-rollouts) |
 | 多 GPU 执行 | 数据并行 / 张量并行 | [并行指南](docs/zh/parallelism.md) |
@@ -178,8 +178,7 @@ uv run --no-sync python examples/pi05_inference.py \
 网络启动器支持 π0.5、DM0.5 和 StreamVLN，batch size 为 1；其他策略通过 Python API 调用。
 各模型支持情况见[能力表](docs/zh/models.md#capabilities-and-installation)。
 
-发行包名为 `embodiinfer`，Python import 仍为 `embodiinfer`。
-旧 `vvla-*` 命令别名与 `vvla.policy.*` 通信 schema 保持兼容。
+发行包名为 `embodiinfer`；Python import、`embodiinfer-*` 命令行入口与 `embodiinfer.policy.*` 通信 schema 统一使用同一命名。
 
 ## 文档
 

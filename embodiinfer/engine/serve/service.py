@@ -72,7 +72,7 @@ class PolicyService:
         return self.adapter.action_space
 
     def open_session(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        if request.get("schema") != "vvla.policy.session.v1":
+        if request.get("schema") != "embodiinfer.policy.session.v1":
             raise ServeError(400, "unsupported_schema", "unsupported session schema")
         robot_id = _identifier(request.get("robot_id"), "robot_id")
         action_space = _identifier(request.get("action_space"), "action_space")
@@ -88,7 +88,7 @@ class PolicyService:
                 raise ServeError(429, "too_many_sessions", "server session limit reached")
             self._sessions[session_id] = session
         return {
-            "schema": "vvla.policy.session.v1",
+            "schema": "embodiinfer.policy.session.v1",
             "session_id": session_id,
             "session_revision": session.revision,
             "robot_id": robot_id,
@@ -133,7 +133,7 @@ class PolicyService:
             except (TypeError, ValueError) as error:
                 raise ServeError(422, "invalid_observation", str(error)) from error
             response = {
-                "schema": "vvla.policy.step.result.v1",
+                "schema": "embodiinfer.policy.step.result.v1",
                 "request_id": request.request_id,
                 "session_id": request.session_id,
                 "step_id": request.step_id,
@@ -177,7 +177,7 @@ class PolicyService:
             session.next_step_id = 0
             session.responses.clear()
             response = {
-                "schema": "vvla.policy.reset.v1",
+                "schema": "embodiinfer.policy.reset.v1",
                 "session_id": session_id,
                 "session_revision": session.revision,
             }

@@ -1,4 +1,4 @@
-"""VVLA decoder, policy adapter, and registered Low builder."""
+"""EmbodiInfer decoder, policy adapter, and registered Low builder."""
 
 from __future__ import annotations
 

@@ -46,7 +46,7 @@ uv run --no-sync python examples/http_client.py \
 
 [客户端示例](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/examples/http_client.py)
 会读取 capabilities、打开会话，以 multipart 格式发送 `step_id: 0` 的请求并携带幂等头，
-打印 JSON 响应并关闭会话。响应字段包括 `schema: vvla.policy.step.result.v1`、`step_id: 0`、
+打印 JSON 响应并关闭会话。响应字段包括 `schema: embodiinfer.policy.step.result.v1`、`step_id: 0`、
 `session_id`、`action_space`、`actions` 和 `timing`；动作维度取决于检查点。
 
 对于需要认证的服务，先在本地设置变量再添加 `--token-env EMBODIINFER_TOKEN`，
@@ -118,7 +118,7 @@ WirelessComm 专用参数包括 `--comm-config`（必填）、`--token` 和 `--m
 
 HTTP 与 WirelessComm 遵循相同的会话和推理步骤规则。
 
-- 会话通过 schema `vvla.policy.session.v1` 打开；服务端分配 `session_id`，
+- 会话通过 schema `embodiinfer.policy.session.v1` 打开；服务端分配 `session_id`，
   `session_revision` 从 0 开始。超过 `--max-sessions` 返回 `429 too_many_sessions`。
 - 每个 step 带一个 `request_id` 和一个 `step_id`。同一会话内的 step 串行执行。
 - `step_id` 必须等于下一个期望值。小于期望值返回 `409 step_id_too_old`；
@@ -130,7 +130,7 @@ HTTP 与 WirelessComm 遵循相同的会话和推理步骤规则。
 - `reset` 要求 `Idempotency-Key` 头等于 `request_id`。它会清空缓存的 step 响应，
   把 `next_step_id` 重置为 0，并递增 `session_revision`。
 - 未知或已关闭的 `session_id` 返回 `404 session_not_found`。
-- step 响应使用 schema `vvla.policy.step.result.v1`，报告 `session_revision`、
+- step 响应使用 schema `embodiinfer.policy.step.result.v1`，报告 `session_revision`、
   `action_space`、`actions`、`timing` 和 `policy_revision`。
 
 ## 适配器 JSON 配置 {#adapter-json}
@@ -162,10 +162,10 @@ HTTP 与 WirelessComm 遵循相同的会话和推理步骤规则。
 
 ## 接入 RLinf 训练
 
-[BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/vvla-rollout-backend)
-的 `vvla-rollout-backend` 分支已将 EmbodiInfer 注册为 rollout 后端
-（`rollout.model.model_type` = `embodiinfer` / `vvla_gr00t` / `vvla_openvla_oft` /
-`vvla_lingbotvla`）：EmbodiInfer 在 PPO/GRPO 内提供 rollout，actor 使用原生模型。
+[BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/embodiinfer-rollout-backend)
+的 `embodiinfer-rollout-backend` 分支已将 EmbodiInfer 注册为 rollout 后端
+（`rollout.model.model_type` = `embodiinfer` / `embodiinfer_gr00t` / `embodiinfer_openvla_oft` /
+`embodiinfer_lingbotvla`）：EmbodiInfer 在 PPO/GRPO 内提供 rollout，actor 使用原生模型。
 适配器通过 EmbodiInfer 的策略工厂函数创建模型，通过 refit API 更新权重。
 这些集成覆盖 LIBERO 上的 π0.5、GR00T 和 OpenVLA-OFT，以及 RoboTwin 上的 LingBot-VLA。
 

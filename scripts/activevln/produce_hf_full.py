@@ -7,8 +7,6 @@ from pathlib import Path
 
 import torch
 
-from scripts.activevln._common import base_manifest, load_cases, save_bundle
-from scripts.activevln.verify_source_pin import _load_lock, verify_checkpoint
 from embodiinfer.policies.activevln.prompt_activevln import (
     SYSTEM_PROMPT_R2R,
     actions_to_tensor,
@@ -16,6 +14,8 @@ from embodiinfer.policies.activevln.prompt_activevln import (
     render_turn_text,
     user_turn_content,
 )
+from scripts.activevln._common import base_manifest, load_cases, save_bundle
+from scripts.activevln.verify_source_pin import _load_lock, verify_checkpoint
 
 
 def main() -> None:

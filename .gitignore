@@ -25,7 +25,7 @@ CLAUDE.md
 # logo working files: only the main logo is tracked (mark/favicon/dark variant
 # and codex concept renders stay local)
 assets/*
-!assets/vvla-logo.svg
+!assets/embodiinfer-logo.svg
 
 # Documentation build output
 site/

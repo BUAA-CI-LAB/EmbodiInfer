@@ -143,8 +143,8 @@ def test_per_execution_manifest_blob_hash_atomic_and_cache_info(monkeypatch, tmp
     cache = Qwen25VLPersistentCompileCache(root, {"case": "publish"})
     entry = _publish(cache, ("shape", 8), (torch.zeros((1, 8)),))
 
-    manifests = list((root / "vvla-execution-entries").glob("*.json"))
-    blobs = list((root / "vvla-content-blobs").glob("*.bin"))
+    manifests = list((root / "embodiinfer-execution-entries").glob("*.json"))
+    blobs = list((root / "embodiinfer-content-blobs").glob("*.bin"))
     assert len(manifests) == 1
     assert len(blobs) == 1
     manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
@@ -181,8 +181,8 @@ def test_admitted_hit_without_aot_artifact_skips_publish(monkeypatch, tmp_path) 
     )
     producer = Qwen25VLPersistentCompileCache(root, {"case": "hit"})
     _publish(producer, ("shape", 8), (torch.zeros((1, 8)),))
-    manifest_path = next((root / "vvla-execution-entries").glob("*.json"))
-    blob_path = next((root / "vvla-content-blobs").glob("*.bin"))
+    manifest_path = next((root / "embodiinfer-execution-entries").glob("*.json"))
+    blob_path = next((root / "embodiinfer-content-blobs").glob("*.bin"))
     original_manifest = manifest_path.read_bytes()
     original_blob = blob_path.read_bytes()
 
@@ -331,8 +331,8 @@ def test_execution_shapes_have_isolated_manifests_and_shared_content_blob(monkey
     first = _publish(cache, ("bucket", 8), (torch.zeros((1, 8)),))
     second = _publish(cache, ("bucket", 16), (torch.zeros((1, 16)),))
     assert first.fingerprint != second.fingerprint
-    assert len(list((root / "vvla-execution-entries").glob("*.json"))) == 2
-    assert len(list((root / "vvla-content-blobs").glob("*.bin"))) == 1
+    assert len(list((root / "embodiinfer-execution-entries").glob("*.json"))) == 2
+    assert len(list((root / "embodiinfer-content-blobs").glob("*.bin"))) == 1
     stats = cache.stats()
     assert stats["entries"] == 2
     assert set(stats["entry_stats"]) == {first.fingerprint, second.fingerprint}
@@ -349,7 +349,7 @@ def test_corrupt_blob_is_quarantined_then_cold_published(monkeypatch, tmp_path) 
     )
     producer = Qwen25VLPersistentCompileCache(root, {"case": "quarantine"})
     _publish(producer, ("shape", 4), (torch.zeros((1, 4)),))
-    blob = next((root / "vvla-content-blobs").glob("*.bin"))
+    blob = next((root / "embodiinfer-content-blobs").glob("*.bin"))
     blob.write_bytes(b"corrupt")
 
     _set_counter_sequence(monkeypatch, _zero_counters(), _zero_counters())
@@ -368,7 +368,7 @@ def test_corrupt_blob_is_quarantined_then_cold_published(monkeypatch, tmp_path) 
     assert stats["cold_compile_reason"] == "corrupt_artifact_quarantined"
     assert "SHA256 mismatch" in stats["quarantine_reason"]
     assert stats["artifact_published"] is True
-    assert len(list((root / "vvla-quarantine").iterdir())) == 2
+    assert len(list((root / "embodiinfer-quarantine").iterdir())) == 2
 
 
 def test_blob_leaf_symlink_is_fail_closed(monkeypatch, tmp_path) -> None:
@@ -382,7 +382,7 @@ def test_blob_leaf_symlink_is_fail_closed(monkeypatch, tmp_path) -> None:
     )
     producer = Qwen25VLPersistentCompileCache(root, {"case": "blob-symlink"})
     _publish(producer, ("shape", 4), (torch.zeros((1, 4)),))
-    blob = next((root / "vvla-content-blobs").glob("*.bin"))
+    blob = next((root / "embodiinfer-content-blobs").glob("*.bin"))
     blob.unlink()
     victim = tmp_path / "outside-victim.bin"
     victim_bytes = b"must-not-be-modified"
@@ -552,9 +552,9 @@ def test_manifest_publish_is_atomic_when_replace_fails(monkeypatch, tmp_path) ->
     )
     producer = Qwen25VLPersistentCompileCache(root, {"case": "atomic"})
     entry = _publish(producer, ("shape", 4), (torch.zeros((1, 4)),))
-    manifest = root / "vvla-execution-entries" / f"{entry.fingerprint}.json"
+    manifest = root / "embodiinfer-execution-entries" / f"{entry.fingerprint}.json"
     original_manifest = manifest.read_bytes()
-    original_blob = next((root / "vvla-content-blobs").glob("*.bin"))
+    original_blob = next((root / "embodiinfer-content-blobs").glob("*.bin"))
     original_blob_value = original_blob.read_bytes()
 
     _set_counter_sequence(monkeypatch, _zero_counters(), _zero_counters())
@@ -567,7 +567,7 @@ def test_manifest_publish_is_atomic_when_replace_fails(monkeypatch, tmp_path) ->
 
     def fail_manifest_replace(source, destination):
         destination_path = Path(destination)
-        if destination_path.parent.name == "vvla-execution-entries":
+        if destination_path.parent.name == "embodiinfer-execution-entries":
             raise OSError("injected manifest replace failure")
         return real_replace(source, destination)
 
@@ -591,7 +591,7 @@ def test_manifest_blob_sha_cannot_escape_blob_directory(monkeypatch, tmp_path) -
     )
     producer = Qwen25VLPersistentCompileCache(root, {"case": "path"})
     entry = _publish(producer, ("shape", 4), (torch.zeros((1, 4)),))
-    manifest = root / "vvla-execution-entries" / f"{entry.fingerprint}.json"
+    manifest = root / "embodiinfer-execution-entries" / f"{entry.fingerprint}.json"
     value = json.loads(manifest.read_text(encoding="utf-8"))
     value["blob_sha256"] = "../../outside"
     manifest.write_text(json.dumps(value), encoding="utf-8")
@@ -619,7 +619,7 @@ def test_cache_lock_rejects_symlink_without_touching_target(monkeypatch, tmp_pat
     victim = tmp_path / "victim"
     victim.write_bytes(b"victim")
     victim.chmod(0o644)
-    (root / ".vvla-compile-cache.lock").symlink_to(victim)
+    (root / ".embodiinfer-compile-cache.lock").symlink_to(victim)
     monkeypatch.setattr(
         Qwen25VLPersistentCompileCache,
         "_counter_snapshot",
@@ -744,7 +744,7 @@ def test_real_three_process_persistent_cache_admission(tmp_path) -> None:
         libdevice=libdevice,
         repo=repo,
     )
-    for name in ("vvla-execution-entries", "vvla-content-blobs"):
+    for name in ("embodiinfer-execution-entries", "embodiinfer-content-blobs"):
         shutil.copytree(producer_root / name, fresh_root / name)
     same_consumer = _run_real_cache_child(
         producer_root,

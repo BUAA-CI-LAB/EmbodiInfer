@@ -5,25 +5,29 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import random
 import statistics
 import subprocess
-from typing import Any, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import torch
-
 from dataset import PROFILES, ManifestSample, load_manifest, profile_kind
+
 from embodiinfer import make_policy
 from embodiinfer.policies.qwen_r2r_low.modeling_qwen_r2r_low import (
     QwenVLNMemory as LowLevelMemory,
+)
+from embodiinfer.policies.qwen_r2r_low.modeling_qwen_r2r_low import (
     _parse_low_level_action,
 )
 from embodiinfer.policies.qwen_r2r_panoramic.modeling_qwen_r2r_panoramic import (
     QwenR2RPanoramicMemory as PanoramicMemory,
+)
+from embodiinfer.policies.qwen_r2r_panoramic.modeling_qwen_r2r_panoramic import (
     parse_panoramic_action,
 )
-
 
 MAX_GRAPH_SHAPES = 8
 RTOL = 0.02
@@ -85,9 +89,7 @@ def _encoded_description(encoded: dict[str, Any]) -> dict[str, Any]:
     return description
 
 
-def _cohorts(
-    descriptions: list[tuple[str, dict[str, Any]]]
-) -> list[dict[str, Any]]:
+def _cohorts(descriptions: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
     for sample_id, description in descriptions:
         key = json.dumps(description, sort_keys=True, separators=(",", ":"))
@@ -103,15 +105,10 @@ def _cohorts(
             f"the manual graph cache admits at most {MAX_GRAPH_SHAPES}. "
             "Split the manifest into shape-homogeneous runs."
         )
-    return [
-        {"cohort": index, **group}
-        for index, group in enumerate(groups.values())
-    ]
+    return [{"cohort": index, **group} for index, group in enumerate(groups.values())]
 
 
-def _timed_cuda(
-    function: Callable[[], torch.Tensor], device: torch.device
-) -> tuple[float, torch.Tensor]:
+def _timed_cuda(function: Callable[[], torch.Tensor], device: torch.device) -> tuple[float, torch.Tensor]:
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
     start.record()
@@ -145,12 +142,8 @@ def _comparison(
 ) -> dict[str, Any]:
     left_top1 = left.argmax(-1).detach().cpu().tolist()
     right_top1 = right.argmax(-1).detach().cpu().tolist()
-    left_top50 = set(
-        left.topk(50, dim=-1).indices.detach().cpu().reshape(-1).tolist()
-    )
-    right_top50 = set(
-        right.topk(50, dim=-1).indices.detach().cpu().reshape(-1).tolist()
-    )
+    left_top50 = set(left.topk(50, dim=-1).indices.detach().cpu().reshape(-1).tolist())
+    right_top50 = set(right.topk(50, dim=-1).indices.detach().cpu().reshape(-1).tolist())
     top50_overlap = len(left_top50 & right_top50)
     top1_match = left_top1 == right_top1
     logits_close = bool(torch.allclose(left, right, rtol=rtol, atol=atol))
@@ -174,14 +167,10 @@ def _signature(
     candidate_count: int,
 ) -> dict[str, Any]:
     token_ids = logits.argmax(-1, keepdim=True)
-    text = runner.processor.batch_decode(
-        token_ids, skip_special_tokens=True
-    )[0].strip()
+    text = runner.processor.batch_decode(token_ids, skip_special_tokens=True)[0].strip()
     try:
         actions = (
-            _parse_low_level_action(text)
-            if kind == "low"
-            else parse_panoramic_action(text, candidate_count)
+            _parse_low_level_action(text) if kind == "low" else parse_panoramic_action(text, candidate_count)
         )
         action_values = actions.tolist()
         action_error = None
@@ -204,9 +193,7 @@ def _graph_counters(stats: dict[str, Any]) -> tuple[int, int, int]:
     )
 
 
-def _attention_backend_record(
-    runner, requested: str, profile: str
-) -> dict[str, Any]:
+def _attention_backend_record(runner, requested: str, profile: str) -> dict[str, Any]:
     backend = runner.manual_graph_stats().get("attention_backend")
     if backend is None:
         return {
@@ -234,9 +221,7 @@ def _torch_compile_record(runner, requested: str) -> dict[str, Any]:
     record["effective"] = record.get("resolved", "eager")
     record.setdefault("target", "qwen25_vl_next_token_forward")
     record["abi"] = record.get("compile_abi")
-    record["first_call_wall_ms"] = [
-        float(entry.get("first_call_wall_ms", 0.0)) for entry in entries
-    ]
+    record["first_call_wall_ms"] = [float(entry.get("first_call_wall_ms", 0.0)) for entry in entries]
     return record
 
 
@@ -248,18 +233,14 @@ def _compile_counters(runner, requested: str) -> dict[str, Any]:
         "configured": bool(persistent.get("configured", False)),
         "schema": persistent.get("schema"),
         "root": persistent.get("root"),
-        "launcher_contract_asserted": bool(
-            persistent.get("launcher_contract_asserted", False)
-        ),
+        "launcher_contract_asserted": bool(persistent.get("launcher_contract_asserted", False)),
         "libdevice": persistent.get("libdevice"),
         "entries": int(persistent.get("entries", 0)),
         "fingerprint": persistent.get("fingerprint"),
         "manifest_key": persistent.get("manifest_key"),
         "artifact_loaded": bool(persistent.get("artifact_loaded", False)),
         "artifact_published": bool(persistent.get("artifact_published", False)),
-        "artifact_publish_skipped": bool(
-            persistent.get("artifact_publish_skipped", False)
-        ),
+        "artifact_publish_skipped": bool(persistent.get("artifact_publish_skipped", False)),
         "artifact_sha256": persistent.get("artifact_sha256"),
         "artifact_bytes": int(persistent.get("artifact_bytes", 0)),
         "load_cache_info": persistent.get("load_cache_info"),
@@ -283,26 +264,16 @@ def _compile_counters(runner, requested: str) -> dict[str, Any]:
             raise RuntimeError("compile cache has no execution-scoped entry")
         if (
             not persistent_state["fingerprint"]
-            or persistent_state["manifest_key"]
-            != persistent_state["fingerprint"]
+            or persistent_state["manifest_key"] != persistent_state["fingerprint"]
         ):
             raise RuntimeError("compile cache fingerprint/manifest key is invalid")
         if persistent_state["quarantine_reason"] is not None:
             raise RuntimeError("compile cache quarantined an artifact")
-        if (
-            not persistent_state["artifact_sha256"]
-            or persistent_state["artifact_bytes"] <= 0
-        ):
+        if not persistent_state["artifact_sha256"] or persistent_state["artifact_bytes"] <= 0:
             raise RuntimeError("compile cache has no validated content-addressed blob")
-        if not (
-            persistent_state["artifact_loaded"]
-            or persistent_state["artifact_published"]
-        ):
+        if not (persistent_state["artifact_loaded"] or persistent_state["artifact_published"]):
             raise RuntimeError("compile cache neither loaded nor published an artifact")
-        if (
-            persistent_state["artifact_publish_skipped"]
-            and not persistent_state["artifact_loaded"]
-        ):
+        if persistent_state["artifact_publish_skipped"] and not persistent_state["artifact_loaded"]:
             raise RuntimeError("only a loaded cache hit may skip artifact publish")
         admission = persistent_state["persistent_hit_admission"]
         if persistent_state["artifact_loaded"] and (
@@ -319,27 +290,17 @@ def _compile_counters(runner, requested: str) -> dict[str, Any]:
                 raise RuntimeError("compile cache execution entry was quarantined")
             if entry.get("artifact_loaded"):
                 entry_admission = entry.get("persistent_hit_admission", {})
-                if (
-                    not isinstance(entry_admission, dict)
-                    or not entry_admission.get("admitted")
-                ):
-                    raise RuntimeError(
-                        "loaded execution entry did not satisfy FX/AOT admission"
-                    )
+                if not isinstance(entry_admission, dict) or not entry_admission.get("admitted"):
+                    raise RuntimeError("loaded execution entry did not satisfy FX/AOT admission")
             elif not entry.get("artifact_published"):
                 raise RuntimeError("cold execution entry did not publish an artifact")
-    return {
-        key: int(record.get(key, 0))
-        for key in ("cache_entries", "attempts", "failures")
-    } | {
+    return {key: int(record.get(key, 0)) for key in ("cache_entries", "attempts", "failures")} | {
         "bucket_ids": record.get("bucket_ids", []),
         "persistent_cache": persistent_state,
     }
 
 
-def _native_uncaptured_logits(
-    runner, encoded: dict[str, torch.Tensor], kind: str
-) -> torch.Tensor:
+def _native_uncaptured_logits(runner, encoded: dict[str, torch.Tensor], kind: str) -> torch.Tensor:
     if kind == "low":
         inputs = runner.graph_runtime.native_inputs(encoded)
         return runner.graph_runtime.forward(*inputs)
@@ -355,13 +316,9 @@ def _parse_compile_text_buckets(value: str) -> tuple[int, ...]:
             "compile text buckets must be comma-separated positive integers"
         ) from exc
     if not buckets or any(value <= 0 for value in buckets):
-        raise argparse.ArgumentTypeError(
-            "compile text buckets must be comma-separated positive integers"
-        )
+        raise argparse.ArgumentTypeError("compile text buckets must be comma-separated positive integers")
     if buckets != tuple(sorted(set(buckets))):
-        raise argparse.ArgumentTypeError(
-            "compile text buckets must be strictly increasing and unique"
-        )
+        raise argparse.ArgumentTypeError("compile text buckets must be strictly increasing and unique")
     return buckets
 
 
@@ -414,19 +371,14 @@ def main() -> int:
         parser.error("--compile-cache-dir requires --compile-backend=inductor")
     if args.compile_text_buckets and args.profile == "navida":
         parser.error("--compile-text-buckets is only supported for Low/Panoramic")
-    if (
-        args.compile_backend != "none"
-        and args.profile != "navida"
-        and args.attention_backend != "torch_sdpa"
-    ):
+    if args.compile_backend != "none" and args.profile != "navida" and args.attention_backend != "torch_sdpa":
         parser.error(
             "--compile-backend=inductor for Low/Panoramic requires "
             "--attention-backend=torch_sdpa; compile never falls back"
         )
     if args.profile == "navida" and args.attention_backend != "torch_sdpa":
         parser.error(
-            "NaViDA does not support --attention-backend; use torch_sdpa or "
-            "select a Low/Panoramic profile"
+            "NaViDA does not support --attention-backend; use torch_sdpa or select a Low/Panoramic profile"
         )
     if args.profile == "navida":
         parser.error(
@@ -453,13 +405,8 @@ def main() -> int:
     if device.type != "cuda" or not torch.cuda.is_available():
         parser.error("the manual CUDA Graph benchmark requires CUDA")
     actual_gpu = _physical_gpu(device)
-    if (
-        args.expected_physical_gpu is not None
-        and args.expected_physical_gpu != actual_gpu
-    ):
-        parser.error(
-            f"expected physical GPU {args.expected_physical_gpu}, got {actual_gpu}"
-        )
+    if args.expected_physical_gpu is not None and args.expected_physical_gpu != actual_gpu:
+        parser.error(f"expected physical GPU {args.expected_physical_gpu}, got {actual_gpu}")
 
     torch.cuda.set_device(device)
     _seed_everything(args.seed)
@@ -479,9 +426,7 @@ def main() -> int:
     descriptions: list[tuple[str, dict[str, Any]]] = []
     with torch.inference_mode():
         for sample in manifest.samples:
-            encoded = runner._encode_batch(
-                [sample.observation], [_memory(kind, sample)]
-            )
+            encoded = runner._encode_batch([sample.observation], [_memory(kind, sample)])
             description = _encoded_description(encoded)
             descriptions.append((sample.sample_id, description))
             encoded_samples.append((sample, encoded))
@@ -491,31 +436,21 @@ def main() -> int:
     capture_warmups: list[dict[str, Any]] = []
     with torch.inference_mode():
         for sample, encoded in encoded_samples:
-            hf_logits = runner.model(
-                **encoded, use_cache=False
-            ).logits[:, -1].float()
-            native_logits = _native_uncaptured_logits(
-                runner, encoded, kind
-            ).float()
+            hf_logits = runner.model(**encoded, use_cache=False).logits[:, -1].float()
+            native_logits = _native_uncaptured_logits(runner, encoded, kind).float()
             uncaptured_logits = runner._graph_logits(encoded).float()
             counters_before = _graph_counters(runner.manual_graph_stats())
             captured_logits = runner._manual_graph_logits(encoded).float()
             counters_after = _graph_counters(runner.manual_graph_stats())
-            resolved_backend = runner.manual_graph_stats()["attention_backend"][
-                "resolved"
-            ]
+            resolved_backend = runner.manual_graph_stats()["attention_backend"]["resolved"]
             triton_kernel = resolved_backend == "triton_hybrid"
             hf_rtol = TRITON_HYBRID_HF_RTOL if triton_kernel else RTOL
             hf_atol = TRITON_HYBRID_HF_ATOL if triton_kernel else ATOL
-            hf_top50_required = (
-                TRITON_HYBRID_TOP50_REQUIRED if triton_kernel else None
-            )
+            hf_top50_required = TRITON_HYBRID_TOP50_REQUIRED if triton_kernel else None
             inductor_compiled = args.compile_backend == "inductor"
             compiled_rtol = 0.06 if inductor_compiled else hf_rtol
             compiled_atol = 0.30 if inductor_compiled else hf_atol
-            compiled_top50_required = (
-                45 if inductor_compiled else hf_top50_required
-            )
+            compiled_top50_required = 45 if inductor_compiled else hf_top50_required
             comparisons = {
                 "hf_vs_native": _comparison(
                     hf_logits,
@@ -560,32 +495,16 @@ def main() -> int:
                     top50_required=compiled_top50_required,
                 ),
             }
-            candidate_count = len(
-                sample.observation.metadata.get("candidates", ())
-            )
+            candidate_count = len(sample.observation.metadata.get("candidates", ()))
             signatures = {
-                "hf_top_level_eager": _signature(
-                    runner, hf_logits, kind, candidate_count
-                ),
-                "self_authored_native": _signature(
-                    runner, native_logits, kind, candidate_count
-                ),
-                "self_authored_uncaptured": _signature(
-                    runner, uncaptured_logits, kind, candidate_count
-                ),
-                "captured_replay": _signature(
-                    runner, captured_logits, kind, candidate_count
-                ),
+                "hf_top_level_eager": _signature(runner, hf_logits, kind, candidate_count),
+                "self_authored_native": _signature(runner, native_logits, kind, candidate_count),
+                "self_authored_uncaptured": _signature(runner, uncaptured_logits, kind, candidate_count),
+                "captured_replay": _signature(runner, captured_logits, kind, candidate_count),
             }
             signature_values = list(signatures.values())
-            signatures_exact = all(
-                signature == signature_values[0]
-                for signature in signature_values[1:]
-            )
-            actions_valid = all(
-                signature["action_error"] is None
-                for signature in signature_values
-            )
+            signatures_exact = all(signature == signature_values[0] for signature in signature_values[1:])
+            actions_valid = all(signature["action_error"] is None for signature in signature_values)
             parity_records.append(
                 {
                     "id": sample.sample_id,
@@ -594,22 +513,10 @@ def main() -> int:
                     "memory_source": sample.memory_source,
                     "resolved_attention_backend": resolved_backend,
                     "top1": {
-                        "hf_top_level_eager": hf_logits.argmax(-1)
-                        .detach()
-                        .cpu()
-                        .tolist(),
-                        "self_authored_native": native_logits.argmax(-1)
-                        .detach()
-                        .cpu()
-                        .tolist(),
-                        "self_authored_uncaptured": uncaptured_logits.argmax(-1)
-                        .detach()
-                        .cpu()
-                        .tolist(),
-                        "captured_replay": captured_logits.argmax(-1)
-                        .detach()
-                        .cpu()
-                        .tolist(),
+                        "hf_top_level_eager": hf_logits.argmax(-1).detach().cpu().tolist(),
+                        "self_authored_native": native_logits.argmax(-1).detach().cpu().tolist(),
+                        "self_authored_uncaptured": uncaptured_logits.argmax(-1).detach().cpu().tolist(),
+                        "captured_replay": captured_logits.argmax(-1).detach().cpu().tolist(),
                     },
                     "comparisons": comparisons,
                     "signatures": signatures,
@@ -627,22 +534,14 @@ def main() -> int:
             )
 
     mode_functions = {
-        "hf_top_level_eager": lambda encoded: runner.model(
-            **encoded, use_cache=False
-        ).logits[:, -1],
+        "hf_top_level_eager": lambda encoded: runner.model(**encoded, use_cache=False).logits[:, -1],
         **(
-            {
-                "self_authored_native": lambda encoded: _native_uncaptured_logits(
-                    runner, encoded, kind
-                )
-            }
+            {"self_authored_native": lambda encoded: _native_uncaptured_logits(runner, encoded, kind)}
             if args.compile_backend != "none"
             else {}
         ),
         (
-            "torch_compiled_uncaptured"
-            if args.compile_backend != "none"
-            else "self_authored_uncaptured"
+            "torch_compiled_uncaptured" if args.compile_backend != "none" else "self_authored_uncaptured"
         ): lambda encoded: runner._graph_logits(encoded),
         "captured_replay": lambda encoded: runner._manual_graph_logits(encoded),
     }
@@ -658,17 +557,12 @@ def main() -> int:
                     function(encoded)
                 torch.cuda.synchronize(device)
                 before = _graph_counters(runner.manual_graph_stats())
-                compile_before = _compile_counters(
-                    runner, args.compile_backend
-                )
+                compile_before = _compile_counters(runner, args.compile_backend)
                 values = [
-                    _timed_cuda(lambda f=function, e=encoded: f(e), device)[0]
-                    for _ in range(args.iters)
+                    _timed_cuda(lambda f=function, e=encoded: f(e), device)[0] for _ in range(args.iters)
                 ]
                 after = _graph_counters(runner.manual_graph_stats())
-                compile_after = _compile_counters(
-                    runner, args.compile_backend
-                )
+                compile_after = _compile_counters(runner, args.compile_backend)
                 if compile_before != compile_after:
                     raise RuntimeError(
                         "torch.compile cache changed inside the timed window: "
@@ -685,26 +579,18 @@ def main() -> int:
             per_sample_timings.append(sample_timings)
 
     all_parity = all(
-        all(
-            comparison["passes_gate"]
-            for comparison in record["comparisons"].values()
-        )
+        all(comparison["passes_gate"] for comparison in record["comparisons"].values())
         and record["token_text_action_exact"]
         and record["actions_valid"]
         for record in parity_records
     )
-    formal_admitted = (
-        manifest.provenance["status"] == "verified"
-        and manifest.provenance["formal"]
-    )
+    formal_admitted = manifest.provenance["status"] == "verified" and manifest.provenance["formal"]
     status = (
         ("pass" if formal_admitted else "unverified")
         if all_parity and timed_capture_count == 0
         else "parity_failure"
     )
-    measurements = {
-        name: _timing_summary(values) for name, values in aggregate.items()
-    }
+    measurements = {name: _timing_summary(values) for name, values in aggregate.items()}
     output = {
         "status": status,
         "scope": (
@@ -714,9 +600,7 @@ def main() -> int:
             "parser, EngineCore, memory commit, and simulator"
         ),
         "visual_source": (
-            "provenance_consistent_r2r_aligned_rgb"
-            if formal_admitted
-            else "unverified_manifest_images"
+            "provenance_consistent_r2r_aligned_rgb" if formal_admitted else "unverified_manifest_images"
         ),
         "synthetic": manifest.provenance["synthetic_pixels"],
         "profile": args.profile,
@@ -738,8 +622,7 @@ def main() -> int:
         ],
         "shape_cohorts": cohorts,
         "input_shapes": {
-            sample.sample_id: _encoded_description(encoded)
-            for sample, encoded in encoded_samples
+            sample.sample_id: _encoded_description(encoded) for sample, encoded in encoded_samples
         },
         "batch_size": 1,
         "seed": args.seed,
@@ -781,32 +664,22 @@ def main() -> int:
         "capture_warmups": capture_warmups,
         "measurements": measurements,
         "per_sample_measurements": per_sample_timings,
-        "attention_backend": _attention_backend_record(
-            runner, args.attention_backend, args.profile
-        ),
+        "attention_backend": _attention_backend_record(runner, args.attention_backend, args.profile),
         "torch_compile": _torch_compile_record(runner, args.compile_backend),
         "compile_shape_cache": {
             "requested_text_buckets": list(args.compile_text_buckets),
             "compile_cache_dir": (
-                str(args.compile_cache_dir.resolve())
-                if args.compile_cache_dir is not None
-                else None
+                str(args.compile_cache_dir.resolve()) if args.compile_cache_dir is not None else None
             ),
-            "observed_bucket_ids": _torch_compile_record(
-                runner, args.compile_backend
-            ).get("bucket_ids", []),
-            "persistent_cache": _torch_compile_record(
-                runner, args.compile_backend
-            ).get("persistent_cache", {}),
+            "observed_bucket_ids": _torch_compile_record(runner, args.compile_backend).get("bucket_ids", []),
+            "persistent_cache": _torch_compile_record(runner, args.compile_backend).get(
+                "persistent_cache", {}
+            ),
         },
         "runtime_mode": {
-            "uncaptured": (
-                "compiled" if args.compile_backend != "none" else "eager"
-            ),
+            "uncaptured": ("compiled" if args.compile_backend != "none" else "eager"),
             "captured": (
-                "compiled_manual_cudagraph"
-                if args.compile_backend != "none"
-                else "manual_cudagraph"
+                "compiled_manual_cudagraph" if args.compile_backend != "none" else "manual_cudagraph"
             ),
         },
         "manual_graph": runner.manual_graph_stats(),

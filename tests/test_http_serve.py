@@ -48,7 +48,7 @@ def _service(adapter=None, **kwargs):
 def _session(service):
     return service.open_session(
         {
-            "schema": "vvla.policy.session.v1",
+            "schema": "embodiinfer.policy.session.v1",
             "robot_id": "fr3",
             "action_space": "pi05.action_chunk.v1",
         }
@@ -57,7 +57,7 @@ def _session(service):
 
 def _multipart(session_id: str, request_id: str, *, step_id: int = 0, state_value: float = 0.0, boundary="b"):
     metadata = {
-        "schema": "vvla.policy.step.v1",
+        "schema": "embodiinfer.policy.step.v1",
         "session_id": session_id,
         "request_id": request_id,
         "step_id": step_id,
