@@ -189,7 +189,7 @@ mapping to a checkpoint.
 
 | Workflow | Interface | Start here |
 |---|---|---|
-| Inference inside an application | `Vvla.act(observation)` or `Vvla.act(observations)` | [Python API](docs/en/api.md) |
+| Inference inside an application | `EmbodiInfer.act(observation)` or `EmbodiInfer.act(observations)` | [Python API](docs/en/api.md) |
 | Network inference for a robot runtime | HTTP / WirelessComm sessions | [Serve and send your first observation](docs/en/serving.md) |
 | RL rollout and weight updates | Rollout / refit interfaces | [RL integration](docs/en/api.md#generating-rl-rollouts) |
 | Multi-GPU execution | Data parallelism / tensor parallelism | [Parallelism](docs/en/parallelism.md) |
@@ -198,8 +198,8 @@ The network launchers support π0.5, DM0.5, and StreamVLN at batch size 1.
 Other policies use the Python API. See the
 [capability table](docs/en/models.md#capabilities-and-installation) for policy-specific support.
 
-The distribution is named `embodiinfer`; Python imports remain under `embodiinfer`.
-Existing `vvla-*` command aliases and `vvla.policy.*` wire schemas remain supported.
+The distribution is named `embodiinfer`; Python imports, the `embodiinfer-*` command-line
+entry points, and the `embodiinfer.policy.*` wire schemas all use the same name.
 
 ## Documentation
 

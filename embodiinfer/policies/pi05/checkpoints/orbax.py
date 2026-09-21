@@ -154,7 +154,10 @@ def cached_orbax_weights(root: Path) -> Path:
         for path in files
     ]
     key = hashlib.sha256(json.dumps([_CONVERSION_VERSION, fingerprint]).encode()).hexdigest()
-    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "vvla" / "pi05"
+    # Converted safetensors are cached per checkpoint under the user cache
+    # dir; the key covers the conversion recipe and the source file inventory,
+    # so a reused cache entry is only returned when the input is unchanged.
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "embodiinfer" / "pi05"
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / f"{key}.safetensors"
     with FileLock(str(target) + ".lock"):

@@ -1,4 +1,4 @@
-"""VVLA-owned Qwen2 forward, KV cache, vision pooling, and token splice."""
+"""EmbodiInfer-owned Qwen2 forward, KV cache, vision pooling, and token splice."""
 
 from __future__ import annotations
 

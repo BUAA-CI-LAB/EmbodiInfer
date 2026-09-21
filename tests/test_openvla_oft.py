@@ -1,7 +1,7 @@
 """OpenVLA-OFT policy tests.
 
 CPU: registration + friendly errors (no weights needed). Box (``openvla_oft`` mark,
-gated on ``VVLA_OPENVLA_OFT_CKPT``): build from a real checkpoint and run the full
+gated on ``EMBODIINFER_OPENVLA_OFT_CKPT``): build from a real checkpoint and run the full
 single forward, asserting the action tokens land in the 256-bin action-token range.
 The bit-exact parity vs the canonical model is driven by ``dev/scripts/parity_oft_e2e.py``
 on the box (vision max|Δ|=0, 56/56 action-token argmax match).
@@ -27,9 +27,9 @@ def test_openvla_oft_requires_checkpoint():
 
 @pytest.mark.openvla_oft
 def test_openvla_oft_forward_produces_action_tokens():
-    ckpt = os.environ.get("VVLA_OPENVLA_OFT_CKPT")
+    ckpt = os.environ.get("EMBODIINFER_OPENVLA_OFT_CKPT")
     if not ckpt:
-        pytest.skip("set VVLA_OPENVLA_OFT_CKPT to a real OpenVLA-OFT checkpoint")
+        pytest.skip("set EMBODIINFER_OPENVLA_OFT_CKPT to a real OpenVLA-OFT checkpoint")
     from embodiinfer.types import Observation
 
     pol = make_policy("openvla_oft", checkpoint=ckpt, attention="eager").to("cuda").eval()

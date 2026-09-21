@@ -21,7 +21,7 @@ request. It selects CUDA when available and otherwise runs on CPU.
 
 ## Understand the Python interface
 
-`Vvla.act(observation)` returns an action chunk. Passing a list of observations
+`EmbodiInfer.act(observation)` returns an action chunk. Passing a list of observations
 returns a list of chunks. Each `Observation` carries images, state, and language
 inputs; the selected policy defines their layout and preprocessing.
 

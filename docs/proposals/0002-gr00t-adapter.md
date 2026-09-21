@@ -69,9 +69,9 @@ GR00T 为标准 rectified-flow：$x(t)=(1-t)\,\epsilon + t\,a$，网络学 $v=a-
 
 - **对照对象**：官方 `Gr00tN1d7ActionHead.get_action_with_features` 的逐步计算（注入固定初始噪声 $x_0$ 以消除其内部 `torch.randn`）。因 `gr00t` 包 pin transformers 4.57 且拉训练栈、与 EmbodiInfer env（transformers>=5）冲突，无法在 EmbodiInfer env 内 in-process import：由独立 `gr00t_env`（tf4.57）的 box 脚本 `gr00t_ref_run.py` 预跑一次、`torch.save` reference（inputs + $x_0$ + `ref_actions`，可选中间量 `vl_embeds`/`state_features`），EmbodiInfer env 侧读取比对。
 - **两级判据**（口径：同 dtype bf16、固定 $x_0$、byte-identical obs inputs）：
-  1. **DiT/action-head 隔离**：把 gr00t-native 自己的 prefix（`vl_embeds` + `state_features`）直接注入 EmbodiInfer 去噪循环 → $\max\lVert\Delta a\rVert_\infty \approx 1.6\times10^{-2}$（rel 0.4%），即给定相同 prefix 时 EmbodiInfer 自持 DiT 在 bf16 级忠实复现 gr00t-native（同 env 内 vvla-sdpa vs vendored diffusers 路径为 $\max\lvert\Delta\rvert=0$，bit-exact）。
+  1. **DiT/action-head 隔离**：把 gr00t-native 自己的 prefix（`vl_embeds` + `state_features`）直接注入 EmbodiInfer 去噪循环 → $\max\lVert\Delta a\rVert_\infty \approx 1.6\times10^{-2}$（rel 0.4%），即给定相同 prefix 时 EmbodiInfer 自持 DiT 在 bf16 级忠实复现 gr00t-native（同 env 内 embodiinfer-sdpa vs vendored diffusers 路径为 $\max\lvert\Delta\rvert=0$，bit-exact）。
   2. **端到端**：EmbodiInfer 全链路（tf>=5 backbone + 自持 DiT）vs gr00t-native（tf4.57）→ $\max\lVert\Delta a\rVert_\infty \approx 1.6\times10^{-2}$（rel 0.4%）。修好 §4.1 的两处 tf 跨版本对齐（pre-norm 特征 + mrope 2D 位置）后，backbone 复现 gr00t select-layer 特征（`vl_embeds` cos ~0.99），端到端 delta **收敛到与判据 1 相等的 DiT 底噪**（backbone 贡献已可忽略），残余即 torch/diffusers 跨版本的 bf16 算术差异（非 bit-exact）。
-- **复现**：`tests/test_gr00t_parity.py`（`gr00t` mark，门控 `VVLA_GR00T_CKPT` + `VVLA_COSMOS_PATH` + `VVLA_GR00T_REF`）+ box 脚本 `dev/scripts/{gr00t_ref_run,gr00t_compare,gr00t_inject}.py`。
+- **复现**：`tests/test_gr00t_parity.py`（`gr00t` mark，门控 `EMBODIINFER_GR00T_CKPT` + `EMBODIINFER_COSMOS_PATH` + `EMBODIINFER_GR00T_REF`）+ box 脚本 `dev/scripts/{gr00t_ref_run,gr00t_compare,gr00t_inject}.py`。
 
 ## 7. 实现计划
 
@@ -82,10 +82,10 @@ GR00T 为标准 rectified-flow：$x(t)=(1-t)\,\epsilon + t\,a$，网络学 $v=a-
 ## 8. 测试计划
 
 - **CI（CPU）**：`test_gr00t_registered`——`gr00t` 已注册、缺 `checkpoint` 或缺 `cosmos_path` 均抛 `ValueError`（不依赖 gr00t 包 / 权重）。
-- **box（gr00t mark）**：`test_gr00t_matches_native_reference`——读预存 reference，跑 EmbodiInfer 内集成 policy（sdpa），断言端到端 $\max|\Delta a| < 6\times10^{-2}$ 与注入-prefix DiT $< 3\times10^{-2}$。门控 `VVLA_GR00T_CKPT` + `VVLA_COSMOS_PATH` + `VVLA_GR00T_REF`。
+- **box（gr00t mark）**：`test_gr00t_matches_native_reference`——读预存 reference，跑 EmbodiInfer 内集成 policy（sdpa），断言端到端 $\max|\Delta a| < 6\times10^{-2}$ 与注入-prefix DiT $< 3\times10^{-2}$。门控 `EMBODIINFER_GR00T_CKPT` + `EMBODIINFER_COSMOS_PATH` + `EMBODIINFER_GR00T_REF`。
 - **env（分环境产 reference，统一 env 跑 EmbodiInfer）**：`gr00t` 包 pin `transformers==4.57` 且拉训练栈，与 EmbodiInfer env（transformers>=5）冲突，故不在同进程比对。
   - reference 侧：独立 `gr00t_env`（tf4.57，`gr00t` `pip install --no-deps`）跑 `gr00t_ref_run.py`。其 import 链拉训练 pipeline（`gr00t/model/__init__.py` → `setup` → `gr00t.data.*` → pandas/albumentations…），故 patch site-packages 的两处推理无关 import（注释 `model/__init__` 的 `Gr00tN1d7Pipeline`、把 `gr00t_n1d7.__init__` 里的数据侧 `Gr00tN1d7DataCollator` 构造改为 `self.collator = None`），只留 `Gr00tN1d7` model + config 可 import；backbone 的 `model_name`（gated `nvidia/Cosmos-Reason2-2B`）指向本地 Cosmos 目录的符号链接以离线加载。
-  - EmbodiInfer 侧：统一 `vvla_env`（editable-install，transformers>=5），读 reference 跑 `Gr00tPolicy`。
+  - EmbodiInfer 侧：统一 `embodiinfer_env`（editable-install，transformers>=5），读 reference 跑 `Gr00tPolicy`。
 
 ## 9. 基准计划
 

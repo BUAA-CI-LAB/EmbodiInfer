@@ -59,7 +59,7 @@ ruff check embodiinfer tests
 ruff format --check embodiinfer tests
 pytest tests/ -q               # CPU unit tests
 pytest tests/ -q -m gpu        # CUDA tests, on a GPU host
-pytest tests/ -q -m pi05       # pi0.5 weights + lerobot, needs VVLA_PI05_CKPT
+pytest tests/ -q -m pi05       # pi0.5 weights + lerobot, needs EMBODIINFER_PI05_CKPT
 ```
 
 Tests that need CUDA or a checkpoint skip themselves with an explicit reason.
@@ -157,7 +157,7 @@ precision setting), and the result are recorded together.
 **4 — Unit tests.** Prefer fakes and mocks on CPU, as `tests/test_data_parallel.py`
 does with its fake replica and `tests/test_grpo.py` does. Mark CUDA-dependent tests
 `@pytest.mark.gpu`, and pi0.5 weight and lerobot tests `@pytest.mark.pi05` (gated by
-`VVLA_PI05_CKPT`). Unmarked tests run in CI on CPU. Cover the normal path, the
+`EMBODIINFER_PI05_CKPT`). Unmarked tests run in CI on CPU. Cover the normal path, the
 boundaries (batch of one, padding, empty input), equivalence with the switch off, and
 the error paths through the typed errors in `embodiinfer/exceptions.py`.
 
@@ -251,7 +251,7 @@ let both consumers drop their submodule entirely.
 | policy config contract | `embodiinfer/policies/config.py` | `VLAPolicyConfig` | only the fields the engine reads; architecture config stays with each policy |
 | rollout | `embodiinfer/engine/rollout/` (with `demo/`) | the RL rollout surface, log-probability, weight sync; `demo/` is a toy GRPO trainer and env | depends on the engine, never on a concrete policy |
 | serve | `embodiinfer/engine/serve/` | the inference API and HTTP/websocket frontends | model-neutral communication and engine calls only; simulator and robot protocols belong to the deployment runtime |
-| errors | `embodiinfer/exceptions.py` | typed errors under a `VvlaError` base | user-facing errors go here |
+| errors | `embodiinfer/exceptions.py` | typed errors under an `EmbodiInferError` base | user-facing errors go here |
 
 Environment connectors, the episode execution loop, and metrics such as SR/SPL belong
 to the downstream deployment runtime and must not enter the inference package.

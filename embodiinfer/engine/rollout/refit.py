@@ -1,7 +1,7 @@
 """Framework-agnostic in-place policy weight refitting.
 
 Training systems own transport, sharding, and their actor-side parameter names.
-VVLA only owns the live rollout policy and the lifecycle of weights installed in
+EmbodiInfer only owns the live rollout policy and the lifecycle of weights installed in
 it.  This module is the boundary between the two: callers may either copy a
 mapping of tensors with :func:`refit_module`, or mutate tensors returned by
 ``refit_state_dict`` through a zero-copy transport and finish with
@@ -25,7 +25,7 @@ source entry, leaving the policy parameter untouched. The mapping policy belongs
 the integrating framework, not to the engine.
 """
 
-_POLICY_VERSION_ATTR = "_vvla_policy_version"
+_POLICY_VERSION_ATTR = "_embodiinfer_policy_version"
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def refit_state_dict(
     *,
     keep_vars: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """Return live refittable tensors in VVLA's canonical module namespace.
+    """Return live refittable tensors in EmbodiInfer's canonical module namespace.
 
     The returned mapping is shallow: its tensors share storage with the policy.
     A transport may update those tensors directly and then call
@@ -152,9 +152,9 @@ def refit_module(
         module: Live rollout policy or module to update.
         weights: Source-name to tensor mapping supplied by a learner/transport.
         strict: Require every target tensor and reject unknown source tensors.
-        name_map: Optional source-name to VVLA-name mapping. Returning ``None``
+        name_map: Optional source-name to EmbodiInfer-name mapping. Returning ``None``
             intentionally ignores a source entry. Mapping policy is owned by the
-            integrating framework, not VVLA.
+            integrating framework, not EmbodiInfer.
         version: Optional external learner version to publish after the copy.
 
     Shape/name, version and exact tied-weight validation complete before the

@@ -3,7 +3,7 @@
 Auto-skip tests marked ``gpu`` or ``pi05`` when no CUDA device is present, so the
 CPU/CI run collects the whole suite and skips (rather than errors on) GPU-only
 tests. GPU tests still run when a CUDA device is available; ``pi05`` additionally
-needs ``VVLA_PI05_CKPT`` (guarded in the test itself).
+needs ``EMBODIINFER_PI05_CKPT`` (guarded in the test itself).
 """
 
 import pytest

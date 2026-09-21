@@ -28,7 +28,7 @@ import time
 
 import torch
 
-from embodiinfer import EngineConfig, ToyReachEnv, Vvla, preset_config
+from embodiinfer import EngineConfig, ToyReachEnv, EmbodiInfer, preset_config
 from embodiinfer.engine.rollout.demo import GRPOConfig, GRPOTrainer, ToyReachReward
 from embodiinfer.engine.rollout.logprob import flow_sample_with_logprob
 
@@ -86,7 +86,7 @@ def throughput_panel(trainer: GRPOTrainer, env: ToyReachEnv, num_steps: int) -> 
     obs = env.reset()
     print(f"\n[throughput]  batch = {len(obs)} envs x {G} candidates = {len(obs) * G}")
 
-    t_vvla = _time_call(lambda: backend.sample_group(obs, G, sigma=sigma, num_steps=num_steps))
+    t_embodiinfer = _time_call(lambda: backend.sample_group(obs, G, sigma=sigma, num_steps=num_steps))
     t_hf = _time_call(lambda: _hf_style_group(backend, obs, G, num_steps, sigma))
 
     # rollout vs update share within one GRPO step
@@ -94,9 +94,9 @@ def throughput_panel(trainer: GRPOTrainer, env: ToyReachEnv, num_steps: int) -> 
     t_step = _time_call(lambda: trainer.step(obs))
     gen_frac = t_rollout / max(t_step, 1e-9)
 
-    print(f"  embodiinfer (cross-env batched) : {t_vvla * 1e3:8.1f} ms")
+    print(f"  embodiinfer (cross-env batched) : {t_embodiinfer * 1e3:8.1f} ms")
     print(f"  HF-style (per-env loop)  : {t_hf * 1e3:8.1f} ms")
-    print(f"  speedup                  : {t_hf / max(t_vvla, 1e-9):8.2f}x")
+    print(f"  speedup                  : {t_hf / max(t_embodiinfer, 1e-9):8.2f}x")
     print(f"  rollout share of a step  : {gen_frac * 100:8.1f} %")
     ndev = torch.cuda.device_count()
     if ndev > 1:

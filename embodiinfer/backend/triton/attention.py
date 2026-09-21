@@ -1,4 +1,4 @@
-"""Graph-safe grouped-query decode attention owned by VVLA."""
+"""Graph-safe grouped-query decode attention owned by EmbodiInfer."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def gqa_decode_graph(
         or key_cache.shape != value_cache.shape
         or position.numel() != 1
     ):
-        raise ValueError("unsupported input for VVLA graph GQA decode")
+        raise ValueError("unsupported input for EmbodiInfer graph GQA decode")
     output = torch.empty(queries.shape, dtype=queries.dtype, device=queries.device)
     batch_size, num_query_heads, _, head_dim = queries.shape
     _gqa_decode_graph_kernel[(batch_size * num_query_heads,)](

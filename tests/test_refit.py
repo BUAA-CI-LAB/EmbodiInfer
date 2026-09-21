@@ -1,4 +1,4 @@
-"""Tests for VVLA's framework-neutral in-place refit API."""
+"""Tests for EmbodiInfer's framework-neutral in-place refit API."""
 
 import pytest
 import torch

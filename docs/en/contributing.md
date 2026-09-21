@@ -32,7 +32,7 @@ ruff check embodiinfer tests
 ruff format --check embodiinfer tests
 pytest tests/ -q               # CPU unit tests
 pytest tests/ -q -m gpu        # CUDA tests, on a GPU host
-pytest tests/ -q -m pi05       # pi0.5 weights + lerobot, needs VVLA_PI05_CKPT
+pytest tests/ -q -m pi05       # pi0.5 weights + lerobot, needs EMBODIINFER_PI05_CKPT
 ```
 
 Tests that need CUDA or a checkpoint skip when those resources are unavailable.

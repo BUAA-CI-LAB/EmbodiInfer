@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps
 import torch
+from PIL import Image, ImageOps
 
 from embodiinfer import Observation
-
 
 LOW_PROFILE = "qwen2.5-vl-3b-r2r-low-level"
 PANORAMIC_PROFILE = "qwen2.5-vl-3b-r2r-panoramic"
@@ -55,9 +54,7 @@ def profile_kind(profile: str) -> str:
     try:
         return _PROFILE_KINDS[profile]
     except KeyError as exc:
-        raise ValueError(
-            f"unsupported profile {profile!r}; expected one of {PROFILES}"
-        ) from exc
+        raise ValueError(f"unsupported profile {profile!r}; expected one of {PROFILES}") from exc
 
 
 def _manifest_records(path: Path) -> tuple[list[dict[str, Any]], str]:
@@ -80,13 +77,9 @@ def _manifest_records(path: Path) -> tuple[list[dict[str, Any]], str]:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"invalid JSONL at {manifest_path}:{line_number}: {exc.msg}"
-                ) from exc
+                raise ValueError(f"invalid JSONL at {manifest_path}:{line_number}: {exc.msg}") from exc
             if not isinstance(value, dict):
-                raise ValueError(
-                    f"{manifest_path}:{line_number} must contain one JSON object"
-                )
+                raise ValueError(f"{manifest_path}:{line_number} must contain one JSON object")
             records.append(value)
     elif suffix == ".json":
         try:
@@ -97,9 +90,7 @@ def _manifest_records(path: Path) -> tuple[list[dict[str, Any]], str]:
             records = payload
         elif isinstance(payload, dict):
             if set(payload) != {"samples"} or not isinstance(payload["samples"], list):
-                raise ValueError(
-                    "JSON object manifests must contain exactly one list field: samples"
-                )
+                raise ValueError("JSON object manifests must contain exactly one list field: samples")
             records = payload["samples"]
         else:
             raise ValueError("JSON manifest must be an array or an object with samples")
@@ -220,9 +211,7 @@ def _history_images(
     frames: list[torch.Tensor] = []
     paths: list[str] = []
     for index, item in enumerate(_path_list(value, field)):
-        frame, path = _relative_image(
-            data_root, item, f"{field}[{index}]", expected_size
-        )
+        frame, path = _relative_image(data_root, item, f"{field}[{index}]", expected_size)
         frames.append(frame)
         paths.append(path)
     return tuple(frames), paths
@@ -242,9 +231,7 @@ def _observation(
     )
 
 
-def _parse_low(
-    record: dict[str, Any], context: str, data_root: Path
-) -> ManifestSample:
+def _parse_low(record: dict[str, Any], context: str, data_root: Path) -> ManifestSample:
     required = {"id", "instruction", "current_image"}
     optional = {
         "history_images",
@@ -261,21 +248,15 @@ def _parse_low(
     history, history_paths = _history_images(
         data_root, record.get("history_images"), f"{context}.history_images", None
     )
-    responses = _response_list(
-        record.get("history_responses"), f"{context}.history_responses"
-    )
+    responses = _response_list(record.get("history_responses"), f"{context}.history_responses")
     if len(history) != len(responses):
-        raise ValueError(
-            f"{context}.history_images and history_responses must have equal length"
-        )
+        raise ValueError(f"{context}.history_images and history_responses must have equal length")
     distance = _number(
         record.get("distance_traveled", 0.0),
         f"{context}.distance_traveled",
         nonnegative=True,
     )
-    move_possible = _boolean(
-        record.get("move_possible", True), f"{context}.move_possible"
-    )
+    move_possible = _boolean(record.get("move_possible", True), f"{context}.move_possible")
     return ManifestSample(
         sample_id=sample_id,
         instruction=instruction,
@@ -296,9 +277,7 @@ def _parse_low(
     )
 
 
-def _parse_navida(
-    record: dict[str, Any], context: str, data_root: Path
-) -> ManifestSample:
+def _parse_navida(record: dict[str, Any], context: str, data_root: Path) -> ManifestSample:
     required = {"id", "instruction", "current_image"}
     optional = {"history_images"}
     _check_fields(record, required, optional, context)
@@ -329,9 +308,7 @@ def _parse_navida(
     )
 
 
-def _parse_panoramic(
-    record: dict[str, Any], context: str, data_root: Path
-) -> ManifestSample:
+def _parse_panoramic(record: dict[str, Any], context: str, data_root: Path) -> ManifestSample:
     required = {"id", "instruction", "panorama_image", "candidates"}
     optional = {
         "history_panoramas",
@@ -353,13 +330,9 @@ def _parse_panoramic(
         f"{context}.history_panoramas",
         (960, 240),
     )
-    responses = _response_list(
-        record.get("history_responses"), f"{context}.history_responses"
-    )
+    responses = _response_list(record.get("history_responses"), f"{context}.history_responses")
     if len(history) != len(responses):
-        raise ValueError(
-            f"{context}.history_panoramas and history_responses must have equal length"
-        )
+        raise ValueError(f"{context}.history_panoramas and history_responses must have equal length")
 
     raw_candidates = record["candidates"]
     if not isinstance(raw_candidates, list) or not raw_candidates:
@@ -472,9 +445,7 @@ def _relative_provenance_file(root: Path, value: Any, field: str) -> Path:
     return resolved
 
 
-def _manifest_image_paths(
-    records: list[dict[str, Any]], kind: str
-) -> set[str]:
+def _manifest_image_paths(records: list[dict[str, Any]], kind: str) -> set[str]:
     paths: set[str] = set()
     for index, record in enumerate(records):
         context = f"sample[{index}]"
@@ -526,16 +497,14 @@ def validate_manifest_provenance(
         raise ValueError(f"invalid UTF-8 JSON provenance: {provenance_path}") from exc
     if not isinstance(payload, dict):
         raise ValueError("provenance must be a JSON object")
-    if payload.get("schema") != "vvla_r2r_vlnce_real_rgb_manifest_v1":
+    if payload.get("schema") != "embodiinfer_r2r_vlnce_real_rgb_manifest_v1":
         raise ValueError("unsupported R2R provenance schema")
     if payload.get("synthetic_pixels") is not False:
         raise ValueError("formal R2R provenance requires synthetic_pixels=false")
     if payload.get("trajectory_success_claim") is not False:
         raise ValueError("R2R throughput provenance cannot claim trajectory success")
     if payload.get("official_tar_byte_verified") is not False:
-        raise ValueError(
-            "R2R throughput provenance must declare official_tar_byte_verified=false"
-        )
+        raise ValueError("R2R throughput provenance must declare official_tar_byte_verified=false")
 
     kind = profile_kind(profile)
     base = provenance_path.parent
@@ -543,9 +512,7 @@ def validate_manifest_provenance(
     if not isinstance(manifests, dict) or not isinstance(manifests.get(kind), dict):
         raise ValueError(f"provenance has no manifest record for profile {kind}")
     manifest_record = manifests[kind]
-    declared_manifest = _declared_path(
-        manifest_record.get("path"), base, f"manifests.{kind}.path"
-    )
+    declared_manifest = _declared_path(manifest_record.get("path"), base, f"manifests.{kind}.path")
     if declared_manifest != manifest_path:
         raise ValueError("provenance manifest path does not match --manifest")
     manifest_sha = _file_sha256(manifest_path)
@@ -557,9 +524,7 @@ def validate_manifest_provenance(
     roots = payload.get("data_roots")
     if not isinstance(roots, dict):
         raise ValueError("provenance data_roots must be an object")
-    declared_root = _declared_path(
-        roots.get(kind), base, f"data_roots.{kind}"
-    )
+    declared_root = _declared_path(roots.get(kind), base, f"data_roots.{kind}")
     if declared_root != data_root:
         raise ValueError("provenance data_root does not match --data-root")
 
@@ -585,9 +550,7 @@ def validate_manifest_provenance(
         raise ValueError("provenance StreamVLN images root is not a directory")
     if _file_sha256(train_path) != inputs.get("r2r_vlnce_train_sha256"):
         raise ValueError("R2R-VLNCE train source SHA256 mismatch")
-    if _file_sha256(annotations_path) != inputs.get(
-        "streamvln_annotations_sha256"
-    ):
+    if _file_sha256(annotations_path) != inputs.get("streamvln_annotations_sha256"):
         raise ValueError("StreamVLN annotation source SHA256 mismatch")
 
     derivatives = payload.get("derivatives")
@@ -602,9 +565,7 @@ def validate_manifest_provenance(
             raise ValueError(f"{context} must be an object")
         source_value = derivative.get("source")
         output_value = derivative.get("output")
-        source = _relative_provenance_file(
-            source_root, source_value, f"{context}.source"
-        )
+        source = _relative_provenance_file(source_root, source_value, f"{context}.source")
         output = _relative_provenance_file(base, output_value, f"{context}.output")
         expected_source = derivative.get("source_sha256")
         expected_output = derivative.get("output_sha256")
@@ -629,10 +590,7 @@ def validate_manifest_provenance(
     expected_paths = source_paths if data_root == source_root else output_paths
     uncovered = sorted(manifest_images - expected_paths)
     if uncovered:
-        raise ValueError(
-            "manifest image paths lack source/derivative SHA provenance: "
-            f"{uncovered[:3]}"
-        )
+        raise ValueError(f"manifest image paths lack source/derivative SHA provenance: {uncovered[:3]}")
 
     selection = payload.get("selection")
     if not isinstance(selection, dict):
@@ -642,15 +600,8 @@ def validate_manifest_provenance(
         raise ValueError("provenance selection.samples must be a list")
     if selection.get("selection_sha256") != _canonical_sha256(selected):
         raise ValueError("provenance selection SHA256 mismatch")
-    selected_ids = [
-        str(record.get("sample_id"))
-        for record in selected
-        if isinstance(record, dict)
-    ]
-    manifest_ids = [
-        _sample_id(record.get("id"), f"sample[{index}]")
-        for index, record in enumerate(records)
-    ]
+    selected_ids = [str(record.get("sample_id")) for record in selected if isinstance(record, dict)]
+    manifest_ids = [_sample_id(record.get("id"), f"sample[{index}]") for index, record in enumerate(records)]
     if selected_ids != manifest_ids:
         raise ValueError("provenance selection sample ids do not match manifest")
 
@@ -674,17 +625,11 @@ def validate_manifest_provenance(
             quantile = selected_record.get("quantile")
             frame_index = selected_record.get("frame_index")
             if isinstance(episode_id, bool) or not isinstance(episode_id, int):
-                raise ValueError(
-                    f"selection.samples[{index}].episode_id must be an integer"
-                )
+                raise ValueError(f"selection.samples[{index}].episode_id must be an integer")
             if quantile not in (0, 1, 2, 3):
-                raise ValueError(
-                    f"selection.samples[{index}].quantile must be q0..q3"
-                )
+                raise ValueError(f"selection.samples[{index}].quantile must be q0..q3")
             if isinstance(frame_index, bool) or not isinstance(frame_index, int):
-                raise ValueError(
-                    f"selection.samples[{index}].frame_index must be an integer"
-                )
+                raise ValueError(f"selection.samples[{index}].frame_index must be an integer")
             episode_groups.setdefault(episode_id, []).append(selected_record)
         if len(episode_groups) != 48:
             raise ValueError("formal R2R admission requires 48 unique episodes")
@@ -695,8 +640,7 @@ def validate_manifest_provenance(
                 or len({record["frame_index"] for record in group}) != 4
             ):
                 raise ValueError(
-                    f"formal R2R episode {episode_id} must contain q0..q3 at "
-                    "four distinct steps"
+                    f"formal R2R episode {episode_id} must contain q0..q3 at four distinct steps"
                 )
         for index, (record, selected_record) in enumerate(zip(records, selected)):
             if (
@@ -704,16 +648,12 @@ def validate_manifest_provenance(
                 or not isinstance(selected_record.get("history_responses"), list)
                 or len(selected_record["history_responses"]) != 4
             ):
-                raise ValueError(
-                    f"selection.samples[{index}] must contain four history responses"
-                )
+                raise ValueError(f"selection.samples[{index}] must contain four history responses")
             if kind in ("low", "navida"):
                 if len(record.get("history_images", [])) != 4:
                     raise ValueError(f"sample[{index}] must contain four history images")
                 if kind == "low" and len(record.get("history_responses", [])) != 4:
-                    raise ValueError(
-                        f"sample[{index}] must contain four history responses"
-                    )
+                    raise ValueError(f"sample[{index}] must contain four history responses")
             else:
                 if (
                     len(record.get("history_panoramas", [])) != 4
@@ -721,8 +661,7 @@ def validate_manifest_provenance(
                     or len(record.get("candidates", [])) != 4
                 ):
                     raise ValueError(
-                        f"sample[{index}] must contain four histories, responses, "
-                        "and candidates"
+                        f"sample[{index}] must contain four histories, responses, and candidates"
                     )
         if payload.get("classification") != (
             "structurally_aligned_existing_export_not_official_tar_byte_verified"
@@ -769,13 +708,9 @@ def load_manifest(
         require_formal=require_formal,
     )
     if limit > len(records):
-        raise ValueError(
-            f"--limit={limit} exceeds manifest sample count {len(records)}"
-        )
+        raise ValueError(f"--limit={limit} exceeds manifest sample count {len(records)}")
     if require_formal and limit != len(records):
-        raise ValueError(
-            "formal R2R admission requires --limit=192 with complete manifest coverage"
-        )
+        raise ValueError("formal R2R admission requires --limit=192 with complete manifest coverage")
 
     seen: dict[str, int] = {}
     for index, record in enumerate(records):
@@ -784,10 +719,7 @@ def load_manifest(
             raise ValueError(f"{context} must be an object")
         sample_id = _sample_id(record.get("id"), context)
         if sample_id in seen:
-            raise ValueError(
-                f"duplicate sample id {sample_id!r} at indexes "
-                f"{seen[sample_id]} and {index}"
-            )
+            raise ValueError(f"duplicate sample id {sample_id!r} at indexes {seen[sample_id]} and {index}")
         seen[sample_id] = index
 
     parser = {
@@ -795,10 +727,7 @@ def load_manifest(
         "panoramic": _parse_panoramic,
         "navida": _parse_navida,
     }[kind]
-    samples = tuple(
-        parser(record, f"sample[{index}]", root)
-        for index, record in enumerate(records[:limit])
-    )
+    samples = tuple(parser(record, f"sample[{index}]", root) for index, record in enumerate(records[:limit]))
     return LoadedManifest(
         path=manifest_path,
         data_root=root,

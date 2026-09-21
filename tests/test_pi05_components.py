@@ -1,4 +1,4 @@
-"""Small CPU models check VVLA leaf math against the installed LeRobot stack."""
+"""Small CPU models check EmbodiInfer leaf math against the installed LeRobot stack."""
 
 from types import SimpleNamespace
 

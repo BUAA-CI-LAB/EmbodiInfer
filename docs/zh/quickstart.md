@@ -20,7 +20,7 @@ uv run python examples/quickstart.py
 
 ## 调用 Python 接口
 
-`Vvla.act(observation)` 返回一个动作块；传入观测列表则返回动作块列表。
+`EmbodiInfer.act(observation)` 返回一个动作块；传入观测列表则返回动作块列表。
 每个 `Observation` 携带图像、状态和语言输入，其布局与预处理由所选策略定义。
 
 [完整示例](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/examples/quickstart.py)

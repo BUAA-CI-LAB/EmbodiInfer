@@ -1,4 +1,4 @@
-"""A thin GRPO trainer over vvla's rollout surface.
+"""A thin GRPO trainer over embodiinfer's rollout surface.
 
 GRPO (Group Relative Policy Optimization) drops the value critic: for each
 observation it samples a group of ``G`` candidates, scores them, and uses the
@@ -7,12 +7,12 @@ observation it samples a group of ``G`` candidates, scores them, and uses the
     A_i = (r_i - mean_g r) / (std_g r + eps)
 
 then takes a PPO-style clipped policy-gradient step (optionally regularized by a
-KL to a frozen reference policy). This maps cleanly onto vvla's rollout surface:
+KL to a frozen reference policy). This maps cleanly onto embodiinfer's rollout surface:
 group sampling is :meth:`GenerationBackend.sample_group` (one prefix encode
 broadcast to all candidates), and the policy gradient needs the differentiable
 log-prob recompute (:func:`~embodiinfer.engine.rollout.logprob.flow_logprob_recompute`).
 
-This trainer is intentionally a *thin demo layer*: vvla is the rollout /
+This trainer is intentionally a *thin demo layer*: embodiinfer is the rollout /
 generation backend, and the RL algorithm sits on top. It exists to (a) prove the
 closed loop learns and (b) let the generation path's throughput be measured
 inside a real update loop. It is not a production RL framework.
@@ -84,7 +84,7 @@ class GRPOTrainer:
         cfg = self.cfg
         num_steps = cfg.num_steps or self.backend.core.config.num_steps or self.backend.pcfg.default_num_steps
 
-        # 1) rollout: group sampling under no_grad — vvla's throughput surface.
+        # 1) rollout: group sampling under no_grad — embodiinfer's throughput surface.
         session_ids = self._session_ids(observations, cfg.group_size)
         try:
             samples = self.backend.sample_group(

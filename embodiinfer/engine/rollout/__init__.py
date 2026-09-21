@@ -3,7 +3,7 @@
 This is the *product* surface an RLinf/verl-style trainer consumes: generate
 actions + log-probability, best-of-N, and in-place weight sync. Kept deliberately
 narrow (cf. verl's ``BaseRollout``); the trainer, algorithm and env are out of
-scope for vvla and live under :mod:`embodiinfer.engine.rollout.demo` (toy GRPO loop + env) for
+scope for embodiinfer and live under :mod:`embodiinfer.engine.rollout.demo` (toy GRPO loop + env) for
 demonstration only.
 """
 

@@ -1,4 +1,4 @@
-"""WirelessComm ingress for the versioned VVLA policy service."""
+"""WirelessComm ingress for the versioned EmbodiInfer policy service."""
 
 from __future__ import annotations
 
@@ -17,9 +17,12 @@ from .service import PolicyService
 if TYPE_CHECKING:
     from wireless_comm import Comm, Peer
 
-RPC_SCHEMA = "vvla.policy.rpc.v1"
-REQUEST_TAG = 0x56564C41
-RESPONSE_TAG = 0x56564C42
+RPC_SCHEMA = "embodiinfer.policy.rpc.v1"
+# Wire-identity magic tags for the WirelessComm handshake. The hex values spell
+# out the service name (request "EMBI", response "EMBJ"), so the request and
+# response pairing stays obvious at the byte level.
+REQUEST_TAG = 0x454D4249  # b"EMBI"
+RESPONSE_TAG = 0x454D424A  # b"EMBJ"
 
 # A peer closing its connection ends that session, not the server. Wait briefly
 # before receiving again so a peer that is gone for good cannot spin this loop.
@@ -57,7 +60,7 @@ class WirelessPolicyServer:
         loops = [
             asyncio.create_task(
                 self._serve_peer(peer),
-                name=f"vvla-wireless-rx-{peer.node_id}",
+                name=f"embodiinfer-wireless-rx-{peer.node_id}",
             )
             for peer in self.comm.peers()
         ]
@@ -93,7 +96,7 @@ class WirelessPolicyServer:
             await self._capacity.acquire()
             task = asyncio.create_task(
                 self._handle(peer, payload, metadata),
-                name=f"vvla-wireless-request-{peer.node_id}",
+                name=f"embodiinfer-wireless-request-{peer.node_id}",
             )
             self._requests.add(task)
             task.add_done_callback(self._request_done)
@@ -138,12 +141,12 @@ class WirelessPolicyServer:
                     "code": error.code,
                 }
                 response_payload = {
-                    "schema": "vvla.error.v1",
+                    "schema": "embodiinfer.error.v1",
                     "code": error.code,
                     "message": error.message,
                 }
             except Exception:
-                _LOG.exception("unhandled VVLA wireless request failure")
+                _LOG.exception("unhandled EmbodiInfer wireless request failure")
                 response_metadata = {
                     "schema": RPC_SCHEMA,
                     "kind": "response",
@@ -152,7 +155,7 @@ class WirelessPolicyServer:
                     "code": "internal_error",
                 }
                 response_payload = {
-                    "schema": "vvla.error.v1",
+                    "schema": "embodiinfer.error.v1",
                     "code": "internal_error",
                     "message": "internal server error",
                 }
@@ -188,12 +191,12 @@ class WirelessPolicyServer:
             return {
                 "schema": "embodiinfer.health.v1",
                 "status": "ok",
-                "service": "vvla-wireless",
+                "service": "embodiinfer-wireless",
             }
         if method == "capabilities":
             return {
-                "schema": "vvla.policy.capabilities.v1",
-                "server": "vvla-wireless",
+                "schema": "embodiinfer.policy.capabilities.v1",
+                "server": "embodiinfer-wireless",
                 "adapter": self.service.adapter.capabilities(),
             }
         if not isinstance(payload, Mapping):
@@ -218,7 +221,7 @@ class WirelessPolicyServer:
             if not isinstance(session_id, str):
                 raise ServeError(400, "invalid_request", "close payload is invalid")
             self.service.close(session_id)
-            return {"schema": "vvla.policy.session.close.v1", "ok": True}
+            return {"schema": "embodiinfer.policy.session.close.v1", "ok": True}
         raise ServeError(404, "method_not_found", f"unknown policy method {method!r}")
 
     @staticmethod
@@ -264,7 +267,7 @@ async def _run(args: argparse.Namespace, service: PolicyService) -> None:
         maximum_in_flight=args.max_in_flight,
     )
     print(
-        f"[vvla-wireless] policy={args.policy} device={args.device} "
+        f"[embodiinfer-wireless] policy={args.policy} device={args.device} "
         f"action_space={service.action_space} node={config.local.node_id} "
         f"listen={config.bind_host}:{config.local.port}"
     )
@@ -275,7 +278,7 @@ async def _run(args: argparse.Namespace, service: PolicyService) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run a VVLA policy server on a configured WirelessComm node."""
+    """Run a EmbodiInfer policy server on a configured WirelessComm node."""
 
     parser = argparse.ArgumentParser()
     add_policy_arguments(parser)

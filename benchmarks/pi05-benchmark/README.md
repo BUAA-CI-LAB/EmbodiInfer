@@ -218,7 +218,7 @@ PYTHONPATH=/path/to/EmbodiInfer HF_HOME=/path/to/cache \
 
 本次 PI0.5 优化单独归档为 20260909123408.tar.gz (`../snapshots/20260909123408.tar.gz`)
 及 SHA256 (`../snapshots/20260909123408.tar.gz.sha256`)。只包含最终结果相关的脚本、
-本次 PI0.5 优化源码、实际配置、校验参考、原 VVLA/PhyAI 对照和逐帧报告；
+本次 PI0.5 优化源码、实际配置、校验参考、原 EmbodiInfer/PhyAI 对照和逐帧报告；
 不含 checkpoint、完整数据集、虚拟环境或编译库。之前多模型快照保留。
 
 ## AGX Orin mixed precision (2026-09-17)
@@ -289,6 +289,6 @@ PYTHONPATH=. python benchmarks/pi05-benchmark/compare_recorded.py \
 图片解码为 RGB CHW [0,1]。结果目录含运行条件、每次计时/动作误差和完整动作数组。
 当前脚本将全部权重放在 CUDA，参考和候选共享同一加载模型；每个观测形状都预热。
 这与历史部署实验的参考 CPU 词嵌入 offload、仅首帧预热不同，应以新生成条件和
-结果为准。`--modes lerobot vvla_eager vvla_eager_graph` 可只测逐位一致的候选；
+结果为准。`--modes lerobot embodiinfer_eager embodiinfer_eager_graph` 可只测逐位一致的候选；
 SDPA 结果始终单独报告误差。冷启动、CPU offload 和正式服务请求延迟不在该脚本
 的推理计时范围内。

@@ -1,4 +1,4 @@
-"""VVLA-owned positional math for the LeRobot Pi0.5 embedding path."""
+"""EmbodiInfer-owned positional math for the LeRobot Pi0.5 embedding path."""
 
 from __future__ import annotations
 

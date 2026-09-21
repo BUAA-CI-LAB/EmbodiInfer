@@ -42,7 +42,7 @@ def _engine():
     )
 
 
-def test_vvla_act_rejects_wrong_camera_count():
+def test_embodiinfer_act_rejects_wrong_camera_count():
     cfg = preset_config("tiny")  # num_cameras == 1
     engine = _engine()
     bad = Observation(
@@ -55,7 +55,7 @@ def test_vvla_act_rejects_wrong_camera_count():
     assert "expected 1 cameras; got 2" in str(ei.value)
 
 
-def test_vvla_act_rejects_wrong_state_rank():
+def test_embodiinfer_act_rejects_wrong_state_rank():
     cfg = preset_config("tiny")
     engine = _engine()
     bad = Observation(

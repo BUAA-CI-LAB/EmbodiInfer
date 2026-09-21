@@ -24,8 +24,8 @@ from .processor_dm05 import (
 
 _INSTALL = (
     "DM0.5 requires a dedicated OpenDM environment because its torch/transformers "
-    "versions differ from other vvla adapters. Install https://github.com/dexmal/opendm "
-    "in that environment, then install vvla with --no-deps."
+    "versions differ from other embodiinfer adapters. Install https://github.com/dexmal/opendm "
+    "in that environment, then install embodiinfer with --no-deps."
 )
 
 _ROBOCHALLENGE_ROBOTS = frozenset({"ARX5", "UR5", "ALOHA", "W1"})
@@ -103,7 +103,7 @@ class DM05Prefix:
 
 
 class DM05Policy(FlowVLAPolicy):
-    """OpenDM DM0.5 as a vvla flow policy.
+    """OpenDM DM0.5 as a embodiinfer flow policy.
 
     The VLM prefix is computed once.  Each flow step calls OpenDM's action
     expert helpers with the cached prefix.  Internal state remains 32-wide;
@@ -257,7 +257,7 @@ class DM05Policy(FlowVLAPolicy):
         return model
 
     def build_serving_adapter(self, *, core, checkpoint=None, config=None):
-        """Build the model-side adapter used by the generic VVLA HTTP service."""
+        """Build the model-side adapter used by the generic EmbodiInfer HTTP service."""
 
         from .serving import DM05ServingAdapter
 

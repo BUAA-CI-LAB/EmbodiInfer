@@ -161,7 +161,7 @@ class WirelessPolicyServerTests(unittest.IsolatedAsyncioTestCase):
             self.server_peer,
             "open_session",
             {
-                "schema": "vvla.policy.session.v1",
+                "schema": "embodiinfer.policy.session.v1",
                 "robot_id": "fr3",
                 "action_space": "pi05.action_chunk.v1",
             },
@@ -169,7 +169,7 @@ class WirelessPolicyServerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response["status"], 200)
         step = {
-            "schema": "vvla.policy.step.v1",
+            "schema": "embodiinfer.policy.step.v1",
             "session_id": opened["session_id"],
             "request_id": "request-1",
             "step_id": 0,
@@ -215,7 +215,7 @@ class WirelessPolicyServerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["status"], 401)
         self.assertEqual(response["code"], "unauthorized")
-        self.assertEqual(payload["schema"], "vvla.error.v1")
+        self.assertEqual(payload["schema"], "embodiinfer.error.v1")
 
     async def test_real_peer_can_reconnect_without_restarting_server(self) -> None:
         await _rpc(self.client_comm, self.server_peer, "health", {}, rpc_id="before-close")

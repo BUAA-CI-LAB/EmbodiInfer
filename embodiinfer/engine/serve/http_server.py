@@ -1,4 +1,4 @@
-"""HTTP serving entry point for VVLA policies.
+"""HTTP serving entry point for EmbodiInfer policies.
 
 The protocol is model- and robot-agnostic:
 
@@ -55,7 +55,7 @@ class PolicyHttpHandler(BaseHTTPRequestHandler):
                     {
                         "schema": "embodiinfer.health.v1",
                         "status": "ok",
-                        "service": "vvla-http",
+                        "service": "embodiinfer-http",
                     },
                 )
                 return
@@ -64,8 +64,8 @@ class PolicyHttpHandler(BaseHTTPRequestHandler):
                 self._write_json(
                     200,
                     {
-                        "schema": "vvla.policy.capabilities.v1",
-                        "server": "vvla-http",
+                        "schema": "embodiinfer.policy.capabilities.v1",
+                        "server": "embodiinfer-http",
                         "adapter": self.server.service.adapter.capabilities(),
                     },
                 )
@@ -128,7 +128,7 @@ class PolicyHttpHandler(BaseHTTPRequestHandler):
                 raise ServeError(404, "not_found", "endpoint not found")
             session_id = _identifier(parts[3], "session_id")
             self.server.service.close(session_id)
-            self._write_json(200, {"schema": "vvla.policy.session.close.v1", "ok": True})
+            self._write_json(200, {"schema": "embodiinfer.policy.session.close.v1", "ok": True})
         except ServeError as error:
             self._write_error(error)
         except Exception:
@@ -164,10 +164,12 @@ class PolicyHttpHandler(BaseHTTPRequestHandler):
     def _write_error(self, error: ServeError) -> None:
         # Rejected requests may still have unread body bytes on the connection.
         self.close_connection = True
-        self._write_json(error.status, {"schema": "vvla.error.v1", "code": error.code, "message": str(error)})
+        self._write_json(
+            error.status, {"schema": "embodiinfer.error.v1", "code": error.code, "message": str(error)}
+        )
 
     def _write_internal_error(self) -> None:
-        _LOG.exception("unhandled VVLA HTTP request failure")
+        _LOG.exception("unhandled EmbodiInfer HTTP request failure")
         self._write_error(ServeError(500, "internal_error", "internal server error"))
 
     def log_message(self, fmt: str, *args: object) -> None:
@@ -287,7 +289,7 @@ def main(argv: list[str] | None = None) -> None:
     server = create_http_server(service, host=args.host, port=args.port)
     server.service = service  # dynamic attribute used by the request handler
     print(
-        f"[vvla-http] policy={args.policy} device={args.device} "
+        f"[embodiinfer-http] policy={args.policy} device={args.device} "
         f"action_space={service.action_space} listen={args.host}:{args.port}"
     )
     try:
