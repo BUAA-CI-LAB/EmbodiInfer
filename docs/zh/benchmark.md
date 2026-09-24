@@ -7,6 +7,7 @@
 | 目录 | 模型 | 默认数据 |
 |---|---|---|
 | [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | R2R/RxR 各前 48 个 episode，全帧回放 |
+| [activevln-benchmark](../../benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R/RxR 各前 48 个 episode，全帧回放；E2E 与完整 forward 计时 |
 | [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | PI0.5 | LIBERO-10，1,600 帧 |
 | [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | R2R/RxR 各前 48 个 episode，每段 4 帧 |
 | [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | 与 PI0.5 相同的 LIBERO-10，1,600 帧 |
@@ -17,7 +18,8 @@
 不包括模型加载、磁盘数据解码和预热。Panoramic 的输入由 RGB 数据构造，形状与模型要求匹配；
 Cosmos 测量动作生成耗时。
 
-每个目录都自带 `setup_env.py`，用于创建隔离的虚拟环境；
+原有 benchmark 目录提供 `setup_env.py` 创建隔离环境；
+ActiveVLN 使用已有 `activevln` 依赖组。各目录的
 `benchmark.py` 负责数据采样、计时和推理。Qwen Low/Panoramic 使用 SDPA + Inductor
 + CUDA Graph。每个 README 都给出确切的运行命令。
 
