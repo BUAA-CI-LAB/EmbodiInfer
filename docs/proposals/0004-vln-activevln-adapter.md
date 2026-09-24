@@ -403,3 +403,215 @@ checkout committed memory
 MP3D `val_unseen` 泛化分数、pinned verl FSDP 分布式训练曲线、真 padded-KV
 ragged 并行，以及跨 CUDA query shape 的 raw-logit 逐位一致。首版必须通过能力
 标志和异常拒绝这些未支持的高阶执行模式，不能静默降级后宣称具备其性能。
+
+## 18. Recorded-trajectory performance and inference optimization
+
+`benchmarks/activevln-benchmark` replays the same first 48 numeric R2R/RxR
+trajectories and every RGB frame as the StreamVLN benchmark. It keeps generated
+response history within each episode and resets at episode boundaries. Both
+splits use the pinned R2R checkpoint and R2R action grammar: RxR is an input
+workload, not a claim of an RxR-trained model or navigation accuracy. No simulator
+or task metrics enter this benchmark.
+
+The B=1 BF16 greedy performance profile fixes seed 42, repetition penalty 1.05,
+512 response tokens, and SDPA attention. The context limit is 128000 (the
+checkpoint's positional limit), so long recorded episodes are not silently
+truncated or reset. The checkpoint's image processor is unchanged. Measurement
+starts at decoded CPU RGB and ends at the CPU action chunk; loading, image file
+I/O, warmup and report serialization are excluded. `prepare_prefix` and
+`encode_prepared_prefix`, plus `generate_tokens` and `finalize_generation`, expose
+the same operations as the existing convenience methods. The model-only interval
+covers vision, incremental text prefill and the entire AR loop, including KV
+management and host stop control, while excluding input processing/H2D and final
+text/action conversion/D2H.
+
+The optimization work targets policy-local CUDA Graph execution and reuse of
+existing Qwen vision and StreamVLN fused kernel mechanisms. Admission requires
+real-checkpoint comparisons with the same episode selection, precision and
+decoding settings. The task's updated accuracy contract permits different
+tokens/actions if closed-loop navigation success remains close to the baseline;
+exact-output comparison remains the default for other callers. The current
+provisional tolerance is two fewer successes out of 48 episodes per split
+(4.17 percentage points), pending the user's preferred bound. Each policy must
+execute its own actions and resulting observations from the same starting poses,
+goals and instructions. EmbodiRun owns that simulator evaluation and its SR/SPL
+metrics. Replay alone cannot certify this contract: `compare.py
+--accuracy-contract task-success` reports parity differences diagnostically and
+leaves admission unknown. Retain all generated token IDs, action masks, chunks,
+stop reasons and cache lengths for diagnosis. Capture and compilation must
+finish before measured calls, with graph replay and fallback counts reported.
+Optimized inference must preserve cancellation and committed-memory isolation;
+training and unsupported execution modes retain their existing behavior.
+
+The benchmark-specific `serve.py` exposes a frozen replay policy/configuration
+through the existing versioned policy HTTP API for this paired evaluation.
+It preserves the replay's preprocessing, timed forward and postprocessing calls,
+warms graph shapes before accepting requests, and owns one private recurrent
+memory per session. It contains no simulator loop or navigation metric. The
+downstream EmbodiRun `benchmarks/activevln-navigation` controller owns execution,
+STOP/distance success evidence and SPL, and verifies the source fingerprint
+against the original latency report before running episodes.
+
+Implementation constraints for this performance profile:
+
+- Preserve the pinned 4.51.3 vision attention semantics. Its reference path uses
+  a full block-diagonal SDPA mask; switching to independently segmented SDPA is
+  a separate numerical change, even if the allowed attention edges are equal.
+  Precompute shape-only layout tensors before capture and retain a reference
+  path for real-weight comparison.
+- Text mRoPE position and cache write position are distinct: images compress
+  rotary positions, while the KV cache retains every image token. A captured
+  decoder must receive both positions and may not use cache length as mRoPE.
+- Respect BF16 rounding boundaries when fusing RMSNorm, SwiGLU and rotary
+  operations. Existing StreamVLN fused kernels are useful mechanisms but are
+  not automatically numerically identical to the ActiveVLN Torch reference.
+- Graphs use stable tensor storage and explicit device length/position inputs;
+  no `.item()` or CPU decoding belongs in captured execution. Growing episodes,
+  early EOS/stop and graph replay after a different episode require validation.
+- Keep committed memories and expanded rollout branches isolated. Reducing KV
+  allocation/copy overhead must not permit a failed or cancelled decode to
+  mutate a previously committed prefix. Training/recompute must remain on a
+  differentiable path.
+
+The first optional graph candidate uses a shared graph memory pool, fixed-address
+KV execution workspace and explicit dynamic cache insertion offsets. The
+checkpoint's dense-mask vision blocks run with precomputed rotary/window layout.
+Text uses the existing SDPA backend and explicit padding masks; query bucketing
+is configurable, including exact query lengths. Unknown shapes after startup
+fall back to eager and are counted. Rounded fused operators live under
+`backend/triton/rounded_ops.py`; their unit contract is exact rotary,
+normalization and activation outputs. RMSNorm retains the reference Torch
+FP32 mean reduction, and SwiGLU uses CUDA libdevice exponentiation and
+round-to-nearest division. Full-model accuracy admission remains separate.
+
+Inference memories with uniform layer layouts use a single packed KV allocation.
+Fork/reserve/graph-workspace restore and captured-output append can copy all
+layers at once, without changing the visible key/value layout or arithmetic.
+Fork preallocates room for the incoming turn and the unchanged response budget,
+bounded by the existing context limit. Each fork and rollout branch still owns
+separate storage; graph workspace never aliases committed memory. Gradient-enabled
+appends retain independent layer buffers to avoid shared autograd version counters.
+
+An additional opt-in greedy candidate verifies one public action-phrase token
+trie per forward. Each node attends only to the actual prefix and its ancestors;
+its rotary coordinate is the original next coordinate plus its depth. Full-vocabulary
+argmax and repetition penalty are evaluated independently on every path. Only
+the path that matches those model choices is accepted and copied into the private
+linear memory. Candidates come from the ten phrases in the unchanged public prompt,
+never recorded benchmark answers. Unexpected tokens use ordinary AR decoding;
+the grammar does not constrain model choices. EOS/stop, the response budget,
+cancellation and sampling/training fallback retain their original contracts.
+Different query shapes can change BF16 accumulation, so this path remains subject
+to real-checkpoint validation under the selected accuracy contract before admission.
+The candidate trie can optionally include each public phrase repeated up to
+three times, retaining EOS/comma alternatives at every action boundary. This
+amortizes weight reads when model choices repeat; mismatching continuations
+still take the ordinary fallback. Tree size and accepted-token counts are
+reported, and the response budget remains unchanged.
+
+Startup shape prewarming can inspect initial/subsequent prompt lengths and image
+layouts from supplied observations. It captures those input lengths across
+explicit context buckets, plus scalar and tree decoding. Initial prompts only
+need their empty-history bucket. Synthetic KV is confined to the disposable
+workspace, whose resident marker is invalidated afterward, including on failure.
+No responses are assumed and no public memory is changed. Capture remains
+forbidden during measured calls; unknown shapes and contexts retain counted
+eager fallback. The benchmark records its first-two-frames-per-episode probe
+plan, context buckets and the complete startup time separately from E2E latency.
+
+The graph workspace can have a smaller token capacity than the model's public
+memory limit. This saves resident scratch storage without changing history or
+response limits. Every graph call checks its entire padded query against the
+physical workspace before writing; requests that exceed it use eager execution
+against the complete public memory. Shape prewarming validates against the
+physical capacity, and reports expose both workspace and model context limits.
+
+A further optional text-attention candidate partitions the KV axis and merges
+FP32 online-softmax partials, without materializing repeated GQA heads or the
+query-by-context mask. Causal and tree-ancestor edges use the same dynamic cache
+position. Probability/value multiplication decomposes FP32 probabilities into
+BF16 components before tensor-core products, reducing the rounding difference
+from the reference SDPA math backend. Reduction order remains different: operator
+error is recorded against BF16 SDPA with FP32 intermediates. Complete replays
+measure latency; closed-loop task success supplies the current accuracy gate.
+
+Public phrase tries can be partitioned by their first token. Since the actual
+first token is selected by the unchanged full-vocabulary greedy distribution
+before verification, all other roots are already rejected. Capturing the smaller
+root-specific trees reduces work without removing a potentially accepted path;
+changed GEMM shapes remain subject to full model accuracy admission.
+
+Real-prefix isolation has confirmed that SDPA math key padding can change BF16
+results even with identical query lengths, weights, KV contents and positions.
+The first R2R candidate with graphs/fusion/split attention/tree verification was
+rejected by the original full token/action comparison. That output difference
+does not alone reject it under the updated task-success contract. However, the
+complete paired R2R closed-loop check subsequently drops from 35/48 baseline
+successes to 29/48 for the frozen v9 candidate (−12.50 percentage points), with
+SPL 0.6828 versus 0.5727. Initial images, poses and goal distances match for all
+48 pairs. This candidate therefore also fails the task-success gate; the result
+does not certify later candidates. All graph optimization switches
+therefore remain opt-in experimental candidates; no lossless or sub-40-ms claim
+is established by their CPU or operator-level checks.
+
+An exact-rounding refinement keeps Torch's FP32 mean reduction for RMSNorm,
+fusing only the input square/cast and the post-reduction normalization/weight
+steps. SwiGLU uses CUDA libdevice exponentiation and round-to-nearest division
+with the original BF16 intermediate cast. The operator gate is tightened to
+bitwise equality before model-level validation; it must not inherit the earlier
+one-ULP allowance after changing the implementation.
+
+Tree verification can optionally request FP32 outputs from BF16 projection
+matmuls, add bias in FP32 and cast once to BF16. This preserves checkpoint
+weights/storage and avoids changing global BLAS settings. The option applies
+only to the batched candidate tree, including its LM head; ordinary prefill and
+serial fallback retain their reference projections. It addresses measured
+shape-dependent projection rounding but does not assert exact full-model parity.
+
+The subsequent paired R2R test of frozen v11 combines exact-rounding fusion,
+root-partitioned trees, split-KV attention and actual query lengths. Keeping
+BF16 tree projection yields 35/48 successes, matching the baseline count, with
+SPL 0.6877 versus 0.6828, 70.42 ms mean closed-loop model E2E and 59.07 ms
+complete forward over 1,008 calls. Forward includes vision encoding, prefill
+and complete decoding with CUDA synchronization; E2E additionally includes
+CPU observation preprocessing and CPU action postprocessing. Neither timer
+includes HTTP transport or simulator execution.
+Enabling FP32 tree projection gives 31/48 successes and SPL 0.6155, so the
+operator-level improvement does not justify selecting that profile. Initial
+RGB/poses/goal distances and primitive execution traces match the paired
+protocol for all 48 episodes. RxR execution of this R2R-only prewarm profile
+twice exhausted memory after 160 calls/495 primitive steps in episode 20, with
+66,385 cached tokens exceeding its 65,536-token graph workspace. The allocator
+retry reproduced every recorded call. The incomplete runs are preserved without
+scoring infrastructure errors as task failures. A separately named full-context
+configuration covers both splits' query shapes and the unchanged 128,000-token
+context limit. It reproduces all 1,008 R2R calls at 70.90 ms E2E/59.24 ms forward,
+but its 675 resident text graphs and larger workspace exhaust memory in RxR
+episode 20 after 127 calls/419 steps, despite zero inference fallbacks. A
+separate RxR-only prewarm configuration is evaluated below; per-workload
+configurations and reports must remain explicit. The v11 recorded
+probe contains only the first two frames per episode for source/configuration
+provenance; these closed-loop timings must not be presented as complete replay
+latency or a sub-40-ms result.
+
+The subsequent complete 2,997-frame fixed R2R replay of the same R2R-only BF16
+profile measures 70.23 ms mean E2E and 59.24 ms complete forward (prefill including
+vision 28.58 ms; entire decode 30.63 ms). All graph fallback counters are zero.
+Its source/configuration match the audited 35/48 closed-loop result, with only
+recorded-frame selection and output location changed. Report SHA256:
+`477f96f461b2c418cf696fe2521204baa4f2ca1f7416af4b4252c8a58b250fb9`.
+This validates the R2R latency and selected-episode success count; the 40 ms
+target is not met.
+
+The separate RxR-only prewarm/128,000-token workspace profile retains the same
+frozen source and BF16 tree projection while reducing resident text graphs from
+675 to 437. All 48 native RxR episodes complete: 17/48 successes versus baseline
+15/48, SPL 0.2591 versus 0.2442. Its first 127 episode-20 calls match the previous
+interrupted combined-prewarm run, and it completes the full 500-step protocol.
+All initial-state and primitive-trace audits pass, with zero graph fallbacks.
+The matching complete 3,879-frame fixed replay measures 104.45 ms mean E2E and
+93.45 ms complete forward, again with zero graph fallbacks. Report SHA256:
+`ea532db33c0bc73b587316469b7b7614680823a9c79f3a27dcfd79eb0659f346`.
+Both workload-specific configurations preserve success count on the selected
+episodes. This is not an exact-output or unseen-split accuracy claim; neither
+workload meets the original 40 ms E2E target.

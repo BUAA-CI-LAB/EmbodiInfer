@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -18,6 +20,10 @@ from ..factory import register_policy
 from .cache_activevln import ActiveVLNMemory, BranchedActiveVLNMemory
 from .processor_activevln import ActiveVLNBatch, ActiveVLNProcessor, ProcessedTurn
 from .prompt_activevln import actions_to_tensor, parse_r2r_actions
+
+if TYPE_CHECKING:
+    from .cuda_graph import ActiveVLNGraphRuntime
+
 
 ACTIVEVLN_REPO = "https://github.com/arvillion/ActiveVLN"
 ACTIVEVLN_COMMIT = "3a0c63b00e4f42c828cc74c3554afce17641da60"
@@ -172,6 +178,26 @@ def _top_p_filter(logits: torch.Tensor, top_p: float) -> torch.Tensor:
 
 
 @dataclass
+class PreparedActiveVLNTurn:
+    """Device-ready turn, with CPU image/token processing completed."""
+
+    turn: ProcessedTurn
+    positions: torch.Tensor
+    memory: ActiveVLNMemory | None
+    next_position: int
+
+
+@dataclass
+class ActiveVLNGeneration:
+    """Generated tokens before final text/action conversion and output transfer."""
+
+    memory: ActiveVLNMemory
+    token_ids: torch.Tensor
+    token_logprobs: torch.Tensor
+    stop_reason: str
+
+
+@dataclass
 class ActiveVLNPrefix:
     memory: ActiveVLNMemory
     next_logits: torch.Tensor
@@ -288,6 +314,22 @@ class _ActiveVLNDecoder(AutoregressiveDecoder):
         cancelled: Callable[[], bool] | None = None,
     ) -> DecodeResult:
         del state, num_steps, bucket, graphs
+        generation = self.generate_tokens(prefix, generator=generator, cancelled=cancelled)
+        return self.finalize_generation(generation)
+
+    def generate_tokens(
+        self,
+        prefix: ActiveVLNPrefix,
+        *,
+        generator: torch.Generator | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> ActiveVLNGeneration:
+        """Run the complete AR forward loop, retaining its original stop semantics."""
+        runtime = getattr(self.policy, "_inference_graphs", None)
+        if getattr(runtime, "action_trees", ()):
+            from .speculation_activevln import generate_tree_tokens
+
+            return generate_tree_tokens(self, prefix, runtime, cancelled=cancelled)
         memory = prefix.memory
         logits = prefix.next_logits
         tokens: list[torch.Tensor] = []
@@ -316,6 +358,13 @@ class _ActiveVLNDecoder(AutoregressiveDecoder):
 
         token_ids = torch.cat(tokens, dim=1)
         token_logprobs = torch.stack(logprobs, dim=1)
+        return ActiveVLNGeneration(memory, token_ids, token_logprobs, stop_reason)
+
+    def finalize_generation(self, generation: ActiveVLNGeneration) -> DecodeResult:
+        """Parse a finished response into the public action chunk and trace."""
+        memory = generation.memory
+        token_ids = generation.token_ids
+        token_logprobs = generation.token_logprobs
         action_mask = torch.ones_like(token_ids, dtype=torch.bool)
         text = self.policy.tokenizer.decode(token_ids[0].tolist(), skip_special_tokens=True).strip()
         parsed = parse_r2r_actions(text)
@@ -326,11 +375,11 @@ class _ActiveVLNDecoder(AutoregressiveDecoder):
             action_mask=action_mask[0],
             text=text,
             parsed_actions=parsed,
-            stop_reason=stop_reason,
+            stop_reason=generation.stop_reason,
             meta={"parsed_action_mask": parsed_mask, "runner_profile": "official_eval_r2r"},
         )
         return DecodeResult(
-            actions=actions[None].to(logits.device),
+            actions=actions[None].to(token_ids.device),
             behavior_logprob=token_logprobs,
             recompute_state=ARRecomputeState(token_ids, action_mask),
             next_memory=memory,
@@ -481,6 +530,98 @@ class ActiveVLNPolicy(VLAPolicy):
             )
         )
         self._decoder = _ActiveVLNDecoder(self)
+        self._inference_runtime: ActiveVLNGraphRuntime | None = None
+
+    @property
+    def _inference_graphs(self) -> ActiveVLNGraphRuntime | None:
+        # Differentiable rollout recompute retains the original eager path.
+        return None if self.training or torch.is_grad_enabled() else self._inference_runtime
+
+    def clear_cuda_graphs(self) -> None:
+        """Release optional captures before moving/replacing model parameters."""
+        self._inference_runtime = None
+
+    @contextmanager
+    def startup_cuda_graph_capture(
+        self,
+        *,
+        query_bucket_size: int = 32,
+        fused_ops: bool = False,
+        split_attention: bool = False,
+        tree_decode: bool = False,
+        tree_fp32_projection: bool = False,
+        tree_repeat_actions: int = 1,
+        workspace_tokens: int | None = None,
+    ) -> Iterator[None]:
+        """Enable experimental inference graphs; capture is restricted to startup.
+
+        Padding, fused arithmetic and tree shapes can alter BF16 behavior. These
+        opt-in candidates require workload token/action parity validation.
+        """
+        from .cuda_graph import ActiveVLNGraphRuntime
+
+        if self._inference_runtime is not None:
+            raise RuntimeError("ActiveVLN graph startup has already completed")
+        runtime = ActiveVLNGraphRuntime(
+            self,
+            query_bucket_size=query_bucket_size,
+            fused_ops=fused_ops,
+            split_attention=split_attention,
+            tree_decode=tree_decode,
+            tree_fp32_projection=tree_fp32_projection,
+            tree_repeat_actions=tree_repeat_actions,
+            workspace_tokens=workspace_tokens,
+        )
+        self._inference_runtime = runtime
+        runtime.capture_enabled = True
+        try:
+            yield
+        except BaseException:
+            self._inference_runtime = None
+            raise
+        finally:
+            runtime.capture_enabled = False
+
+    def cuda_graph_stats(self) -> dict[str, object]:
+        """Report actual optional graph coverage without claiming engine capture support."""
+        if self._inference_runtime is None:
+            return {"enabled": False}
+        return {"enabled": True, **self._inference_runtime.stats()}
+
+    def prewarm_cuda_graphs(
+        self, observations: Iterable[Observation], *, context_buckets: Sequence[int]
+    ) -> dict[str, object]:
+        """Prewarm observed input shapes and explicit context buckets during startup.
+
+        Each observation supplies initial/subsequent prompt lengths and a vision
+        layout. Only shapes are retained; no response or recurrent state is
+        generated. Unseen shapes after startup keep the counted eager fallback.
+        """
+        runtime = self._inference_graphs
+        if runtime is None or not runtime.capture_enabled:
+            raise RuntimeError("ActiveVLN shape prewarming requires active inference startup capture")
+        initial, recurring = set(), set()
+        count = 0
+        with runtime.lock:
+            for observation in observations:
+                count += 1
+                for first, lengths in ((True, initial), (False, recurring)):
+                    turn = self._processor.process_turn(observation, initial=first)
+                    lengths.add(int(turn.input_ids.shape[1]))
+                    runtime.prewarm_vision(turn)
+            shapes = runtime.prewarm_text(sorted(initial), sorted(recurring), context_buckets)
+        return {
+            "observations": count,
+            "initial_query_lengths": sorted(initial),
+            "recurring_query_lengths": sorted(recurring),
+            "context_buckets": sorted(set(context_buckets)),
+            "text_shapes": [list(shape) for shape in shapes],
+        }
+
+    def reset_cuda_graph_runtime_stats(self) -> None:
+        """Exclude startup replays and workspace restores from measured counters."""
+        if self._inference_runtime is not None:
+            self._inference_runtime.reset_stats()
 
     @property
     def _text(self):
@@ -523,7 +664,12 @@ class ActiveVLNPolicy(VLAPolicy):
     def _embed_turn(self, turn: ProcessedTurn) -> torch.Tensor:
         embeds = self._text.embed_tokens(turn.input_ids)
         visual_dtype = next(self._visual.parameters()).dtype
-        image_embeds = self._visual(turn.pixel_values.to(visual_dtype), grid_thw=turn.image_grid_thw)
+        image_embeds = None
+        runtime = self._inference_graphs
+        if runtime is not None:
+            image_embeds = runtime.vision(turn)
+        if image_embeds is None:
+            image_embeds = self._visual(turn.pixel_values.to(visual_dtype), grid_thw=turn.image_grid_thw)
         image_embeds = getattr(image_embeds, "pooler_output", image_embeds)
         if isinstance(image_embeds, (tuple, list)):
             image_embeds = image_embeds[0]
@@ -584,13 +730,20 @@ class ActiveVLNPolicy(VLAPolicy):
         batch: ActiveVLNBatch,
         memory: ActiveVLNMemory | None = None,
     ) -> ActiveVLNPrefix:
+        return self.encode_prepared_prefix(self.prepare_prefix(batch, memory))
+
+    def prepare_prefix(
+        self,
+        batch: ActiveVLNBatch,
+        memory: ActiveVLNMemory | None = None,
+    ) -> PreparedActiveVLNTurn:
+        """Process the observation and transfer inputs before the model-only interval."""
         observation = batch.observations[0]
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
-        turn = self._processor.process_turn(observation, initial=memory is None).to(device, dtype)
-        embeds = self._embed_turn(turn)
+        turn = self._processor.process_turn(observation, initial=memory is None)
         offset = 0 if memory is None else memory.next_position
-        positions, _ = build_mrope_position_ids(
+        positions, next_position = build_mrope_position_ids(
             turn.input_ids,
             turn.image_grid_thw,
             vision_start_token_id=int(self.qwen.config.vision_start_token_id),
@@ -598,9 +751,29 @@ class ActiveVLNPolicy(VLAPolicy):
             spatial_merge_size=int(self.qwen.config.vision_config.spatial_merge_size),
             offset=offset,
         )
-        working = None if memory is None else memory.to(device).fork()
+        return PreparedActiveVLNTurn(turn.to(device, dtype), positions.to(device), memory, next_position)
+
+    def encode_prepared_prefix(self, prepared: PreparedActiveVLNTurn) -> ActiveVLNPrefix:
+        """Execute vision and text prefill without CPU observation preprocessing."""
+        runtime = self._inference_graphs
+        with runtime.lock if runtime is not None else nullcontext():
+            return self._encode_prepared_prefix(prepared)
+
+    def _encode_prepared_prefix(self, prepared: PreparedActiveVLNTurn) -> ActiveVLNPrefix:
+        turn, positions, memory = prepared.turn, prepared.positions, prepared.memory
+        device = turn.input_ids.device
+        embeds = self._embed_turn(turn)
+        working = (
+            None
+            if memory is None
+            else memory.to(device).fork(extra_capacity=turn.input_ids.shape[-1] + self.max_new_tokens)
+        )
         old_kv = None if working is None else working.visible_kv()
-        hidden, new_kv = self._forward_chunk(embeds, positions, old_kv)
+        result = None
+        runtime = self._inference_graphs
+        if runtime is not None:
+            result = runtime.forward(embeds, positions, working)
+        hidden, new_kv = self._forward_chunk(embeds, positions, old_kv) if result is None else result
         if working is None:
             working = ActiveVLNMemory.from_chunk(
                 new_kv,
@@ -609,6 +782,7 @@ class ActiveVLNPolicy(VLAPolicy):
                 positions,
                 max_length=self.max_context,
                 prompt_hash=turn.prompt_sha256,
+                next_position=prepared.next_position,
             )
         else:
             working.append_chunk(
@@ -617,22 +791,39 @@ class ActiveVLNPolicy(VLAPolicy):
                 turn.attention_mask,
                 positions,
                 prompt_hash=turn.prompt_sha256,
+                next_position=prepared.next_position,
             )
+        if result is not None:
+            runtime.bind_memory(working)
         return ActiveVLNPrefix(working, self._lm_head(hidden[:, -1]))
 
     def append_token(
         self, memory: ActiveVLNMemory, token: torch.Tensor
     ) -> tuple[ActiveVLNMemory, torch.Tensor]:
+        runtime = self._inference_graphs
+        with runtime.lock if runtime is not None else nullcontext():
+            return self._append_token(memory, token)
+
+    def _append_token(
+        self, memory: ActiveVLNMemory, token: torch.Tensor
+    ) -> tuple[ActiveVLNMemory, torch.Tensor]:
         token = token.to(memory.token_ids_buffer.device)
+        next_position = memory.next_position
         position = torch.full(
             (3, 1, 1),
-            memory.next_position,
+            next_position,
             device=token.device,
             dtype=torch.long,
         )
         hidden = self._text.embed_tokens(token)
-        hidden, kv = self._forward_chunk(hidden, position, memory.visible_kv())
-        memory.append_chunk(kv, token, torch.ones_like(token), position)
+        result = None
+        runtime = self._inference_graphs
+        if runtime is not None:
+            result = runtime.forward(hidden, position, memory)
+        hidden, kv = self._forward_chunk(hidden, position, memory.visible_kv()) if result is None else result
+        memory.append_chunk(kv, token, torch.ones_like(token), position, next_position=next_position + 1)
+        if result is not None:
+            runtime.bind_memory(memory)
         return memory, self._lm_head(hidden[:, -1])
 
     def full_logits(
