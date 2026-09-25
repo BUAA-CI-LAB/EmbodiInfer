@@ -211,8 +211,9 @@ loses three successes and fails the provisional two-episode tolerance.
 RxR multi-batch and native vLLM have no complete validated navigation-quality
 result. The batch API remains opt-in.
 
-Raw reports, configurations, dependency freezes, test logs, assessments and
-frozen sources remain outside Git:
+Unpacked reports, configurations, dependency freezes, test logs, assessments and
+frozen sources remain ignored locally and are included in the complete test
+snapshot below:
 
 - `runs/batch-tree-shared-context/assessment.json`: six EmbodiInfer reports;
   frozen Python source SHA256
@@ -227,6 +228,40 @@ frozen sources remain outside Git:
   `0400dae6eda41a96b8c1f8652e7e984d11c7048aed447eb3a9a3c258147cc6da`,
   shared modern runtime SHA256
   `0343775fef719ab26be66f6e5bdaff90f6d2f6e5892a2518d03f4a2fbab8293e`.
+
+### Complete test snapshot
+
+[20260925232656.tar.gz](../snapshots/20260925232656.tar.gz)
+([SHA256](../snapshots/20260925232656.tar.gz.sha256), 69,043,566 bytes / 65.85 MiB)
+archives the ActiveVLN EmbodiInfer and native vLLM comparison. It includes
+EmbodiInfer commit `1f23aa70760cb0a94683c6d4baa518deb0c7e803`, exact measured
+source snapshots, vLLM 0.8.5.post1/0.30.0 sources, dependency lists, configurations,
+per-observation reports, logs, navigation evidence and historical snapshots.
+Model weights, raw RGB/scenes, virtual environments, caches and native binaries
+are excluded; their required versions and locations are recorded inside.
+This designated archive and checksum are published with the branch.
+
+The archive retains all 12 final split/batch/engine reports: 11 complete
+fixed replays and the EmbodiInfer RxR B=4 OOM after 532 observations. Failed
+navigation runs and known test failures are preserved; the snapshot does not
+turn fixed replay into a navigation success-rate claim. The enclosed
+`comparison.csv` separates E2E/complete forward and whole-batch/amortized costs.
+
+SHA256: `00bffe7f9d30642070a37f7844f07d9a0cf27a2dfe33e188b01a4c972a25520c`.
+All 9,054 file checksums and 15 report/source checks passed before publication.
+Verify and extract from the repository root:
+
+```bash
+cd benchmarks/snapshots
+sha256sum -c 20260925232656.tar.gz.sha256
+tar -xzf 20260925232656.tar.gz
+cd activevln-test-snapshot-20260925232656
+sha256sum -c SHA256SUMS
+```
+
+Start with the archive's `README.md`, `manifest.json` and `verification.json`.
+Use its measured sources and matching configurations for reproduction; the
+source commit inside remains fixed even as this branch's documentation changes.
 
 ### Historical baselines
 
