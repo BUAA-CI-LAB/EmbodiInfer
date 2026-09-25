@@ -8,6 +8,242 @@ This is an offline latency workload, without Habitat or SR/SPL measurement.
 Both datasets use `Arvil/Qwen2.5-VL-3B_rl_r2r_4000` at revision
 `160987313e3e869705f42400d1b8f28177044518` and its R2R action grammar.
 
+## Tensor batches
+
+`benchmark_batch.py` measures true tensor batches with independent episode
+histories. Each call packs all images into one vision invocation, runs padded
+text prefill and greedy decoding across the batch, then returns a separate
+`ActiveVLNMemory` per observation. Different KV lengths, rotary positions,
+repetition histories and EOS/STOP decisions remain independent. Finished episode
+slots are refilled in numeric order. The last batches can have lower occupancy;
+the report records both configured batch size and actual observations per batch.
+
+The policy API is `policy.create_batched_runtime(...)`, followed by
+`runtime.prepare(observations, memories)`, `runtime.prefill(prepared)` and
+`runtime.generate(prefix)` inside `torch.inference_mode()`. Parse each returned
+generation with `policy.decoder.finalize_generation(generation)`. Inputs retain
+ownership of committed histories; replace them with returned memories only after
+the complete batch succeeds. A prefix belongs to one runtime and is invalidated
+by its next prefill or generation attempt. Generic engine/HTTP session batching,
+sampling and training keep their existing contracts and are not exposed by this
+policy-local inference API.
+
+CUDA Graph, rounded fusion, split-KV attention and root-partitioned action trees
+are supported. Each row can verify a different tree or take a singleton fallback
+in the same forward. Only accepted nodes enter that row's history. Whole-batch latency is the wait for all rows,
+while amortized milliseconds per observation describe throughput and are not
+individual request latency. The complete forward interval includes vision,
+prefill, all decode steps and private KV snapshots. E2E also includes CPU
+preprocessing and action parsing, excluding disk decoding and HTTP/simulator time.
+
+After editing checkpoint/data paths in `config.yaml`, generate explicit configs
+for a feature-matched B=1/2/4 comparison:
+
+```bash
+python - <<'PY'
+import copy, json
+from pathlib import Path
+import yaml
+root = Path("benchmarks/activevln-benchmark")
+base = yaml.safe_load((root / "config.yaml").read_text())
+out = root / "runs/batch-tree-shared-context"
+out.mkdir(parents=True, exist_ok=True)
+for split in ("R2R", "RxR"):
+    for batch in (1, 2, 4):
+        config = copy.deepcopy(base)
+        config["datasets"] = [s for s in config["datasets"] if s["name"] == split]
+        config["output_dir"] = str(out.resolve())
+        config.update(batch_size=batch, cuda_graph=True, fused_ops=True,
+                      split_attention=True, tree_decode=True, query_bucket_size=1,
+                      tree_fp32_projection=False, tree_repeat_actions=1,
+                      kv_pool_tokens=153600 if split == "RxR" and batch == 4 else 128000,
+                      graph_workspace_tokens=65536 if split == "R2R" else 128000)
+        config["prewarm_context_buckets"] = [2**n for n in range(9, 17)]
+        if split == "RxR":
+            config["prewarm_context_buckets"].append(128000)
+        (out / f"{split.lower()}-b{batch}-config.json").write_text(json.dumps(config, indent=2))
+PY
+
+# Run each configuration sequentially in its own process on physical GPU 1.
+CUDA_VISIBLE_DEVICES=1 PYTHONPATH=. OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.7 \
+python benchmarks/activevln-benchmark/benchmark_batch.py \
+  --config benchmarks/activevln-benchmark/runs/batch-tree-shared-context/r2r-b2-config.json \
+  --output benchmarks/activevln-benchmark/runs/batch-tree-shared-context/r2r-b2.json
+```
+
+The optional `kv_pool_tokens` sets the initial total scratch budget across all
+rows. Independently addressed segments grow as histories grow; graph input/output
+buffers are shared across context buckets of the same query shape. Single-
+partition split-KV contexts also share one graph executable: all sufficient key
+bounds execute the same dynamic extent and reduction order. Multi-partition
+graphs remain distinct. Counters report both logical shape coverage and actual
+executable count, and GPU tests require bit-exact forward/KV parity. A
+128,000-token pool applies except RxR B=4, which reserves 153,600 tokens for
+its aggregate histories. Historical frame-length preflight needs 143,360 tokens
+for that segment plan; reserving headroom keeps captures valid through the full
+replay. This changes scratch allocation, not the per-row context/response limits
+or attention semantics. A pool requires split-KV on
+CUDA. Initial workspace bounds scratch allocation, not history: `max_context=128000`
+and `max_new_tokens=512` remain unchanged. If history exceeds workspace, the
+runtime grows it and drops text graphs that point to the old storage; subsequent
+calls use counted eager execution. Sufficient GPU memory is still required.
+Reports retain startup and measured memory peaks, graph coverage, all completed
+calls, and the exact failure phase/in-flight histories on OOM. A partial or OOM
+run never becomes a complete-run result. Fixed replay does not establish
+navigation success, and prior B=1 SR/SPL does not certify this new batch profile.
+
+### Feature-matched EmbodiInfer and vLLM comparison
+
+The September 25, 2026 comparison runs each configuration sequentially on
+physical GPU 1 (RTX 4090, 24,564 MiB), using four CPU threads and 33 warmup
+batch calls. Both engines use the pinned checkpoint above, BF16, seed 42,
+greedy decoding, repetition penalty 1.05, max_new_tokens=512, max_context=128000,
+and the original PIL processor with min_pixels=1024 and max_pixels=76800.
+Each episode retains its own complete generated history; numeric episode
+selection and remove-then-refill slot ordering match. No quantization, vision
+token pruning or history truncation is used.
+
+EmbodiInfer uses Torch 2.10.0+cu128, Transformers 4.51.3 and Triton 3.6.0.
+The isolated vLLM 0.30.0 environment uses Torch 2.13.0, Transformers 5.17.0
+and Triton 3.7.1. These are measured deployment stacks with different dependency
+versions. Input audits verify matching token IDs, pixels and image grids.
+
+**Timing contract.** E2E starts with decoded CPU RGB and ends with parsed CPU
+actions, including preprocessing, engine admission and complete generation.
+Complete forward covers vision, text prefill and every decode step, including
+host dispatch, stopping checks and synchronization; EmbodiInfer also snapshots
+private output KV inside this interval. It excludes preprocessing/action parsing
+and is not a sum of GPU kernel durations. Both timings exclude disk decoding,
+HTTP, simulator execution, loading, compilation, capture and warmup.
+
+All values below are means in milliseconds. Whole-batch columns measure one
+batch call. Amortized columns divide total time by actual observations,
+including partially filled tail batches; they are not individual request
+response latency. R2R completes 2,997 observations and RxR completes 3,879,
+except the explicitly failed EmbodiInfer RxR B=4 run.
+
+| Split | Batch | EmbodiInfer E2E whole batch | EmbodiInfer E2E amortized | EmbodiInfer forward whole batch | EmbodiInfer forward amortized | vLLM E2E whole batch | vLLM E2E amortized | vLLM forward whole batch | vLLM forward amortized |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| R2R | 1 | 70.01 | 70.01 | 59.34 | 59.34 | 101.31 | 101.31 | 77.91 | 77.91 |
+| R2R | 2 | 112.25 | 56.63 | 91.76 | 46.29 | 165.28 | 83.38 | 119.65 | 60.36 |
+| R2R | 4 | 195.18 | 50.93 | 155.49 | 40.57 | 257.25 | 67.12 | 170.26 | 44.43 |
+| RxR | 1 | 103.77 | 103.77 | 92.86 | 92.86 | 160.24 | 160.24 | 128.79 | 128.79 |
+| RxR | 2 | 181.32 | 90.73 | 159.37 | 79.75 | 258.21 | 129.20 | 196.52 | 98.34 |
+| RxR | 4 | OOM | — | — | — | 427.84 | 108.42 | 305.21 | 77.34 |
+
+EmbodiInfer is faster in all five completed paired conditions. At R2R B=4,
+40.57/44.43 ms describes amortized forward, not 40 ms E2E response latency.
+Actual batch counts are 1,512/782 for R2R B=2/4 and 1,941/983 for RxR B=2/4.
+The full reports retain percentiles and per-observation outputs.
+
+**EmbodiInfer enabled optimizations (B=1/2/4):**
+
+- CUDA graphs for vision, text prefill, decode and phrase-tree verification.
+- Rounded Triton fusion for RMSNorm, RoPE and SwiGLU, plus split-KV attention.
+- Root-partitioned action phrase-tree verification with independent per-row
+  acceptance/STOP decisions; only accepted tokens enter the history.
+- Packed shared KV scratch, resident-prefix reuse, shared graph buffers and
+  single-partition context graph executable reuse.
+- True tensor batching for vision, prefill and generation, with independent
+  histories. query_bucket_size=1, tree_repeat_actions=1 and
+  tree_fp32_projection=false match the selected B=1 profile.
+
+**vLLM 0.30.0 enabled optimizations (B=1/2/4):**
+
+- Native vision compilation and vision CUDA graphs; language graphs use
+  FULL_AND_PIECEWISE. On this SM89/FlashAttention 2 path, uniform decode uses
+  full graphs and prefill uses piecewise graphs.
+- Optimization level 3, Torch/Inductor automatic kernel fusion and FlashAttention
+  2 for vision/text. This does not imply every specialized fusion flag is active.
+- GPU n-gram speculation with 16 draft tokens and synchronous scheduling.
+- Paged KV, prefix caching and chunked prefill; 4 GiB multimodal processor cache,
+  immutable per-observation image UUIDs and GPU image normalization.
+- Concurrent native requests with batch-scaled vision graph shapes and admission
+  budgets: 1,037/2,074/4,148 tokens for B=1/2/4. Partial batches have matching
+  graph coverage; uniform decode shapes include 17/34/51/68 as needed.
+
+The synchronous 16-draft configuration was selected from five B=1 configurations
+on 523 saved R2R observations: 89.61 ms E2E and 68.66 ms forward, versus
+107.46/85.97 ms with asynchronous scheduling. This tuning subset is excluded
+from the full-workload table. Its independent repeat reproduces all tokens and
+actions, with mean timing changes of 0.49% E2E and 0.09% forward.
+
+Measured PyTorch allocator peaks are below. vLLM reserves paged KV under
+`gpu_memory_utilization=0.85`, so its allocation is not minimum required memory
+and need not increase monotonically with batch size. EmbodiInfer's failed
+RxR B=4 memory peak covers only the partial run.
+
+| Split | Batch | EmbodiInfer allocated GiB | EmbodiInfer reserved GiB | vLLM allocated GiB | vLLM reserved GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| R2R | 1 | 13.24 | 14.47 | 19.51 | 19.83 |
+| R2R | 2 | 14.11 | 15.18 | 19.21 | 19.73 |
+| R2R | 4 | 16.13 | 17.39 | 18.97 | 19.64 |
+| RxR | 1 | 15.51 | 17.76 | 19.52 | 19.83 |
+| RxR | 2 | 17.91 | 20.49 | 19.33 | 19.77 |
+| RxR | 4 | 21.33 (OOM) | 22.18 (OOM) | 19.07 | 19.76 |
+
+EmbodiInfer RxR B=4 fails on batch 134 after 532 observations while cloning an
+independent output KV snapshot: an 860 MiB allocation exceeds 819.81 MiB free.
+Its old input histories, scratch and new snapshots coexist to preserve ownership.
+No partial latency is admitted. vLLM RxR B=4 completes all 3,879 observations,
+including a 53,008-token individual prompt and 137,336-token aggregate history.
+
+**Validation and accuracy limits.** The five complete EmbodiInfer runs have no
+invalid actions, graph fallbacks or workspace growth. Both B=1 runs reproduce
+all outputs of the original selected profiles. The batch runtime passes 95
+CPU/GPU tests, including bit-exact graph-alias forward/KV checks at B=1/2/4.
+The submission CPU rerun passes 108 targeted tests (30 hardware-dependent skips)
+and 555 broader tests, with 54 skips, 51 deselections and five pre-existing
+namespace compatibility failures reproduced on the upstream code. Benchmark
+test imports are isolated so other entrypoints with the same module name do not
+interfere with this suite.
+The modern vLLM harness passes 22 tests; five old-version-only frontend tests
+skip. Its four complete B=2/4 runs pass independent coverage/order, history,
+private-cache, input and graph checks for 13,752 observations and 384 native
+input audits, without OOM, KV preemption, vision misses, eager language fallback
+or invalid actions. A B=1 harness probe reproduces 96/96 token sequences.
+
+Fixed replay does not establish navigation SR/SPL. Separate downstream R2R
+closed-loop runs complete 48 episodes at B=1/2/4 with 35/33/32 successes and SPL
+0.6877/0.6465/0.6268. B=1 reproduces the original selected trajectories; B=4
+loses three successes and fails the provisional two-episode tolerance.
+RxR multi-batch and native vLLM have no complete validated navigation-quality
+result. The batch API remains opt-in.
+
+Raw reports, configurations, dependency freezes, test logs, assessments and
+frozen sources remain outside Git:
+
+- `runs/batch-tree-shared-context/assessment.json`: six EmbodiInfer reports;
+  frozen Python source SHA256
+  `62f8b4dc2bb374c3dbc1610e61e319091eb7b57116a635900bb1fb0dcf51a88f`.
+- `runs/batch-tree-validation/summary.json`: runtime test results and known
+  upstream failures.
+- `runs/publish-validation/batch-20260925/`: submission CPU and isolated vLLM
+  test logs, including the benchmark import-isolation regression.
+- `runs/vllm-0.30.0/`: native B=1 full reports, tuning and input audits.
+- `runs/vllm-batch-0.30.0/assessment.json`: four full native batch reports;
+  batch entrypoint SHA256
+  `0400dae6eda41a96b8c1f8652e7e984d11c7048aed447eb3a9a3c258147cc6da`,
+  shared modern runtime SHA256
+  `0343775fef719ab26be66f6e5bdaff90f6d2f6e5892a2518d03f4a2fbab8293e`.
+
+### Historical baselines
+
+The earlier tree-disabled EmbodiInfer batch experiment is retained under
+`runs/batch-full/`; it does not provide a feature-matched comparison to the
+selected B=1 profile. Native vLLM 0.8.5.post1 uses eager vision and piecewise
+language graphs. Its optional duplicate-placeholder-rule correction preserves
+input/model semantics and reproduces every R2R output while reducing mean E2E
+from 420.17 to 293.19 ms; complete forward remains 215.75 ms. Corrected RxR
+completes at 383.46 ms E2E and 257.34 ms forward. The original RxR run is partial.
+Details, original/corrected reports and matching source snapshots remain under
+`runs/vllm-0.8.5/`. These older results do not bound modern vLLM performance.
+The shared `benchmark_vllm.py` timing/report helpers are also dependencies of
+the modern benchmark entrypoints.
+
+## Single-row reference and phrase-tree profiles
+
 The current optimization task permits different tokens and actions provided
 closed-loop navigation success stays close to the baseline. Evaluate baseline
 and candidate independently on the same 48 episodes per dataset, with identical
@@ -200,6 +436,134 @@ cannot establish task accuracy, so `admitted` is `null`, `admission_status` is
 `pending_navigation_evaluation`, and the command exits 2 until a separate
 closed-loop evaluation is assessed. This mode still rejects incomplete replay
 workloads and changed measurement conditions.
+
+`serve_batch.py` exposes the tensor runtime through the existing versioned HTTP
+API for downstream closed-loop evaluation. It reuses the generic bounded batch
+scheduler, keeps one committed memory per session, sorts requests by the
+benchmark controller's stable slot IDs, and commits only after all outputs have
+been finalized. A model failure invalidates the process; it does not retry with
+partially written graph workspace. Session ordering/reset remain owned by the
+existing service. The simulator and success metrics belong to EmbodiRun.
+
+Run this adapter with `PYTHONPATH` pointing to the measured immutable source and
+pass that directory as `--source`, plus the unchanged tensor replay `--config`
+and a `--ready-file`. The adapter may be outside that snapshot, preserving the
+original runtime/benchmark hash; its own SHA256 is recorded separately. The
+default 1,000 ms coalescing bound allows a synchronous controller round to arrive
+over HTTP. Queueing, PNG decode and simulator time are excluded from model E2E.
+`tensor-batches.jsonl` records actual occupancy, memory, graph coverage and
+exceptions; repeat the full selected closed-loop episodes before admitting SR.
+
+`benchmark_vllm.py` runs the same decoded-CPU-RGB workload through the official
+ActiveVLN environment's vLLM 0.8.5.post1 and Transformers 4.51.3. Install these
+in an isolated interpreter; do not replace the EmbodiInfer model environment.
+Use B=1 BF16, greedy decoding, repetition penalty 1.05, the same 512-token budget,
+128k context limit, prompt, image limits and STOP/EOS handling. It uses native
+prefix caching, fused vLLM operators and V1 CUDA Graph execution, with in-process
+engine dispatch to exclude HTTP/IPC from the comparison. Warm up 33 calls and
+clear both KV and image preprocessing caches between episodes and after warmup.
+
+From the repository root, with the isolated interpreter and a B=1 configuration:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 VLLM_USE_V1=1 VLLM_ENABLE_V1_MULTIPROCESSING=0 \
+  OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false PYTHONPATH="$PWD" \
+  /path/to/vllm-venv/bin/python benchmarks/activevln-benchmark/benchmark_vllm.py \
+  --config benchmarks/activevln-benchmark/runs/batch-tree-shared-context/r2r-b1-config.json \
+  --output benchmarks/activevln-benchmark/runs/vllm-0.8.5/r2r-full.json
+```
+
+Use the RxR B=1 config in a separate, sequential process for its complete replay.
+The optional `--max-steps-per-episode` produces an explicitly partial smoke test;
+its latency must not be substituted for the complete selected workload. Record
+the vLLM environment separately: this pin uses Torch 2.6.0/CUDA 12.4, while the
+selected EmbodiInfer environment uses Torch 2.10.0/CUDA 12.8. It is a comparison
+of these two deployed stacks, not an isolation of engine code from dependencies.
+
+In this vLLM version, graph execution is piecewise for the language model;
+vision uses the native eager encoder and XFormers attention. The native n-gram
+speculation path explicitly disables proposals for non-default repetition
+penalties (`vllm/v1/spec_decode/utils.py::is_spec_decode_supported`). Keep the
+required 1.05 penalty; do not turn it off to obtain a faster but different task.
+EmbodiInfer's phrase-tree verification remains active in its selected baseline.
+
+E2E includes full-history native input processing, all generation and CPU action
+parsing. The model interval starts at `get_multimodal_embeddings`, after vLLM
+has transferred the first scheduled vision inputs, and ends after all tokens
+and stop checks. It includes vision, text prefill, all decode and host dispatch;
+it is not first-token latency or a sum of kernel durations. First-token/prefill
+timing includes first-token sampling. The benchmark checks current-turn input
+IDs, pixel tensors and image grids against the pinned processor outside the
+timer, records actual prefix hits and graph execution counts, and retains full
+failure evidence. Independently generated histories can differ between engines;
+fixed replay still makes no navigation-success claim.
+
+The separate `benchmark_vllm_modern.py` entrypoint requires vLLM 0.30.0. The
+validated isolated dependency stack uses Torch 2.13.0, Transformers 5.17.0,
+NumPy 2.3.5 and Pillow 12.3.0; all 192 cross-environment CPU input audits match
+the original deployment byte for byte. Preserve that processor's PIL backend
+for this comparison with request-level `mm_processor_kwargs.use_fast=False`:
+the native Qwen processing-info default overrides this option when it appears
+only in engine configuration. A second 192-sample audit through the native
+renderer checks exact raw pixels and exact BF16 input after the compiled native
+GPU normalization operation. Keep `mm_device_do_normalize=True`; comparing its
+uint8 transport buffer directly with reference normalized floats is invalid.
+The installed dependency list and input evidence are in
+`runs/vllm-0.30.0/`.
+
+```bash
+CUDA_VISIBLE_DEVICES=1 VLLM_ENABLE_V1_MULTIPROCESSING=0 \
+  OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false PYTHONPATH="$PWD" \
+  /path/to/vllm-0.30.0/bin/python benchmarks/activevln-benchmark/benchmark_vllm_modern.py \
+  --config benchmarks/activevln-benchmark/runs/batch-tree-shared-context/r2r-b1-config.json \
+  --output benchmarks/activevln-benchmark/runs/vllm-0.30.0/r2r-full.json \
+  --speculation ngram_gpu --speculative-tokens 16 --no-async-scheduling
+```
+
+This entrypoint requests optimization level 3, vision compilation and CUDA
+graphs, full/piecewise language graphs, native FlashAttention, prefix caching,
+UUID-based multimodal caching and selectable native synchronous/asynchronous
+scheduling. The measured B=1 command above selects synchronous scheduling. It
+records resolved settings and real vision hits/misses, language graph modes,
+verified draft tokens and accepted draft tokens. A successful measured row must
+have actual vision graph coverage. `--speculation none`, `ngram` and `suffix`
+provide alternative native configurations; suffix requires `arctic-inference`
+in the isolated environment. Native version compatibility determines whether
+the V1 or V2 model runner is selected and which scheduler options can coexist.
+Drain outstanding asynchronous work inside the current observation's timer,
+and stop at the first matching token prefix even when a speculative step emits
+several tokens. Loading, compilation and capture remain outside timed latency.
+
+`benchmark_vllm_batch.py` uses the selected 16-draft synchronous profile for
+B=1/2/4, submitting the current observations as concurrent native requests:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 VLLM_ENABLE_V1_MULTIPROCESSING=0 \
+  OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false PYTHONPATH="$PWD" \
+  /path/to/vllm-0.30.0/bin/python benchmarks/activevln-benchmark/benchmark_vllm_batch.py \
+  --config benchmarks/activevln-benchmark/runs/batch-tree-shared-context/r2r-b2-config.json \
+  --output benchmarks/activevln-benchmark/runs/vllm-batch-0.30.0/r2r-b2-full.json
+```
+
+Run each split/batch in a fresh, sequential process. Use the corresponding
+`r2r-b4`, `rxr-b2` or `rxr-b4` config for the other conditions. Full histories,
+checkpoint, generation parameters and all B=1 optimizations remain enabled.
+Vision graph item/token budgets and native admission capacity scale with batch
+size. Per-episode salts prevent cross-episode KV prefix reuse without resetting
+the other live slots. Immutable UUIDs preserve image preprocessing caches.
+The saved-frame slot order matches `benchmark_batch.py`, including continuing
+after predicted STOP and replacing only episodes whose saved frames are exhausted.
+
+The report separates whole-batch E2E and complete-forward latency from amortized
+per-observation costs and throughput. Amortization divides total time by actual
+observations, including partially filled tail batches. The complete forward
+starts at the first native vision graph and ends after all requests finish;
+it includes dispatch and per-request stopping checks. Prefill/decode diagnostics
+split at the batch's first generated token and may overlap across requests.
+Keep warmup/startup outside timings and report startup/measurement memory
+separately. Native graph counters, vision item counts, scheduled request counts,
+prefix hits, preemptions and first-two-frame input audits support each result.
+`--max-steps-per-episode 2` is a partial smoke probe, not a full latency result.
 
 Candidate inference switches are `cuda_graph`, `fused_ops`, `split_attention`
 and `tree_decode` (all default to false; the latter three require `cuda_graph`). Graph startup

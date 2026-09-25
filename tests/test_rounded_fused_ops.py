@@ -39,18 +39,19 @@ def test_rounded_swiglu_preserves_every_finite_bf16_input_including_signed_zero(
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("length", [1, 160])
+@pytest.mark.parametrize("batch", [1, 2, 4])
 @torch.inference_mode()
-def test_rounded_rotary_products_match_torch_exactly(length):
+def test_rounded_rotary_products_match_torch_exactly(length, batch):
     torch.manual_seed(5)
-    query = torch.randn(1, length, 16, 128, device="cuda", dtype=torch.bfloat16).transpose(1, 2)
-    key = torch.randn(1, length, 2, 128, device="cuda", dtype=torch.bfloat16).transpose(1, 2)
-    angle = torch.randn(length, 128, device="cuda")
+    query = torch.randn(batch, length, 16, 128, device="cuda", dtype=torch.bfloat16).transpose(1, 2)
+    key = torch.randn(batch, length, 2, 128, device="cuda", dtype=torch.bfloat16).transpose(1, 2)
+    angle = torch.randn(batch, length, 128, device="cuda")
     cos, sin = angle.cos().bfloat16(), angle.sin().bfloat16()
 
     def reference(x):
         rotated = torch.cat((-x[..., 64:], x[..., :64]), dim=-1)
-        return x * cos[None, None] + rotated * sin[None, None]
+        return x * cos[:, None] + rotated * sin[:, None]
 
-    q_out, k_out = rounded_rope(query, key, cos, sin)
+    q_out, k_out = rounded_rope(query, key, cos[0] if batch == 1 else cos, sin[0] if batch == 1 else sin)
     torch.testing.assert_close(q_out, reference(query), atol=0, rtol=0)
     torch.testing.assert_close(k_out, reference(key), atol=0, rtol=0)

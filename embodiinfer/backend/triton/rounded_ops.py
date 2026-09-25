@@ -53,6 +53,8 @@ if triton is not None:
         Sin,
         Qout,
         Kout,
+        qb: tl.constexpr,
+        kb: tl.constexpr,
         qh: tl.constexpr,
         qt: tl.constexpr,
         kh: tl.constexpr,
@@ -63,26 +65,31 @@ if triton is not None:
         D: tl.constexpr,
         BLOCK: tl.constexpr,
     ):
-        token, head = tl.program_id(0), tl.program_id(1)
+        token, batch_head = tl.program_id(0), tl.program_id(1)
+        batch, head = batch_head // QHEADS, batch_head % QHEADS
         offsets = tl.arange(0, BLOCK)
         paired = tl.where(offsets < D // 2, offsets + D // 2, offsets - D // 2)
         sign = tl.where(offsets < D // 2, -1.0, 1.0)
-        cosine = tl.load(Cos + token * D + offsets, offsets < D, other=0).to(tl.float32)
-        sine = tl.load(Sin + token * D + offsets, offsets < D, other=0).to(tl.float32)
-        q = tl.load(Q + head * qh + token * qt + offsets, offsets < D, other=0).to(tl.float32)
-        qp = tl.load(Q + head * qh + token * qt + paired, offsets < D, other=0).to(tl.float32)
+        cosine = tl.load(Cos + (batch * T + token) * D + offsets, offsets < D, other=0).to(tl.float32)
+        sine = tl.load(Sin + (batch * T + token) * D + offsets, offsets < D, other=0).to(tl.float32)
+        q = tl.load(Q + batch * qb + head * qh + token * qt + offsets, offsets < D, other=0).to(tl.float32)
+        qp = tl.load(Q + batch * qb + head * qh + token * qt + paired, offsets < D, other=0).to(tl.float32)
         first = (q * cosine).to(Q.dtype.element_ty).to(tl.float32)
         second = (sign * qp * sine).to(Q.dtype.element_ty).to(tl.float32)
-        tl.store(Qout + (head * T + token) * D + offsets, first + second, offsets < D)
-        k = tl.load(K + head * kh + token * kt + offsets, (head < KHEADS) & (offsets < D), other=0).to(
-            tl.float32
-        )
-        kp = tl.load(K + head * kh + token * kt + paired, (head < KHEADS) & (offsets < D), other=0).to(
-            tl.float32
-        )
+        tl.store(Qout + ((batch * QHEADS + head) * T + token) * D + offsets, first + second, offsets < D)
+        k = tl.load(
+            K + batch * kb + head * kh + token * kt + offsets, (head < KHEADS) & (offsets < D), other=0
+        ).to(tl.float32)
+        kp = tl.load(
+            K + batch * kb + head * kh + token * kt + paired, (head < KHEADS) & (offsets < D), other=0
+        ).to(tl.float32)
         first = (k * cosine).to(K.dtype.element_ty).to(tl.float32)
         second = (sign * kp * sine).to(K.dtype.element_ty).to(tl.float32)
-        tl.store(Kout + (head * T + token) * D + offsets, first + second, (head < KHEADS) & (offsets < D))
+        tl.store(
+            Kout + ((batch * KHEADS + head) * T + token) * D + offsets,
+            first + second,
+            (head < KHEADS) & (offsets < D),
+        )
 
 
 def _require(*values: torch.Tensor) -> None:
@@ -152,28 +159,36 @@ def rounded_rope(
     cosine: torch.Tensor,
     sine: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rotate B=1 BHSD Q/K using contiguous SD tables and rounded products."""
+    """Rotate BHSD Q/K with per-row contiguous BSD tables and rounded products.
+
+    B=1 callers may retain the original SD table shape.
+    """
     _require(query, key, cosine, sine)
-    if query.ndim != 4 or key.ndim != 4 or query.shape[0] != 1 or key.shape[0] != 1:
-        raise ValueError("rounded rotary expects B=1 BHSD inputs")
+    if query.ndim != 4 or key.ndim != 4 or query.shape[0] != key.shape[0] or query.shape[0] < 1:
+        raise ValueError("rounded rotary expects matching BHSD batches")
     size, width = query.shape[-2:]
     if key.shape[-2:] != (size, width) or query.shape[1] < key.shape[1] or width % 2:
         raise ValueError("incompatible rounded rotary query/key shapes")
     if width > 256 or query.stride(-1) != 1 or key.stride(-1) != 1:
         raise ValueError("rounded rotary needs contiguous heads of width <= 256")
-    if cosine.shape != (size, width) or sine.shape != cosine.shape:
+    if (
+        cosine.shape not in ((query.shape[0], size, width), (query.shape[0] * size, width))
+        or sine.shape != cosine.shape
+    ):
         raise ValueError("rotary tables must match the query sequence and head width")
     if not cosine.is_contiguous() or not sine.is_contiguous():
         raise ValueError("rotary tables must be contiguous")
     q_out = torch.empty(query.shape, device=query.device, dtype=query.dtype)
     k_out = torch.empty(key.shape, device=key.device, dtype=key.dtype)
-    _rope[(size, query.shape[1])](
+    _rope[(size, query.shape[0] * query.shape[1])](
         query,
         key,
         cosine,
         sine,
         q_out,
         k_out,
+        query.stride(0),
+        key.stride(0),
         query.stride(1),
         query.stride(2),
         key.stride(1),
