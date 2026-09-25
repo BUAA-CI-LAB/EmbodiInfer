@@ -17,6 +17,7 @@ from ...exceptions import SessionCancelledError
 from .prompt_activevln import parse_r2r_actions
 
 if TYPE_CHECKING:
+    from .batching_activevln import ActiveVLNBatchedRuntime, ActiveVLNBatchPrefix
     from .cache_activevln import ActiveVLNMemory
     from .cuda_graph import ActiveVLNGraphRuntime
     from .modeling_activevln import ActiveVLNGeneration, ActiveVLNPrefix, _ActiveVLNDecoder
@@ -238,3 +239,173 @@ def generate_tree_tokens(
     return ActiveVLNGeneration(
         memory, torch.cat(output, dim=1), torch.stack(logprobs, dim=1), reason or "max_tokens"
     )
+
+
+def batched_tree_greedy_scores(
+    logits: torch.Tensor,
+    seen: torch.Tensor,
+    path_ids: torch.Tensor,
+    path_valid: torch.Tensor,
+    prefix_first_ids: torch.Tensor,
+    penalty: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Score B distinct ancestor trees without penalizing siblings or padding.
+
+    ``seen`` contains each row's real prefix. Path padding repeats a prefix
+    token, as in the single-row verifier. Both prefix and path penalties use
+    the original logits, so repeated tokens receive the penalty only once.
+    """
+    if penalty == 1.0:
+        effective = logits
+    else:
+        effective = torch.where(
+            seen[:, None], torch.where(logits < 0, logits * penalty, logits / penalty), logits
+        )
+        paths = torch.where(path_valid, path_ids, prefix_first_ids[:, None, None])
+        values = logits.gather(2, paths)
+        values = torch.where(values < 0, values * penalty, values / penalty)
+        effective.scatter_(2, paths, values)
+    chosen = effective.argmax(-1)
+    logprobs = torch.log_softmax(effective, -1).gather(2, chosen[:, :, None])[:, :, 0]
+    return chosen, logprobs
+
+
+def generate_batched_tree_tokens(
+    runtime: ActiveVLNBatchedRuntime,
+    prefix: ActiveVLNBatchPrefix,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[ActiveVLNGeneration, ...]:
+    """Verify independently chosen phrase trees in one tensor forward per block.
+
+    Tree roots, lengths, histories, terminal decisions and accepted paths may
+    differ across rows. Ordinary fallback tokens participate in that same
+    forward as singleton trees. Only accepted paths enter the linear KV history.
+    """
+    policy, device = runtime.policy, runtime.device
+    count, batch = len(prefix.prepared.turns), runtime.batch_size
+    lengths, coordinates = list(prefix.lengths), list(prefix.positions)
+    logits = prefix.logits
+    seen = torch.zeros_like(logits, dtype=torch.bool)
+    for row, history in enumerate(prefix.token_history):
+        seen[row].scatter_(0, history, True)
+    first_prefix_ids = torch.stack([history[0] for history in prefix.token_history])
+    tokens: list[list[torch.Tensor]] = [[] for _ in range(count)]
+    scores: list[list[torch.Tensor]] = [[] for _ in range(count)]
+    ids: list[list[int]] = [[] for _ in range(count)]
+    reasons, active = ["max_tokens"] * count, [True] * count
+    by_root = {}
+    for tree in runtime.action_trees:
+        for parent, token_id in tree.children:
+            if parent == -1:
+                by_root.setdefault(token_id, tree)
+
+    def check_cancel() -> None:
+        if cancelled is not None and cancelled():
+            raise SessionCancelledError("batched ActiveVLN tree generation was cancelled")
+
+    while any(active):
+        check_cancel()
+        if any(lengths[row] >= policy.max_context for row in range(count) if active[row]):
+            raise ValueError("batched generation exceeds the model context limit")
+        penalty = policy.repetition_penalty
+        effective = torch.where(seen, torch.where(logits < 0, logits * penalty, logits / penalty), logits)
+        roots = effective.argmax(-1, keepdim=True)
+        root_scores = torch.log_softmax(effective, -1).gather(1, roots)
+        root_ids = roots[:, 0].tolist()
+        selected = []
+        for row, token_id in enumerate(root_ids):
+            tree = by_root.get(token_id) if active[row] else None
+            if tree is not None and (
+                _stop_reason(policy, ids[row] + [token_id]) is not None
+                or lengths[row] + tree.token_ids.shape[1]
+                > min(policy.max_context, runtime._row_capacities[row])
+            ):
+                tree = None
+            selected.append(tree)
+        query = max((tree.token_ids.shape[1] for tree in selected if tree is not None), default=1)
+        depth = max((tree.path_ids.shape[1] for tree in selected if tree is not None), default=1)
+        input_ids = torch.zeros(batch, query, device=device, dtype=torch.long)
+        positions = torch.zeros(3, batch, query, device=device, dtype=torch.long)
+        ancestors = torch.eye(query, device=device, dtype=torch.bool)[None].repeat(batch, 1, 1)
+        paths = torch.zeros(count, query, depth, device=device, dtype=torch.long)
+        valid_paths = torch.zeros_like(paths, dtype=torch.bool)
+        write_lengths = [0] * batch
+        offsets = [0] * batch
+        for row, tree in enumerate(selected):
+            if not active[row]:
+                continue
+            offsets[row] = lengths[row]
+            if tree is None:
+                input_ids[row, 0] = roots[row, 0]
+                positions[:, row, 0] = coordinates[row]
+                write_lengths[row] = 1
+            else:
+                size, tree_depth = tree.path_ids.shape
+                input_ids[row, :size] = tree.token_ids[0]
+                positions[:, row, :size] = coordinates[row] + tree.depths[None]
+                ancestors[row, :size, :size] = tree.ancestors
+                paths[row, :size, :tree_depth] = tree.path_ids
+                valid_paths[row, :size, :tree_depth] = tree.path_valid
+                write_lengths[row] = size
+        is_tree = any(tree is not None for tree in selected)
+        hidden = runtime._forward(
+            policy._text.embed_tokens(input_ids),
+            positions,
+            offsets,
+            ancestors=ancestors if is_tree else None,
+            write_lengths=write_lengths,
+        )
+        if is_tree:
+            runtime.counters["tree_verified_rows"] += sum(tree is not None for tree in selected)
+            runtime.counters["tree_candidate_nodes"] += sum(
+                tree.token_ids.shape[1] for tree in selected if tree is not None
+            )
+            runtime.counters["tree_padding_nodes"] += batch * query - sum(write_lengths)
+        node_logits = runtime._tree_logits(hidden) if is_tree else policy._lm_head(hidden)
+        chosen, node_scores = batched_tree_greedy_scores(
+            node_logits[:count], seen, paths, valid_paths, first_prefix_ids, penalty
+        )
+        chosen_ids = chosen.tolist()
+        next_logits = []
+        for row, tree in enumerate(selected):
+            if not active[row]:
+                next_logits.append(logits[row])
+                continue
+            check_cancel()
+            token, score, token_id = roots[row, 0], root_scores[row, 0], root_ids[row]
+            node = 0 if tree is None else tree.children[(-1, token_id)]
+            accepted = []
+            while True:
+                check_cancel()
+                accepted.append(node)
+                tokens[row].append(token)
+                scores[row].append(score)
+                ids[row].append(token_id)
+                reason = _stop_reason(policy, ids[row])
+                if reason is not None or len(ids[row]) >= policy.max_new_tokens:
+                    reasons[row], active[row] = reason or "max_tokens", False
+                    break
+                if tree is None:
+                    break
+                next_id = chosen_ids[row][node]
+                child = tree.children.get((node, next_id))
+                if child is None:
+                    break
+                token, score, token_id, node = chosen[row, node], node_scores[row, node], next_id, child
+            if tree is None:
+                runtime.counters["tree_fallback_tokens"] += 1
+            else:
+                indices = torch.tensor(accepted, device=device)
+                compacted = runtime._row_kv(
+                    row, lengths[row], lengths[row] + tree.token_ids.shape[1]
+                ).index_select(-2, indices)
+                check_cancel()
+                runtime._row_kv(row, lengths[row], lengths[row] + len(accepted)).copy_(compacted)
+                runtime.counters["tree_accepted_tokens"] += len(accepted)
+            lengths[row] += len(accepted)
+            coordinates[row] += len(accepted)
+            seen[row].scatter_(0, torch.stack(tokens[row]), True)
+            next_logits.append(node_logits[row, accepted[-1]])
+        logits = torch.stack(next_logits)
+    return runtime._finish_generation(prefix, tokens, scores, lengths, coordinates, reasons)

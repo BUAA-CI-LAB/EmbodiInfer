@@ -19,12 +19,61 @@ except ImportError:  # pragma: no cover - optional accelerator
 if triton is not None:
 
     @triton.jit
+    def _write_kv(
+        K,
+        V,
+        KC,
+        VC,
+        Position,
+        Starts,
+        Capacities,
+        WriteLengths,
+        skb: tl.constexpr,
+        skh: tl.constexpr,
+        skq: tl.constexpr,
+        svb: tl.constexpr,
+        svh: tl.constexpr,
+        svq: tl.constexpr,
+        scb: tl.constexpr,
+        sch: tl.constexpr,
+        sct: tl.constexpr,
+        H: tl.constexpr,
+        Q: tl.constexpr,
+        D: tl.constexpr,
+        CAP: tl.constexpr,
+        N: tl.constexpr,
+        POOLED: tl.constexpr,
+        LIMITED: tl.constexpr,
+        BLOCK: tl.constexpr,
+    ):
+        index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        dim = index % D
+        query = index // D % Q
+        head = index // (D * Q) % H
+        batch = index // (D * Q * H)
+        past = tl.load(Position + batch, index < N, 0)
+        base = tl.load(Starts + batch, index < N, 0) if POOLED else 0
+        capacity = tl.load(Capacities + batch, index < N, 0) if POOLED else CAP
+        write_length = tl.load(WriteLengths + batch, index < N, 0) if LIMITED else Q
+        target = past + query
+        source_key = batch * skb + head * skh + query * skq + dim
+        source_value = batch * svb + head * svh + query * svq + dim
+        key = tl.load(K + source_key, index < N, 0)
+        value = tl.load(V + source_value, index < N, 0)
+        destination = (0 if POOLED else batch * scb) + head * sch + (base + target) * sct + dim
+        valid = (index < N) & (target < capacity) & (query < write_length)
+        tl.store(KC + destination, key, valid)
+        tl.store(VC + destination, value, valid)
+
+    @triton.jit
     def _partials(
         Q,
         K,
         V,
         Position,
         Ancestors,
+        Starts,
+        Capacities,
         Partial,
         Maxima,
         Sums,
@@ -45,6 +94,9 @@ if triton is not None:
         CHUNK: tl.constexpr,
         KB: tl.constexpr,
         TREE: tl.constexpr,
+        TREE_BATCH: tl.constexpr,
+        POOLED: tl.constexpr,
+        ROW_POSITIONS: tl.constexpr,
         PARTS: tl.constexpr,
         BM: tl.constexpr,
         BN: tl.constexpr,
@@ -55,27 +107,34 @@ if triton is not None:
         batch, head = bh // HQ, bh % HQ
         kvhead = head // (HQ // HK)
         dim = tl.arange(0, D)
-        past = tl.load(Position)
+        past = tl.load(Position + (batch if ROW_POSITIONS else 0))
+        cache_row = 0 if POOLED else batch
+        cache_base = tl.load(Starts + batch) if POOLED else 0
+        cache_capacity = tl.load(Capacities + batch) if POOLED else KB
         q = tl.load(Q + batch * sqb + head * sqh + rows[:, None] * sqm + dim[None, :], rows[:, None] < NQ, 0)
         maximum = tl.full((BM,), -float("inf"), tl.float32)
         total = tl.zeros((BM,), tl.float32)
         acc = tl.zeros((BM, D), tl.float32)
         low_acc = tl.zeros((BM, D), tl.float32)
-        end = tl.minimum((split + 1) * CHUNK, tl.minimum(KB, past + NQ))
+        end = tl.minimum((split + 1) * CHUNK, tl.minimum(cache_capacity, tl.minimum(KB, past + NQ)))
         for start in range(split * CHUNK, end, BN):
             cols = start + tl.arange(0, BN)
             valid = cols < end
             k = tl.load(
-                K + batch * skb + kvhead * skh + cols[:, None] * skn + dim[None, :], valid[:, None], 0
+                K + cache_row * skb + kvhead * skh + (cache_base + cols[:, None]) * skn + dim[None, :],
+                valid[:, None],
+                0,
             )
             v = tl.load(
-                V + batch * svb + kvhead * svh + cols[:, None] * svn + dim[None, :], valid[:, None], 0
+                V + cache_row * svb + kvhead * svh + (cache_base + cols[:, None]) * svn + dim[None, :],
+                valid[:, None],
+                0,
             )
             allowed = (rows[:, None] < NQ) & valid[None, :]
             if TREE:
                 local = cols - past
                 edges = tl.load(
-                    Ancestors + rows[:, None] * NQ + local[None, :],
+                    Ancestors + (batch * NQ * NQ if TREE_BATCH else 0) + rows[:, None] * NQ + local[None, :],
                     (rows[:, None] < NQ) & (local[None, :] >= 0) & (local[None, :] < NQ),
                     0,
                 )
@@ -125,6 +184,87 @@ if triton is not None:
         tl.store(Output + (bh * NQ + row) * D + dim, result)
 
 
+def write_batched_kv(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    positions: torch.Tensor,
+    *,
+    cache_starts: torch.Tensor | None = None,
+    cache_capacities: torch.Tensor | None = None,
+    write_lengths: torch.Tensor | None = None,
+) -> None:
+    """Write BHQD chunks at per-row offsets, ignoring padded slots beyond storage.
+
+    Real query lengths must be validated by the caller. Only padding is allowed
+    to overrun capacity; this graph-safe inference operation does not clamp an
+    out-of-range write onto a valid cached token.
+    """
+    if triton is None or key.device.type != "cuda" or torch.is_grad_enabled():
+        raise ValueError("batched KV writes require CUDA Triton inference mode")
+    if (
+        key.ndim != 4
+        or key_cache.ndim != 4
+        or key.shape != value.shape
+        or key_cache.shape != value_cache.shape
+    ):
+        raise ValueError("batched KV writes require matching BHQD chunks and BHTD caches")
+    batch, heads, query, width = key.shape
+    pooled = cache_starts is not None
+    _validate_layout_vectors(batch, key.device, cache_starts, cache_capacities, write_lengths)
+    if (
+        key_cache.shape[:2] != (1 if pooled else batch, heads)
+        or key_cache.shape[-1] != width
+        or positions.shape != (batch,)
+        or positions.dtype != torch.long
+        or not positions.is_contiguous()
+        or key.stride(-1) != 1
+        or positions.device != key.device
+        or key_cache.stride() != value_cache.stride()
+        or any(
+            x.device != key.device or x.dtype != key.dtype or x.stride(-1) != 1
+            for x in (value, key_cache, value_cache)
+        )
+    ):
+        raise ValueError("incompatible batched KV write layout")
+    _write_kv[(triton.cdiv(key.numel(), 256),)](
+        key,
+        value,
+        key_cache,
+        value_cache,
+        positions,
+        cache_starts if pooled else positions,
+        cache_capacities if pooled else positions,
+        write_lengths if write_lengths is not None else positions,
+        *key.stride()[:3],
+        *value.stride()[:3],
+        *key_cache.stride()[:3],
+        heads,
+        query,
+        width,
+        key_cache.shape[-2],
+        key.numel(),
+        pooled,
+        write_lengths is not None,
+        256,
+    )
+
+
+def split_kv_partitions(batch_size: int, num_heads: int, query_tokens: int, key_bucket: int) -> int:
+    """Return the kernel's partition count for positive execution dimensions.
+
+    A single partition reads only the dynamic prefix plus query, so increasing
+    its key bound cannot change partition boundaries or reduction order. Graph
+    callers may reuse that case across sufficient context bounds.
+    """
+    return min(
+        32,
+        max(1, 512 // (batch_size * num_heads * ((query_tokens + 15) // 16))),
+        max(1, key_bucket // 256),
+    )
+
+
 def split_kv_attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -134,6 +274,8 @@ def split_kv_attention(
     *,
     ancestors: torch.Tensor | None = None,
     probability_parts: int = 3,
+    cache_starts: torch.Tensor | None = None,
+    cache_capacities: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Attend to a dynamic prefix and causal/new-tree tokens in fixed KV storage.
 
@@ -150,11 +292,13 @@ def split_kv_attention(
     if torch.is_grad_enabled():
         raise ValueError("split KV attention is inference-only")
     batch, heads, length, width = query.shape
+    pooled = cache_starts is not None
+    _validate_layout_vectors(batch, query.device, cache_starts, cache_capacities, None)
     if probability_parts not in (1, 2, 3) or width < 16 or width & (width - 1):
         raise ValueError("unsupported probability decomposition or head width")
     if (
         key.shape != value.shape
-        or key.shape[0] != batch
+        or key.shape[0] != (1 if pooled else batch)
         or key.shape[-1] != width
         or heads % key.shape[1]
         or not length <= key_bucket <= key.shape[-2]
@@ -162,17 +306,22 @@ def split_kv_attention(
         or any(t.stride(-1) != 1 for t in (query, key, value))
     ):
         raise ValueError("incompatible query and fixed KV storage")
-    if position.device != query.device or position.numel() != 1 or position.dtype != torch.long:
-        raise ValueError("position must be one device int64 scalar")
+    if (
+        position.device != query.device
+        or position.numel() not in (1, batch)
+        or position.dtype != torch.long
+        or not position.is_contiguous()
+    ):
+        raise ValueError("position must be one device int64 scalar or one offset per batch row")
     if ancestors is not None and (
-        ancestors.shape != (length, length)
+        ancestors.shape not in ((length, length), (batch, length, length))
         or ancestors.dtype != torch.bool
         or ancestors.device != query.device
         or not ancestors.is_contiguous()
     ):
         raise ValueError("ancestors must be a contiguous device boolean query-square mask")
     block = 16
-    splits = min(32, max(1, 512 // (batch * heads * triton.cdiv(length, block))), max(1, key_bucket // 256))
+    splits = split_kv_partitions(batch, heads, length, key_bucket)
     chunk = triton.cdiv(key_bucket, splits * 64) * 64
     partial = torch.empty((batch * heads, splits, length, width), device=query.device, dtype=torch.float32)
     maxima = torch.empty(partial.shape[:-1], device=query.device, dtype=torch.float32)
@@ -184,6 +333,8 @@ def split_kv_attention(
         value,
         position,
         ancestors if ancestors is not None else position,
+        cache_starts if pooled else position,
+        cache_capacities if pooled else position,
         partial,
         maxima,
         sums,
@@ -198,6 +349,9 @@ def split_kv_attention(
         chunk,
         key_bucket,
         ancestors is not None,
+        ancestors is not None and ancestors.ndim == 3,
+        pooled,
+        position.numel() != 1,
         probability_parts,
         block,
         64,
@@ -216,3 +370,16 @@ def split_kv_attention(
         num_warps=4,
     )
     return output
+
+
+def _validate_layout_vectors(batch, device, starts, capacities, write_lengths):
+    if (starts is None) != (capacities is None):
+        raise ValueError("pooled KV requires both start and capacity vectors")
+    for value in (starts, capacities, write_lengths):
+        if value is not None and (
+            value.shape != (batch,)
+            or value.dtype != torch.long
+            or value.device != device
+            or not value.is_contiguous()
+        ):
+            raise ValueError("KV layout vectors must be contiguous device int64 batch vectors")

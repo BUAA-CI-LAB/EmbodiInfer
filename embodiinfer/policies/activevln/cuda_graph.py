@@ -102,7 +102,10 @@ class ActiveVLNGraphRuntime:
         tree_fp32_projection: bool = False,
         tree_repeat_actions: int = 1,
         workspace_tokens: int | None = None,
+        batch_size: int = 1,
     ) -> None:
+        if type(batch_size) is not int or batch_size < 1:
+            raise ValueError("batch_size must be a positive Python integer")
         if query_bucket_size < 1:
             raise ValueError("query_bucket_size must be positive")
         if type(tree_repeat_actions) is not int or not 1 <= tree_repeat_actions <= 3:
@@ -140,7 +143,7 @@ class ActiveVLNGraphRuntime:
         heads = int(config.num_key_value_heads)
         width = int(policy._text.layers[0].self_attn.head_dim)
         self.storage = torch.zeros(
-            (layers, 2, 1, heads, capacity, width),
+            (layers, 2, batch_size, heads, capacity, width),
             dtype=parameter.dtype,
             device=self.device,
         )
@@ -347,39 +350,92 @@ class ActiveVLNGraphRuntime:
                 activated = rounded_swiglu(gate, up) if self.fused_ops else module.act_fn(gate) * up
                 return project(module.down_proj, activated)
 
-        query_length = hidden.shape[1]
-        indices = cache_position + torch.arange(query_length, device=self.device)
+        batch, query_length = hidden.shape[:2]
+        layout = getattr(self, "_cache_layout", None)
+        write_lengths = getattr(self, "_write_lengths", None)
+        indices = cache_position[:, None] + torch.arange(query_length, device=self.device)[None, :]
         mask = None
         if not self.split_attention:
             key_indices = torch.arange(key_bucket, device=self.device)
             if ancestors is None:
-                allowed = key_indices[None, :] <= indices[:, None]
+                allowed = key_indices[None, None, :] <= indices[:, :, None]
             else:
-                local_keys = key_indices - cache_position
+                local_keys = key_indices[None, :] - cache_position[:, None]
                 in_tree = (local_keys >= 0) & (local_keys < query_length)
-                allowed = (key_indices[None, :] < cache_position) | (
-                    ancestors[:, local_keys.clamp(0, query_length - 1)] & in_tree[None, :]
+                masks = ancestors.expand(batch, -1, -1) if ancestors.ndim == 2 else ancestors
+                edges = masks.gather(
+                    2, local_keys.clamp(0, query_length - 1)[:, None].expand(-1, query_length, -1)
                 )
-            mask = torch.zeros((query_length, key_bucket), device=self.device, dtype=hidden.dtype)
-            mask = mask.masked_fill(~allowed, torch.finfo(hidden.dtype).min)[None, None]
+                allowed = (key_indices[None, None, :] < cache_position[:, None, None]) | (
+                    edges & in_tree[:, None, :]
+                )
+            mask = torch.zeros((batch, query_length, key_bucket), device=self.device, dtype=hidden.dtype)
+            mask = mask.masked_fill(~allowed, torch.finfo(hidden.dtype).min)[:, None]
         for index, layer in enumerate(text.layers):
             residual = hidden
             h = norm(layer.input_layernorm, hidden)
             attention = layer.self_attn
-            q = project(attention.q_proj, h).view(1, query_length, -1, head_dim).transpose(1, 2)
-            k = project(attention.k_proj, h).view(1, query_length, -1, head_dim).transpose(1, 2)
-            v = project(attention.v_proj, h).view(1, query_length, -1, head_dim).transpose(1, 2)
+            q = project(attention.q_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
+            k = project(attention.k_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
+            v = project(attention.v_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
             q, k = rotary(q, k)
             key_cache, value_cache = self.storage[index].unbind(0)
-            key_cache.index_copy_(2, indices, k)
-            value_cache.index_copy_(2, indices, v)
+            if batch == 1 and not getattr(self, "ragged_batch", False):
+                key_cache.index_copy_(2, indices[0], k)
+                value_cache.index_copy_(2, indices[0], v)
+            elif hidden.is_cuda:
+                from ...backend.triton.split_attention import write_batched_kv
+
+                write_batched_kv(
+                    k,
+                    v,
+                    key_cache,
+                    value_cache,
+                    cache_position,
+                    cache_starts=None if layout is None else layout[0],
+                    cache_capacities=None if layout is None else layout[1],
+                    write_lengths=write_lengths,
+                )
+            else:
+                for row, offset in enumerate(cache_position.tolist()):
+                    base = 0 if layout is None else int(layout[0][row])
+                    capacity = key_cache.shape[-2] if layout is None else int(layout[1][row])
+                    count = min(
+                        query_length if write_lengths is None else int(write_lengths[row]), capacity - offset
+                    )
+                    slot = row if layout is None else 0
+                    key_cache[slot, :, base + offset : base + offset + count].copy_(k[row, :, :count])
+                    value_cache[slot, :, base + offset : base + offset + count].copy_(v[row, :, :count])
             if self.split_attention:
                 from ...backend.triton.split_attention import split_kv_attention
 
                 out = split_kv_attention(
-                    q, key_cache, value_cache, cache_position, key_bucket, ancestors=ancestors
+                    q,
+                    key_cache,
+                    value_cache,
+                    cache_position,
+                    key_bucket,
+                    ancestors=ancestors,
+                    cache_starts=None if layout is None else layout[0],
+                    cache_capacities=None if layout is None else layout[1],
                 )
             else:
+                if layout is not None:
+                    # CPU correctness reference; accelerated pooled execution uses split-KV.
+                    starts, capacities = (x.tolist() for x in layout)
+
+                    def gather_rows(cache, starts=starts, capacities=capacities):
+                        return torch.stack(
+                            [
+                                torch.nn.functional.pad(
+                                    cache[0, :, start : start + min(capacity, key_bucket)],
+                                    (0, 0, 0, max(0, key_bucket - capacity)),
+                                )
+                                for start, capacity in zip(starts, capacities, strict=True)
+                            ]
+                        )
+
+                    key_cache, value_cache = gather_rows(key_cache), gather_rows(value_cache)
                 out = policy._attn.attend(
                     q,
                     key_cache[:, :, :key_bucket],
@@ -387,7 +443,9 @@ class ActiveVLNGraphRuntime:
                     attn_mask=mask,
                     scaling=head_dim**-0.5,
                 )
-            hidden = residual + project(attention.o_proj, out.transpose(1, 2).reshape(1, query_length, -1))
+            hidden = residual + project(
+                attention.o_proj, out.transpose(1, 2).reshape(batch, query_length, -1)
+            )
             hidden = hidden + mlp(layer.mlp, norm(layer.post_attention_layernorm, hidden))
         return norm(text.norm, hidden)
 
