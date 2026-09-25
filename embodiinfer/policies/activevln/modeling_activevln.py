@@ -22,6 +22,7 @@ from .processor_activevln import ActiveVLNBatch, ActiveVLNProcessor, ProcessedTu
 from .prompt_activevln import actions_to_tensor, parse_r2r_actions
 
 if TYPE_CHECKING:
+    from .batching_activevln import ActiveVLNBatchedRuntime
     from .cuda_graph import ActiveVLNGraphRuntime
 
 
@@ -540,6 +541,42 @@ class ActiveVLNPolicy(VLAPolicy):
     def clear_cuda_graphs(self) -> None:
         """Release optional captures before moving/replacing model parameters."""
         self._inference_runtime = None
+
+    def create_batched_runtime(
+        self,
+        *,
+        batch_size: int,
+        workspace_tokens: int,
+        query_bucket_size: int = 32,
+        cuda_graph: bool = False,
+        fused_ops: bool = False,
+        split_attention: bool = False,
+        tree_decode: bool = False,
+        tree_fp32_projection: bool = False,
+        tree_repeat_actions: int = 1,
+        kv_pool_tokens: int | None = None,
+    ) -> ActiveVLNBatchedRuntime:
+        """Create true greedy tensor batching with explicit per-row memory inputs.
+
+        Use the runtime's prepare/prefill/generate methods for separate timing
+        scopes. Generic engine session batching and sampled rollout branches
+        retain their existing contracts; this is an inference-only policy API.
+        """
+        from .batching_activevln import ActiveVLNBatchedRuntime
+
+        return ActiveVLNBatchedRuntime(
+            self,
+            batch_size=batch_size,
+            workspace_tokens=workspace_tokens,
+            query_bucket_size=query_bucket_size,
+            cuda_graph=cuda_graph,
+            fused_ops=fused_ops,
+            split_attention=split_attention,
+            tree_decode=tree_decode,
+            tree_fp32_projection=tree_fp32_projection,
+            tree_repeat_actions=tree_repeat_actions,
+            kv_pool_tokens=kv_pool_tokens,
+        )
 
     @contextmanager
     def startup_cuda_graph_capture(

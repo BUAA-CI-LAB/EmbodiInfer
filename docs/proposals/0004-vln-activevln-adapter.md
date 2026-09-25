@@ -615,3 +615,128 @@ The matching complete 3,879-frame fixed replay measures 104.45 ms mean E2E and
 Both workload-specific configurations preserve success count on the selected
 episodes. This is not an exact-output or unseen-split accuracy claim; neither
 workload meets the original 40 ms E2E target.
+
+## 19. Optional tensor batching with independent episode histories
+
+`ActiveVLNBatchedRuntime`, created by `policy.create_batched_runtime(...)`,
+extends greedy inference to true B=1/2/4 tensor execution. Images share one
+vision call, and padded queries share text prefill and generation. Each row
+retains independent KV offsets, multimodal rotary positions, repetition
+history, generated-token lengths and EOS/STOP decisions. Finished rows do not
+advance their public histories. Sampling, training and generic engine session
+batching retain their existing contracts; this API is policy-local and opt-in.
+
+The prepare/prefill/generate interface permits separate preprocessing and
+complete-forward timing. Input memories remain immutable. Private scratch is
+written during execution, and independent output memories are returned only
+when the complete batch succeeds. A prefix belongs to one runtime and is
+invalidated by the next prefill or generation attempt. Cancellation/OOM does
+not commit replacement memory. Reusing complete B=1 calls in a Python loop was
+rejected because it does not provide tensor batching.
+
+The implementation generalizes rounded RoPE and split-KV attention to per-row
+positions, and carries all selected single-row optimizations into batching:
+vision/text CUDA graphs, rounded RMSNorm/RoPE/SwiGLU fusion, split-KV attention,
+root-partitioned phrase-tree verification and resident-prefix reuse. Rows may
+verify different trees or use serial fallback together. Full-vocabulary greedy
+selection, per-row repetition penalties and ancestor masks govern acceptance;
+only accepted paths enter linear KV history. BF16 execution shapes may change
+outputs, so task success remains the accuracy contract.
+
+Graph inputs/outputs are shared across context buckets with the same query
+shape. Single-partition split-KV contexts also share an executable because all
+sufficient bounds read the same dynamic extent and retain reduction order;
+multi-partition executables remain distinct. The backend exposes partition
+planning so capture and execution agree. Optional packed KV scratch assigns
+independent segments to rows instead of allocating the maximum context B times.
+Weak memory identities permit resident-prefix reuse without taking ownership
+of public memories. Growth preserves complete histories and invalidates graphs
+whose storage moved; uncovered shapes use counted eager execution. No history,
+observation or response budget is shortened to fit memory.
+
+Validation covers ragged forward/KV equivalence to independent rows, padding
+and sibling invisibility, mixed trees/fallback, independent stopping, reordering,
+cache compaction, cancellation, stale prefixes, committed-memory isolation,
+shared-pool relocation and actual CUDA graph replay. GPU tests require bit-exact
+forward/KV results for aliased versus separate single-partition graphs at B=1/2/4.
+Real-weight navigation validation remains separate from fixed replay.
+
+`benchmark_batch.py` replays every saved frame from the same 48 episodes per
+split, refilling exhausted slots in numeric order even after predicted STOP.
+It records actual occupancy, whole-batch E2E/complete-forward time, observation-
+weighted amortization, throughput, memory, graph/tree coverage and any OOM
+phase. Warmup and capture remain outside measurement. Incomplete runs cannot
+produce complete-run latency. The benchmark README owns the final configurations,
+results and artifact hashes; raw logs and superseded trials stay outside Git.
+
+The selected profile completes R2R B=1/2/4 and RxR B=1/2. RxR B=4 OOMs after
+532 observations while snapshotting independent output KV. This ownership cost
+remains a memory limitation on the tested RTX 4090. Downstream R2R closed-loop
+runs yield 35/33/32 successes out of 48 at B=1/2/4; B=4 fails the provisional
+two-episode tolerance. RxR multi-batch has no complete validated quality result.
+These limitations prohibit a general multi-batch task-accuracy claim.
+
+The benchmark-only `serve_batch.py` exposes the same runtime through the existing
+versioned HTTP API and generic `BatchedServingAdapter`. It owns session-local
+model memories, stable slot ordering and all-or-fail output commits; a failed
+model call invalidates the adapter process. Responses identify actual tensor
+batch membership so a controller can detect scheduling-timeout splits. EmbodiRun
+owns concurrent simulator episodes, slot refill and navigation metrics. Adapter
+and controller provenance remain separate from frozen measured inference sources.
+
+## 20. Native vLLM comparison
+
+The optional vLLM benchmarks share decoded observations, prompt construction and
+action parsing with the EmbodiInfer benchmark. Native vLLM owns weights,
+vision/text execution, scheduling, KV and generated tokens. Its dependencies
+remain isolated from the installed EmbodiInfer model environment. The original
+`benchmark_vllm.py` targets vLLM 0.8.5.post1; its timing/report helpers are reused
+by `benchmark_vllm_modern.py` and `benchmark_vllm_batch.py` for vLLM 0.30.0.
+The old version's opt-in identity deduplication of placeholder rules preserves
+first-match order and distinct rules; native matching/output tests establish
+its scope. It is not applied to the modern version.
+
+Keep checkpoint, BF16, greedy decoding, repetition penalty, image processing,
+STOP/EOS rules, context/response limits, selected observations and 33-call warmup
+unchanged. Each engine retains its own complete generated history. The original
+PIL processor is requested on each native input, and current-turn token IDs,
+pixels and image grids are audited outside timing against the deployment pin.
+New processor/dependency versions require fresh input audits before admitting
+performance claims. Quantization, vision pruning and history truncation are
+outside this comparison.
+
+The selected 0.30.0 profile enables vision compilation/graphs, O3 compilation
+and fusion, FULL_AND_PIECEWISE language graphs, FlashAttention, prefix caching,
+chunked prefill, multimodal caching with immutable image UUIDs and GPU image
+normalization. Native GPU n-gram speculation uses 16 drafts and synchronous
+scheduling, selected from five measured B=1 configurations. Some native runners,
+proposers and scheduler options cannot coexist; do not claim every switch is
+simultaneously enabled. Record actual graph dispatch/hit counts, not just options.
+
+A speculative step may return several tokens. Apply EOS/STOP to every new token
+prefix and commit only the earliest stopping prefix, while timing all native
+verification compute. Clear proposer state between episodes. Multi-batch replay
+routes outputs by request identity; each slot owns full history and an episode-
+specific cache salt. Finishing one episode does not clear other live prefixes.
+The native paged KV cache retains normal LRU eviction. Admission and vision/text
+graph coverage scale with B, including partial batches. Slot removal/refill order
+matches the EmbodiInfer benchmark.
+
+E2E spans decoded CPU RGB through CPU action parsing. Complete forward starts
+at native vision execution after initial transfers and ends when every request
+finishes, including prefill, all decode and host dispatch/stopping checks. It
+is neither first-token latency nor summed kernel time. Startup, warmup, disk,
+HTTP and simulator execution are excluded. For mixed requests, diagnostic
+prefill/decode intervals may overlap and do not isolate those phases. Report
+whole-batch means and observation-weighted amortization separately, with startup
+and measured memory, graph coverage, prefix hits and preemptions. Partial probes
+and OOM evidence cannot replace a complete-workload report.
+
+The selected modern profile completes both splits at B=1/2/4. All four B=2/4
+runs pass independent history/order, input, private-cache and graph checks across
+13,752 observations and 384 input audits. Native RxR B=4 completes where the
+selected EmbodiInfer comparison OOMs, without truncating history. EmbodiInfer
+remains faster in all five completed paired conditions. Neither engine achieves
+40 ms E2E; near-40 ms R2R B=4 numbers describe amortized forward only. No native
+vLLM closed-loop SR/SPL claim follows. The canonical benchmark README retains
+the exact conditions, comparative tables, validation limits and evidence paths.
