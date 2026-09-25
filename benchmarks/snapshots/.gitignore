@@ -1,2 +1,6 @@
 *.tar.gz
 *.tar.gz.sha256
+
+# Published ActiveVLN comparison snapshot requested for this branch.
+!20260925232656.tar.gz
+!20260925232656.tar.gz.sha256

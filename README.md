@@ -110,6 +110,10 @@ Explore [navigation and world-action benchmarks](docs/en/benchmark.md),
 [quantized StreamVLN](benchmarks/streamvln-quant-benchmark/README.md), and
 [multi-GPU measurements](docs/en/parallelism.md).
 
+The [ActiveVLN EmbodiInfer/vLLM comparison](benchmarks/activevln-benchmark/README.md#feature-matched-embodiinfer-and-vllm-comparison)
+reports R2R/RxR batch sizes 1/2/4 with separate E2E, complete-forward and amortized
+timings, and includes a [complete test snapshot](benchmarks/activevln-benchmark/README.md#complete-test-snapshot).
+
 ## Supported models
 
 ✓ **Implemented** · ◐ **Experimental** · ○ **Planned**
