@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from ...types import Observation
-from .prompt_activevln import render_turn_text
+from .prompt_activevln import SYSTEM_PROMPTS, render_turn_text
 
 
 @dataclass
@@ -49,9 +49,18 @@ class ProcessedTurn:
 
 
 class ActiveVLNProcessor:
-    def __init__(self, checkpoint: str, revision: str, *, allow_download: bool = False) -> None:
+    def __init__(
+        self,
+        checkpoint: str,
+        revision: str,
+        *,
+        allow_download: bool = False,
+        action_space: str = "r2r",
+    ) -> None:
         from transformers import AutoProcessor
 
+        if action_space not in SYSTEM_PROMPTS:
+            raise ValueError(f"unknown ActiveVLN action space: {action_space!r}")
         path = Path(checkpoint)
         if not path.exists() and not allow_download:
             raise ValueError("activevln requires a local checkpoint snapshot unless allow_download=True")
@@ -61,6 +70,7 @@ class ActiveVLNProcessor:
             trust_remote_code=False,
             local_files_only=not allow_download,
         )
+        self.action_space = action_space
 
     @property
     def tokenizer(self):
@@ -87,7 +97,9 @@ class ActiveVLNProcessor:
     def process_turn(self, observation: Observation, *, initial: bool) -> ProcessedTurn:
         if not observation.instruction:
             raise ValueError("ActiveVLN requires Observation.instruction")
-        text = render_turn_text(self._processor, observation.instruction, initial=initial)
+        text = render_turn_text(
+            self._processor, observation.instruction, initial=initial, action_space=self.action_space
+        )
         encoded = self._processor(
             text=[text],
             images=[self._pil_image(observation)],

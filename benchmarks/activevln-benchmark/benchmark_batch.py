@@ -84,8 +84,8 @@ def run(config: dict[str, Any], output: Path) -> int:
     if len(config["datasets"]) != 1:
         raise ValueError("batch memory measurement requires exactly one split per fresh process")
     batch_size = config["batch_size"]
-    if type(batch_size) is not int or batch_size not in (1, 2, 4):
-        raise ValueError("batch_size must be 1, 2 or 4")
+    if type(batch_size) is not int or batch_size not in (1, 2, 4, 8):
+        raise ValueError("batch_size must be 1, 2, 4 or 8 (8 is a local lane extension)")
     if config.get("do_sample", False):
         raise ValueError("tensor batching currently requires greedy decoding")
     spec = config["datasets"][0]
@@ -134,8 +134,9 @@ def run(config: dict[str, Any], output: Path) -> int:
             attention=config["attention"],
             max_new_tokens=config["max_new_tokens"],
             max_context=config["max_context"],
-            do_sample=False,
+            do_sample=config.get("do_sample", False),
             repetition_penalty=config["repetition_penalty"],
+            action_space=config.get("action_space", "r2r"),
         )
         policy.to(device=device, dtype=getattr(torch, config["dtype"])).eval()
         report["model_load_seconds"] = time.perf_counter() - start

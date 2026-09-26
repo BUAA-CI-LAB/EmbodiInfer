@@ -19,7 +19,12 @@ from ..decoder import AutoregressiveDecoder, DecodeResult
 from ..factory import register_policy
 from .cache_activevln import ActiveVLNMemory, BranchedActiveVLNMemory
 from .processor_activevln import ActiveVLNBatch, ActiveVLNProcessor, ProcessedTurn
-from .prompt_activevln import actions_to_tensor, parse_r2r_actions
+from .prompt_activevln import (
+    DEFAULT_TURN_ANGLE,
+    SYSTEM_PROMPTS,
+    actions_to_tensor,
+    parse_navigation_actions,
+)
 
 if TYPE_CHECKING:
     from .batching_activevln import ActiveVLNBatchedRuntime
@@ -352,7 +357,7 @@ class _ActiveVLNDecoder(AutoregressiveDecoder):
             partial_text = self.policy.tokenizer.decode(
                 torch.cat(tokens, dim=1)[0].tolist(), skip_special_tokens=True
             ).strip()
-            partial = parse_r2r_actions(partial_text)
+            partial = self.policy.parse_actions(partial_text)
             if partial.valid and partial.actions[-1].name == "stop":
                 stop_reason = "stop"
                 break
@@ -368,7 +373,7 @@ class _ActiveVLNDecoder(AutoregressiveDecoder):
         token_logprobs = generation.token_logprobs
         action_mask = torch.ones_like(token_ids, dtype=torch.bool)
         text = self.policy.tokenizer.decode(token_ids[0].tolist(), skip_special_tokens=True).strip()
-        parsed = parse_r2r_actions(text)
+        parsed = self.policy.parse_actions(text)
         actions, parsed_mask = actions_to_tensor(parsed)
         trace = DecodeTrace(
             token_ids=token_ids[0],
@@ -377,7 +382,10 @@ class _ActiveVLNDecoder(AutoregressiveDecoder):
             text=text,
             parsed_actions=parsed,
             stop_reason=generation.stop_reason,
-            meta={"parsed_action_mask": parsed_mask, "runner_profile": "official_eval_r2r"},
+            meta={
+                "parsed_action_mask": parsed_mask,
+                "runner_profile": f"official_eval_{self.policy.action_space}",
+            },
         )
         return DecodeResult(
             actions=actions[None].to(token_ids.device),
@@ -502,7 +510,10 @@ class ActiveVLNPolicy(VLAPolicy):
         top_p: float = 0.8,
         repetition_penalty: float = 1.05,
         do_sample: bool = True,
+        action_space: str = "r2r",
     ) -> None:
+        if action_space not in SYSTEM_PROMPTS:
+            raise ValueError(f"unknown ActiveVLN action space: {action_space!r}")
         config_dtype = str(getattr(qwen.config, "torch_dtype", "float32")).removeprefix("torch.")
         super().__init__(
             VLAPolicyConfig(
@@ -522,6 +533,7 @@ class ActiveVLNPolicy(VLAPolicy):
         self.top_p = top_p
         self.repetition_penalty = repetition_penalty
         self.do_sample = do_sample
+        self.action_space = action_space
         self.eos_token_ids = tuple(
             int(x)
             for x in (
@@ -532,6 +544,16 @@ class ActiveVLNPolicy(VLAPolicy):
         )
         self._decoder = _ActiveVLNDecoder(self)
         self._inference_runtime: ActiveVLNGraphRuntime | None = None
+
+    @property
+    def default_turn_angle(self) -> int:
+        """Missing-turn-angle default of the official evaluator for this profile."""
+        return DEFAULT_TURN_ANGLE[self.action_space]
+
+    def parse_actions(self, text: str):
+        return parse_navigation_actions(
+            text, default_turn_angle=DEFAULT_TURN_ANGLE[self.action_space]
+        )
 
     @property
     def _inference_graphs(self) -> ActiveVLNGraphRuntime | None:
@@ -901,6 +923,7 @@ def _build_activevln(
     top_p: float = 0.8,
     repetition_penalty: float = 1.05,
     do_sample: bool = True,
+    action_space: str = "r2r",
     **overrides,
 ) -> VLAPolicy:
     if checkpoint is None:
@@ -909,6 +932,8 @@ def _build_activevln(
         )
     if overrides:
         raise ValueError(f"unknown ActiveVLN overrides: {sorted(overrides)}")
+    if action_space not in SYSTEM_PROMPTS:
+        raise ValueError(f"unknown ActiveVLN action space: {action_space!r}")
     path = Path(checkpoint)
     if not path.exists() and not allow_download:
         raise ValueError("activevln checkpoint must be a local snapshot unless allow_download=True")
@@ -925,7 +950,9 @@ def _build_activevln(
         torch_dtype="auto",
     )
     _validate_qwen(qwen)
-    processor = ActiveVLNProcessor(checkpoint, revision, allow_download=allow_download)
+    processor = ActiveVLNProcessor(
+        checkpoint, revision, allow_download=allow_download, action_space=action_space
+    )
     return ActiveVLNPolicy(
         qwen,
         processor,
@@ -936,4 +963,5 @@ def _build_activevln(
         top_p=top_p,
         repetition_penalty=repetition_penalty,
         do_sample=do_sample,
+        action_space=action_space,
     )
