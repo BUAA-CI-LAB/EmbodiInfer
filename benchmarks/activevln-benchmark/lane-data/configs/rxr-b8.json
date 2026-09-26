@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "model": "activevln",
+  "checkpoint": "/home/qy/models/activevln/Qwen2.5-VL-3B_rl_rxr_4000_step350",
+  "checkpoint_revision": null,
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 42,
+  "warmup_calls": 33,
+  "repeats": 1,
+  "attention": "sdpa",
+  "cuda_graph": true,
+  "fused_ops": true,
+  "split_attention": true,
+  "tree_decode": true,
+  "tree_fp32_projection": false,
+  "tree_repeat_actions": 1,
+  "query_bucket_size": 1,
+  "prewarm_context_buckets": [
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    128000
+  ],
+  "graph_workspace_tokens": 128000,
+  "max_new_tokens": 512,
+  "max_context": 128000,
+  "do_sample": false,
+  "repetition_penalty": 1.05,
+  "cpu_threads": 4,
+  "max_steps_per_episode": null,
+  "action_space": "rxr",
+  "datasets": [
+    {
+      "name": "RxR",
+      "root": "/home/qy/benchmark-data/navigation/RxR",
+      "annotations": "/home/qy/benchmark-data/navigation/RxR/annotations.json",
+      "episode_limit": 48
+    }
+  ],
+  "batch_size": 8,
+  "kv_pool_tokens": 256000,
+  "output_dir": "runs/opt-full-rxr-b8"
+}
