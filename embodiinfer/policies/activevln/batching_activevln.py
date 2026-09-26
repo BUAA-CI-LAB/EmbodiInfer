@@ -16,7 +16,6 @@ from .cache_activevln import ActiveVLNMemory, _layer_views
 from .cuda_graph import ActiveVLNGraphRuntime, _TextGraph
 from .modeling_activevln import ActiveVLNGeneration, PreparedActiveVLNTurn
 from .processor_activevln import ProcessedTurn
-from .prompt_activevln import parse_r2r_actions
 
 if TYPE_CHECKING:
     from .modeling_activevln import ActiveVLNPolicy
@@ -167,12 +166,15 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 torch.full((batch_size,), allocated_tokens, device=self.device, dtype=torch.long),
             )
         self._resident_rows = [None] * batch_size
+        self._owned_rows: list[tuple[torch.Tensor, object] | None] = [None] * batch_size
 
     def reset_stats(self) -> None:
         """Reset graph/tree and cache reuse counts without dropping prepared graphs."""
         super().reset_stats()
         self.counters.update(
             memory_resident_hits=0,
+            owned_kv_allocations=0,
+            owned_kv_reuses=0,
             pool_relocations=0,
             tree_verified_rows=0,
             tree_candidate_nodes=0,
@@ -591,12 +593,53 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                     text = self.policy.tokenizer.decode(
                         torch.stack(tokens[row]).tolist(), skip_special_tokens=True
                     ).strip()
-                    parsed = parse_r2r_actions(text)
+                    parsed = self.policy.parse_actions(text)
                     if parsed.valid and parsed.actions[-1].name == "stop":
                         reasons[row], active[row] = "stop", False
             if not any(active):
                 break
         return self._finish_generation(prefix, tokens, scores, lengths, coordinates, reasons)
+
+    _OWNED_KV_ALIGNMENT = 4096
+
+    def _commit_row_kv(self, row: int, length: int, memory: ActiveVLNMemory | None) -> torch.Tensor:
+        """Return this row's persistent committed-KV buffer, filled from scratch.
+
+        The buffer replaces the previous ``_row_kv(...).clone().contiguous()``
+        per-call allocation. Reuse requires ownership identity: a buffer is
+        topped up in place only when the caller supplies exactly the memory it
+        was last returned with (rows can be reordered between calls), or when
+        its previous owner has been dropped and the slot starts a fresh episode
+        (``memory is None``). A different live owner always gets a fresh buffer
+        so earlier memories keep their committed histories. Capacity grows by a
+        fixed token alignment instead of a full-history reallocation.
+        """
+        source = self._row_kv(row, 0, length)
+        entry = self._owned_rows[row]
+        if entry is not None:
+            owned, owner = entry
+            holder = owner()
+            reusable = owned.shape[-2] >= length and (
+                (memory is not None and holder is memory)
+                or (memory is None and holder is None)
+            )
+            if reusable:
+                self.counters["owned_kv_reuses"] += 1
+                owned[..., :length, :].copy_(source)
+                return owned
+            if holder is None:
+                # Let the dead buffer go before allocating its replacement.
+                self._owned_rows[row] = None
+        alignment = self._OWNED_KV_ALIGNMENT
+        capacity = min(
+            self.policy.max_context,
+            max(alignment, ((length + alignment - 1) // alignment) * alignment),
+        )
+        capacity = max(capacity, length)
+        owned = source.new_empty((*source.shape[:-2], capacity, source.shape[-1]))
+        self.counters["owned_kv_allocations"] += 1
+        owned[..., :length, :].copy_(source)
+        return owned
 
     def _finish_generation(self, prefix, tokens, scores, lengths, coordinates, reasons):
         count = len(prefix.prepared.turns)
@@ -614,8 +657,8 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 ),
                 dim=1,
             )
-            packed = self._row_kv(row, 0, lengths[row]).clone().contiguous()
             old = prefix.prepared.turns[row].memory
+            packed = self._commit_row_kv(row, lengths[row], old)
             memory = ActiveVLNMemory(
                 layers=_layer_views(packed),
                 token_ids_buffer=ids,
@@ -628,6 +671,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 _next_position=coordinates[row],
                 _packed_kv=packed,
             )
+            self._owned_rows[row] = (packed, ref(memory))
             self._resident_rows[row] = (ref(memory), memory.seq_len)
             generations.append(ActiveVLNGeneration(memory, response[None], response_scores, reasons[row]))
         return tuple(generations)
