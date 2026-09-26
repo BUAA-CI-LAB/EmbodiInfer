@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 import torch
 
 from ...exceptions import SessionCancelledError
-from .prompt_activevln import parse_r2r_actions
 
 if TYPE_CHECKING:
     from .batching_activevln import ActiveVLNBatchedRuntime, ActiveVLNBatchPrefix
@@ -142,7 +141,7 @@ def tree_greedy_scores(
 def _stop_reason(policy, ids: list[int]) -> str | None:
     if ids[-1] in policy.eos_token_ids:
         return "eos"
-    partial = parse_r2r_actions(policy.tokenizer.decode(ids, skip_special_tokens=True).strip())
+    partial = policy.parse_actions(policy.tokenizer.decode(ids, skip_special_tokens=True).strip())
     return "stop" if partial.valid and partial.actions[-1].name == "stop" else None
 
 

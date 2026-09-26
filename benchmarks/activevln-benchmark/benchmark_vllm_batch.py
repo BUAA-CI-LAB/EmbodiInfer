@@ -22,12 +22,16 @@ import numpy as np
 import torch
 from benchmark import cuda_device, digest_json, load_navigation, provenance, read_rgb
 from benchmark_vllm import save
-from benchmark_vllm_modern import ModernVLLMReplay, drain_inflight, stopping_prefix
+from benchmark_vllm_modern import (
+    ModernVLLMReplay,
+    drain_inflight,
+    parse_actions_for,
+    stopping_prefix,
+)
 from PIL import Image
 
 from embodiinfer.policies.activevln.prompt_activevln import (
     actions_to_tensor,
-    parse_r2r_actions,
     render_turn_text,
 )
 
@@ -70,7 +74,11 @@ def summarize_batches(batches: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def collect_outputs(
-    engine: Any, tokenizer: Any, identities: list[str], timer: Any
+    engine: Any,
+    tokenizer: Any,
+    identities: list[str],
+    timer: Any,
+    action_space: str = "r2r",
 ) -> tuple[dict[str, Any], int]:
     """Route unordered cumulative outputs and stop each request independently."""
     records = {
@@ -97,7 +105,7 @@ def collect_outputs(
                 raise RuntimeError("native cumulative output rewrote retained tokens")
             if complete:
                 timer.first_token()
-            tokens, reason = stopping_prefix(tokenizer, complete, len(previous))
+            tokens, reason = stopping_prefix(tokenizer, complete, len(previous), action_space)
             record.update(token_ids=tokens, native_returned_tokens=len(complete))
             if reason is not None:
                 record["stop_reason"] = reason
@@ -196,7 +204,12 @@ class BatchedVLLMReplay(ModernVLLMReplay):
         start = time.perf_counter_ns()
         identities, requests, turns = [], [], []
         for session, rgb in zip(sessions, images, strict=True):
-            turn = render_turn_text(self.processor, session.episode.instruction, initial=not session.images)
+            turn = render_turn_text(
+                self.processor,
+                session.episode.instruction,
+                initial=not session.images,
+                action_space=self.action_space,
+            )
             session.history.extend(self.tokenizer.encode(turn, add_special_tokens=False))
             session.images.append(Image.fromarray(rgb))
             session.image_ids.append(f"{session.identity}-frame-{len(session.images)}")
@@ -218,7 +231,9 @@ class BatchedVLLMReplay(ModernVLLMReplay):
             turns.append(turn)
         self.call_index += 1
         added = time.perf_counter_ns()
-        records, steps = collect_outputs(self.engine, self.tokenizer, identities, self.timer)
+        records, steps = collect_outputs(
+            self.engine, self.tokenizer, identities, self.timer, self.action_space
+        )
         drain_steps = drain_inflight(self.engine, self.core)
         timing = self.timer.finish()
         rows = []
@@ -226,7 +241,7 @@ class BatchedVLLMReplay(ModernVLLMReplay):
             record = records[identity]
             tokens = record["token_ids"]
             decoded = self.tokenizer.decode(tokens, skip_special_tokens=True).strip()
-            parsed = parse_r2r_actions(decoded)
+            parsed = parse_actions_for(self.action_space, decoded)
             actions, mask = actions_to_tensor(parsed)
             session.history.extend(tokens)
             rows.append(
@@ -283,7 +298,7 @@ def run(config: dict[str, Any], output: Path, limit: int | None = None) -> int:
     batch_size = config["batch_size"]
     if (
         type(batch_size) is not int
-        or batch_size not in (1, 2, 4)
+        or batch_size not in (1, 2, 4, 8)
         or len(config["datasets"]) != 1
         or config["do_sample"]
     ):
