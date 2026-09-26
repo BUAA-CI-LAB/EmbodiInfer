@@ -22,13 +22,21 @@ from PIL import Image
 from transformers import AutoProcessor
 
 from embodiinfer.policies.activevln.prompt_activevln import (
+    DEFAULT_TURN_ANGLE,
     actions_to_tensor,
-    parse_r2r_actions,
+    parse_navigation_actions,
     render_turn_text,
 )
 
 
-def stopping_prefix(tokenizer: Any, tokens: list[int], checked: int) -> tuple[list[int], str | None]:
+def parse_actions_for(action_space: str, text: str):
+    """Official parser for the selected action space (local lane extension)."""
+    return parse_navigation_actions(text, default_turn_angle=DEFAULT_TURN_ANGLE[action_space])
+
+
+def stopping_prefix(
+    tokenizer: Any, tokens: list[int], checked: int, action_space: str = "r2r"
+) -> tuple[list[int], str | None]:
     """Keep the first EOS or complete STOP, including inside a speculative block.
 
     Tokens after that position may have been verified in the same native model
@@ -37,7 +45,9 @@ def stopping_prefix(tokenizer: Any, tokens: list[int], checked: int) -> tuple[li
     for end in range(checked + 1, len(tokens) + 1):
         if tokens[end - 1] in (151645, 151643):
             return tokens[:end], "eos"
-        parsed = parse_r2r_actions(tokenizer.decode(tokens[:end], skip_special_tokens=True).strip())
+        parsed = parse_actions_for(
+            action_space, tokenizer.decode(tokens[:end], skip_special_tokens=True).strip()
+        )
         if parsed.valid and parsed.actions[-1].name == "stop":
             return tokens[:end], "stop"
     return tokens, None
@@ -106,8 +116,9 @@ class ModernVLLMReplay:
         self.tokenizer = self.processor.tokenizer
         self.speculation = speculation
         batch_size = config.get("batch_size", 1)
-        if type(batch_size) is not int or batch_size not in (1, 2, 4):
-            raise ValueError("batch_size must be 1, 2 or 4")
+        if type(batch_size) is not int or batch_size not in (1, 2, 4, 8):
+            raise ValueError("batch_size must be 1, 2, 4 or 8 (8 is a local lane extension)")
+        self.action_space = config.get("action_space", "r2r")
         query_width = speculative_tokens + 1 if speculation != "none" else 1
         per_sequence_budget = ((1024 + query_width - 1) // query_width) * query_width
         token_budget = batch_size * per_sequence_budget
@@ -321,7 +332,9 @@ class ModernVLLMReplay:
             self.timer.first_token()
             accepted_lower_bound += max(0, len(complete) - len(tokens) - 1)
             returned_tokens = len(complete)
-            tokens, reason = stopping_prefix(self.tokenizer, complete, len(tokens))
+            tokens, reason = stopping_prefix(
+                self.tokenizer, complete, len(tokens), self.action_space
+            )
             if reason:
                 stop_reason = reason
                 self.engine.abort_request([identity])
@@ -334,7 +347,7 @@ class ModernVLLMReplay:
         if self.engine.has_unfinished_requests():
             raise RuntimeError("native request remained active after stopping")
         text = self.tokenizer.decode(tokens, skip_special_tokens=True).strip()
-        parsed = parse_r2r_actions(text)
+        parsed = parse_actions_for(self.action_space, text)
         actions, mask = actions_to_tensor(parsed)
         self.history.extend(tokens)
         torch.cuda.synchronize(self.device)

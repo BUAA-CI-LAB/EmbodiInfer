@@ -419,6 +419,7 @@ def main() -> None:
         max_context=config["max_context"],
         do_sample=config["do_sample"],
         repetition_penalty=config["repetition_penalty"],
+        action_space=config.get("action_space", "r2r"),
     )
     policy.to(device=device, dtype=getattr(torch, config["dtype"])).eval()
     load_seconds = time.perf_counter() - started
