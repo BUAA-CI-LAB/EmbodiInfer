@@ -1,0 +1,51 @@
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:00<00:00, 100.32it/s]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+RxR episode 1: 22 calls; last E2E 36.65 ms
+RxR episode 5: 22 calls; last E2E 44.97 ms
+RxR episode 6: 22 calls; last E2E 34.94 ms
+RxR episode 13: 50 calls; last E2E 41.60 ms
+RxR episode 14: 50 calls; last E2E 47.80 ms
+RxR episode 18: 50 calls; last E2E 44.58 ms
+RxR episode 19: 126 calls; last E2E 82.68 ms
+RxR episode 20: 126 calls; last E2E 143.01 ms
+RxR episode 27: 126 calls; last E2E 126.31 ms
+RxR episode 31: 101 calls; last E2E 117.48 ms
+RxR episode 35: 101 calls; last E2E 105.35 ms
+RxR episode 36: 101 calls; last E2E 92.66 ms
+RxR episode 37: 73 calls; last E2E 103.07 ms
+RxR episode 38: 73 calls; last E2E 54.46 ms
+RxR episode 39: 73 calls; last E2E 56.18 ms
+RxR episode 52: 63 calls; last E2E 48.25 ms
+RxR episode 53: 63 calls; last E2E 45.22 ms
+RxR episode 54: 63 calls; last E2E 42.29 ms
+RxR episode 55: 75 calls; last E2E 79.24 ms
+RxR episode 56: 75 calls; last E2E 63.39 ms
+RxR episode 57: 75 calls; last E2E 73.62 ms
+RxR episode 64: 20 calls; last E2E 59.56 ms
+RxR episode 71: 20 calls; last E2E 35.13 ms
+RxR episode 72: 20 calls; last E2E 35.29 ms
+RxR episode 73: 147 calls; last E2E 79.42 ms
+RxR episode 74: 147 calls; last E2E 77.97 ms
+RxR episode 75: 147 calls; last E2E 95.53 ms
+RxR episode 85: 88 calls; last E2E 55.62 ms
+RxR episode 86: 88 calls; last E2E 60.89 ms
+RxR episode 87: 88 calls; last E2E 67.21 ms
+RxR episode 91: 136 calls; last E2E 88.82 ms
+RxR episode 92: 136 calls; last E2E 120.84 ms
+RxR episode 93: 136 calls; last E2E 146.61 ms
+RxR episode 100: 65 calls; last E2E 62.16 ms
+RxR episode 101: 65 calls; last E2E 69.93 ms
+RxR episode 102: 65 calls; last E2E 45.13 ms
+RxR episode 112: 89 calls; last E2E 68.14 ms
+RxR episode 113: 89 calls; last E2E 55.17 ms
+RxR episode 117: 89 calls; last E2E 157.94 ms
+RxR episode 121: 65 calls; last E2E 91.35 ms
+RxR episode 122: 65 calls; last E2E 55.09 ms
+RxR episode 123: 65 calls; last E2E 43.74 ms
+RxR episode 127: 130 calls; last E2E 140.72 ms
+RxR episode 128: 130 calls; last E2E 69.15 ms
+RxR episode 129: 130 calls; last E2E 78.33 ms
+RxR episode 136: 43 calls; last E2E 43.09 ms
+RxR episode 137: 43 calls; last E2E 40.67 ms
+RxR episode 138: 43 calls; last E2E 46.43 ms
+{"report": "/home/qy/lxygit/activevln-benchmark-review/EmbodiInfer-opt/benchmarks/activevln-benchmark/runs/opt-full-rxr-b1/activevln-rxr.json", "metrics": {"calls": 3879, "inference_seconds": 358.774955716, "latency_ms": {"mean": 92.49161013560196, "p50": 85.787252, "p95": 156.15119149999998, "p99": 188.43339083999982}, "calls_per_second": 10.811791453666984, "action_slots_per_second": 32.43537436100095, "generated_tokens_per_second": 201.9260231122347, "model_timing_ms": {"prefill_ms": {"mean": 42.735400419931004, "p50": 34.76015853881836, "p95": 95.65596466064453, "p99": 121.42779556274411}, "decode_ms": {"mean": 43.35008896254608, "p50": 39.7599983215332, "p95": 83.23638229370117, "p99": 109.01811050415006}, "gpu_inference_ms": {"mean": 86.0854894323858, "p50": 79.37158203125, "p95": 149.14275360107422, "p99": 181.80659484863264}, "pure_inference_ms": {"mean": 86.1059616932199, "p50": 79.390095, "p95": 149.163482, "p99": 181.82457831999983}}, "model_calls_per_second": 11.61359771536866}}

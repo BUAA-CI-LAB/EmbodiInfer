@@ -1,0 +1,18 @@
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:00<00:00, 132.07it/s]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+{"batches": 25, "observations": 200, "peak_allocated_gib": 19.72350788116455}
+{"batches": 50, "observations": 400, "peak_allocated_gib": 20.29212522506714}
+{"batches": 75, "observations": 600, "peak_allocated_gib": 20.29212522506714}
+{"batches": 100, "observations": 800, "peak_allocated_gib": 21.84126091003418}
+{"batches": 125, "observations": 1000, "peak_allocated_gib": 21.84126091003418}
+{"batches": 150, "observations": 1200, "peak_allocated_gib": 21.84126091003418}
+{"batches": 175, "observations": 1400, "peak_allocated_gib": 21.84126091003418}
+{"batches": 200, "observations": 1600, "peak_allocated_gib": 21.84126091003418}
+{"batches": 225, "observations": 1800, "peak_allocated_gib": 21.84126091003418}
+{"batches": 250, "observations": 2000, "peak_allocated_gib": 21.84126091003418}
+{"batches": 275, "observations": 2200, "peak_allocated_gib": 21.84126091003418}
+{"batches": 300, "observations": 2400, "peak_allocated_gib": 21.84126091003418}
+{"batches": 325, "observations": 2600, "peak_allocated_gib": 21.84126091003418}
+{"batches": 350, "observations": 2787, "peak_allocated_gib": 22.402379989624023}
+{"batches": 375, "observations": 2930, "peak_allocated_gib": 22.402379989624023}
+{"status": "complete", "phase": "finished", "metrics": {"batches": 396, "observations": 2997, "mean_batch_occupancy": 7.568181818181818, "batch_e2e_ms": {"mean": 274.024676239899, "p50": 277.55865700000004, "p95": 320.476806, "p99": 360.01599645}, "batch_forward_ms": {"mean": 233.1570086237374, "p50": 237.432816, "p95": 277.28787675, "p99": 313.68194735000003}, "batch_prefill_ms": {"mean": 141.2913917580036}, "batch_decode_ms": {"mean": 91.84114943128644}, "amortized_e2e_ms_per_observation": 36.20746472839507, "amortized_forward_ms_per_observation": 30.80753267100434, "observations_per_second": 27.618614213984657}, "memory": {"peak_allocated_bytes": 24246074368, "peak_reserved_bytes": 25557991424, "device_total_bytes": 33668988928, "peak_scope": "measurement"}}
