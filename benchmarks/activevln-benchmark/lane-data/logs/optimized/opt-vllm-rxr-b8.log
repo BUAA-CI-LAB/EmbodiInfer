@@ -1,0 +1,237 @@
+[transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+WARNING 09-26 02:07:52 [arg_utils.py:1812] The global random seed is set to 42. Since VLLM_ENABLE_V1_MULTIPROCESSING is set to False, this may affect the random state of the Python process that launched vLLM.
+INFO 09-26 02:07:52 [model.py:692] Resolved architecture: Qwen2_5_VLForConditionalGeneration
+INFO 09-26 02:07:52 [model.py:2361] Downcasting torch.float32 to torch.bfloat16.
+INFO 09-26 02:07:52 [model.py:2030] Using max model len 128000
+INFO 09-26 02:07:52 [scheduler.py:288] Chunked prefill is enabled with max_num_batched_tokens=8296.
+INFO 09-26 02:07:52 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+WARNING 09-26 02:07:52 [vllm.py:716] Model Runner V2 does not yet support speculative method 'ngram_gpu'; using the V1 model runner instead.
+INFO 09-26 02:07:56 [core.py:123] Initializing a V1 LLM engine (v0.30.0) with config: model='/home/qy/models/activevln/Qwen2.5-VL-3B_rl_rxr_4000_step350', speculative_config=SpeculativeConfig(method='ngram_gpu', model='/home/qy/models/activevln/Qwen2.5-VL-3B_rl_rxr_4000_step350', num_spec_tokens=16), tokenizer='/home/qy/models/activevln/Qwen2.5-VL-3B_rl_rxr_4000_step350', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128000, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=None, quantization_config=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=42, served_model_name=/home/qy/models/activevln/Qwen2.5-VL-3B_rl_rxr_4000_step350, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'ir_enable_torch_wrap': True, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen4_exp_ple_short_conv', 'vllm::qwen4_exp_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::hpc_rope_norm_forward', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': True, 'cudagraph_mm_encoder': True, 'encoder_cudagraph_token_budgets': [88, 128, 176, 256, 264, 352, 384, 440, 512, 528, 616, 640, 704, 768, 896, 1024], 'encoder_cudagraph_max_vision_items_per_batch': 8, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8296], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 17, 24, 32, 34, 51, 64, 68, 85, 96, 102, 119, 128, 136, 192, 256, 512, 1037, 2074, 3111, 4148, 5185, 6222, 7259, 8296], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 8296, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, moe_backend='auto', sparse_indexer_topk_backend='auto', linear_backend='auto', linear_backend_per_quant=None)
+INFO 09-26 02:07:56 [parallel_state.py:1827] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_903e118ea67a4f269617ee116452dd87 backend=nccl
+INFO 09-26 02:07:56 [parallel_state.py:2267] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+INFO 09-26 02:07:57 [topk_topp_sampler.py:78] Using FlashInfer for top-p & top-k sampling.
+INFO 09-26 02:07:57 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+INFO 09-26 02:07:57 [compilation.py:336] Enabled custom fusions: rope_kvcache_cat_mla
+INFO 09-26 02:07:58 [backends.py:1092] vLLM's torch.compile cache is disabled.
+INFO 09-26 02:07:58 [backends.py:1155] Dynamo bytecode transform time: 0.58 s
+INFO 09-26 02:08:24 [backends.py:393] Compiling a graph for compile range (1, 8296) takes 26.06 s
+INFO 09-26 02:08:24 [backends.py:920] collected artifacts: 1 entries, 1 artifacts, 13146024 bytes total
+INFO 09-26 02:08:24 [decorators.py:719] saved AOT compiled function to /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/849ec4655527e3e3ddf64b7ab6600fbb170c1364b773afe7def0cd08ee990c48/rank_0_0/model
+INFO 09-26 02:08:24 [monitor.py:53] torch.compile took 26.81 s in total
+INFO 09-26 02:08:24 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+WARNING 09-26 02:08:24 [__init__.py:205] min_p and logit_bias parameters won't work with speculative decoding.
+INFO 09-26 02:08:24 [gpu_model_runner.py:5317] Starting to load model /home/qy/models/activevln/Qwen2.5-VL-3B_rl_rxr_4000_step350...
+INFO 09-26 02:08:25 [cuda.py:579] Using backend AttentionBackendEnum.FLASH_ATTN for vit attention
+INFO 09-26 02:08:25 [mm_encoder_attention.py:372] Using AttentionBackendEnum.FLASH_ATTN for MMEncoderAttention.
+INFO 09-26 02:08:25 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+INFO 09-26 02:08:25 [cuda.py:478] Using AttentionBackendEnum.FLASH_ATTN backend.
+INFO 09-26 02:08:25 [flash_attn.py:1116] Using FlashAttention version 2
+INFO 09-26 02:08:25 [weight_utils.py:895] Filesystem type for checkpoints: EXT4. Checkpoint size: 15.15 GiB. Available RAM: 97.66 GiB.
+INFO 09-26 02:08:25 [weight_utils.py:918] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre). If you want to force prefetching, start vLLM with --safetensors-load-strategy=prefetch.
+Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:00<00:01,  1.85it/s]
+Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:01<00:01,  1.45it/s]
+Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:02<00:00,  1.34it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:02<00:00,  1.68it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:02<00:00,  1.60it/s]
+
+INFO 09-26 02:08:27 [default_loader.py:430] Loading weights took 2.56 seconds
+INFO 09-26 02:08:28 [gpu_model_runner.py:5348] Loading drafter model...
+INFO 09-26 02:08:29 [gpu_model_runner.py:5416] Model loading took 7.17 GiB memory and 3.440626 seconds
+INFO 09-26 02:08:29 [utils.py:320] Using LBNHC KV cache layout.
+INFO 09-26 02:08:29 [gpu_model_runner.py:6496] Encoder cache will be initialized with a budget of 8296 tokens, and profiled with 85 image items of the maximum feature size.
+[transformers] Keyword argument `use_fast` is not a valid argument for this processor and will be ignored.
+INFO 09-26 02:08:29 [backends.py:1155] Dynamo bytecode transform time: 0.07 s
+INFO 09-26 02:08:30 [backends.py:393] Compiling a graph for compile range (1, 2147483647) takes 0.33 s
+INFO 09-26 02:08:30 [backends.py:920] collected artifacts: 1 entries, 1 artifacts, 122307 bytes total
+INFO 09-26 02:08:30 [decorators.py:719] saved AOT compiled function to /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/56f7783f3e62494933c61af1286c9fec7e5db86f4baaa5cad3a0af578069721f/rank_0_0/model
+INFO 09-26 02:08:30 [monitor.py:53] torch.compile took 0.45 s in total
+INFO 09-26 02:08:30 [monitor.py:81] Initial profiling/warmup run took 0.09 s
+INFO 09-26 02:08:30 [backends.py:1155] Dynamo bytecode transform time: 0.37 s
+INFO 09-26 02:08:31 [backends.py:393] Compiling a graph for compile range (1, 2147483647) takes 1.22 s
+INFO 09-26 02:08:32 [backends.py:920] collected artifacts: 1 entries, 1 artifacts, 1548691 bytes total
+INFO 09-26 02:08:32 [decorators.py:719] saved AOT compiled function to /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 1.73 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.01 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.03 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:32 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:32 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:32 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:32 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 02:08:33 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/cb5cd440a6a3ad4f5dcf1cd5d6144c30e6b7edc6752fe62cfe553ac5fa4a2c62/rank_0_0/model
+INFO 09-26 02:08:33 [monitor.py:53] torch.compile took 0.02 s in total
+INFO 09-26 02:08:33 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:33 [backends.py:1155] Dynamo bytecode transform time: 0.14 s
+INFO 09-26 02:08:33 [backends.py:393] Compiling a graph for compile range (1, 2147483647) takes 0.53 s
+INFO 09-26 02:08:34 [backends.py:920] collected artifacts: 1 entries, 1 artifacts, 782417 bytes total
+INFO 09-26 02:08:34 [decorators.py:719] saved AOT compiled function to /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/e234623a6fb13bfd94b0b58e12f733c1f2236cd45825a6bcaac7b0d178398c19/rank_0_0/model
+INFO 09-26 02:08:34 [monitor.py:53] torch.compile took 0.74 s in total
+INFO 09-26 02:08:34 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+INFO 09-26 02:08:37 [backends.py:1155] Dynamo bytecode transform time: 3.67 s
+INFO 09-26 02:08:42 [backends.py:393] Compiling a graph for compile range (1, 8296) takes 4.56 s
+INFO 09-26 02:08:45 [backends.py:920] collected artifacts: 37 entries, 4 artifacts, 8125466 bytes total
+INFO 09-26 02:08:45 [decorators.py:719] saved AOT compiled function to /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/0afe81295693f940e8a377a72222be7967d2699b0170f1ac32211dc617d0e563/rank_0_0/model
+INFO 09-26 02:08:45 [monitor.py:53] torch.compile took 11.18 s in total
+INFO 09-26 02:08:45 [monitor.py:81] Initial profiling/warmup run took 0.01 s
+INFO 09-26 02:08:50 [encoder_cudagraph.py:207] EncoderCudaGraphManager initialized with paths={'default': [88, 128, 176, 256, 264, 352, 384, 440, 512, 528, 616, 640, 704, 768, 896, 1024]}, max_batch_size=8, max_frames_per_batch=0, use_dp=False, capture_axes=()
+INFO 09-26 02:08:50 [gpu_model_runner.py:6697] Profiling CUDA graph memory: PIECEWISE=19 (largest=8296), FULL=8 (largest=136), ENCODER=16 (largest=1024)
+INFO 09-26 02:08:51 [encoder_cudagraph.py:268] Encoder CUDA graph capture complete. Captured 16 graphs across 1 paths.
+INFO 09-26 02:08:52 [gpu_model_runner.py:6822] Estimated CUDA graph memory: 1.24 GiB total
+INFO 09-26 02:08:52 [gpu_worker.py:640] Available KV cache memory: 16.59 GiB
+INFO 09-26 02:08:52 [gpu_worker.py:655] CUDA graph memory profiling is enabled (default since v0.21.0). The current --gpu-memory-utilization=0.8500 is equivalent to --gpu-memory-utilization=0.8104 without CUDA graph memory profiling. To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.8896. To disable, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0.
+INFO 09-26 02:08:52 [kv_cache_utils.py:2395] GPU KV cache size: 483,232 tokens, Maximum concurrency for 128,000 tokens per request: 3.78x
+INFO 09-26 02:08:52 [kernel_warmup.py:172] JIT kernel warmup starting.
+JIT kernel warmup (134 compile keys):   0%|          | 0/9 [00:00<?, ?kernel/s]JIT kernel warmup (134 compile keys):  11%|█         | 1/9 [00:26<03:33, 26.64s/kernel, _DecoratedTritonJitKernel (20 keys)]JIT kernel warmup (134 compile keys):  22%|██▏       | 2/9 [00:28<01:24, 12.09s/kernel, _DecoratedTritonJitKernel (20 keys)]JIT kernel warmup (134 compile keys):  33%|███▎      | 3/9 [00:44<01:22, 13.77s/kernel, _DecoratedTritonJitKernel (60 keys)]JIT kernel warmup (134 compile keys):  44%|████▍     | 4/9 [00:52<00:56, 11.40s/kernel, _DecoratedTritonJitKernel (20 keys)]JIT kernel warmup (134 compile keys):  67%|██████▋   | 6/9 [00:52<00:16,  5.42s/kernel, _DecoratedTritonJitKernel (4 keys)] JIT kernel warmup (134 compile keys):  89%|████████▉ | 8/9 [00:52<00:03,  3.18s/kernel, _DecoratedTritonJitKernel (4 keys)]JIT kernel warmup (134 compile keys): 100%|██████████| 9/9 [00:52<00:00,  5.87s/kernel, ComputeSlotMappingKernel (1 keys)] 
+INFO 09-26 02:09:45 [kernel_warmup.py:185] JIT kernel warmup finished in 52.86s.
+INFO 09-26 02:09:45 [qwen_vl_triton_warmup.py:98] Warmed M-RoPE Triton kernels.
+INFO 09-26 02:09:45 [encoder_cudagraph.py:207] EncoderCudaGraphManager initialized with paths={'default': [88, 128, 176, 256, 264, 352, 384, 440, 512, 528, 616, 640, 704, 768, 896, 1024]}, max_batch_size=8, max_frames_per_batch=0, use_dp=False, capture_axes=()
+INFO 09-26 02:09:45 [gpu_model_runner.py:6658] Initialized EncoderCudaGraphManager for vision encoder
+INFO 09-26 02:09:45 [gpu_model_runner.py:6883] Rank 0: Torch profiler disabled for CUDA graph capture
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/19 [00:00<?, ?it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   5%|▌         | 1/19 [00:00<00:04,  3.88it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  11%|█         | 2/19 [00:00<00:03,  4.40it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  16%|█▌        | 3/19 [00:00<00:03,  4.84it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  21%|██        | 4/19 [00:00<00:02,  5.39it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  26%|██▋       | 5/19 [00:00<00:02,  6.06it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  37%|███▋      | 7/19 [00:01<00:01,  8.02it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  53%|█████▎    | 10/19 [00:01<00:00, 12.93it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  79%|███████▉  | 15/19 [00:01<00:00, 21.60it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 19/19 [00:01<00:00, 13.72it/s]
+Capturing CUDA graphs (decode, FULL):   0%|          | 0/8 [00:00<?, ?it/s]Capturing CUDA graphs (decode, FULL):  75%|███████▌  | 6/8 [00:00<00:00, 55.30it/s]Capturing CUDA graphs (decode, FULL): 100%|██████████| 8/8 [00:00<00:00, 55.47it/s]
+INFO 09-26 02:09:48 [encoder_cudagraph.py:268] Encoder CUDA graph capture complete. Captured 16 graphs across 1 paths.
+INFO 09-26 02:09:48 [gpu_model_runner.py:6929] Graph capturing finished in 3 secs, took 1.21 GiB
+INFO 09-26 02:09:48 [gpu_worker.py:825] CUDA graph pool memory: 1.21 GiB (actual), 1.24 GiB (estimated), difference: 0.03 GiB (2.7%).
+INFO 09-26 02:09:48 [gpu_worker.py:888] Free memory on device (28.34/31.36 GiB) on startup. Desired GPU memory utilization is (0.85, 26.65 GiB). Actual usage is 8.06 GiB for consumed memory (weights + non-torch), 2.0 GiB for peak activation, and 1.21 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=16356830925` (15.23 GiB) to fit into requested memory, or `--kv-cache-memory=18167669248` (16.92 GiB) to fully utilize gpu memory. Current kv cache memory in use is 16.59 GiB.
+INFO 09-26 02:09:49 [jit_monitor.py:85] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+WARNING 09-26 02:09:49 [torch_utils.py:275] OMP_NUM_THREADS=4 is set; leaving Torch threads at 4 for serving. Multi-threaded torch CPU ops during serving can degrade performance through spin-wait contention and cgroup CPU-quota throttling.
+INFO 09-26 02:09:49 [core.py:362] init engine (profile, create kv cache, warmup model) took 80.37 s (compilation: 41.82 s — language_model: 37.99 s, encoder: 3.83 s)
+INFO 09-26 02:10:03 [block_pool.py:854] Successfully reset prefix cache
+{"batches": 25, "observations": 200, "metrics": {"batches": 25, "observations": 200, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 241.451826, "p50": 233.178483, "p95": 301.2665719999999, "p99": 313.89710183999995}, "batch_forward_ms": {"mean": 185.36777376, "p50": 181.55087, "p95": 236.23669439999992, "p99": 248.55235531999998}, "amortized_e2e_ms_per_observation": 30.18147825, "amortized_forward_ms_per_observation": 23.17097172, "observations_per_second": 33.13290328978502}}
+{"batches": 50, "observations": 400, "metrics": {"batches": 50, "observations": 400, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 305.22232536, "p50": 311.61308399999996, "p95": 436.6986179499999, "p99": 478.2351352499999}, "batch_forward_ms": {"mean": 233.29673764, "p50": 244.487937, "p95": 332.2644157999999, "p99": 372.0474256299999}, "amortized_e2e_ms_per_observation": 38.15279067, "amortized_forward_ms_per_observation": 29.162092205, "observations_per_second": 26.21040250107608}}
+{"batches": 75, "observations": 600, "metrics": {"batches": 75, "observations": 600, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 356.87392561333337, "p50": 366.804011, "p95": 501.65721909999996, "p99": 544.2911237000001}, "batch_forward_ms": {"mean": 274.33173701333334, "p50": 272.209438, "p95": 384.2585414, "p99": 424.8545240000001}, "amortized_e2e_ms_per_observation": 44.60924070166667, "amortized_forward_ms_per_observation": 34.29146712666667, "observations_per_second": 22.41688009638412}}
+{"batches": 100, "observations": 800, "metrics": {"batches": 100, "observations": 800, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 412.5571273399999, "p50": 417.50066400000003, "p95": 622.8503929999999, "p99": 664.71591198}, "batch_forward_ms": {"mean": 314.96670668999997, "p50": 326.30160550000005, "p95": 474.91775234999994, "p99": 527.4589075800001}, "amortized_e2e_ms_per_observation": 51.56964091749999, "amortized_forward_ms_per_observation": 39.370838336249996, "observations_per_second": 19.39125388908134}}
+{"batches": 125, "observations": 1000, "metrics": {"batches": 125, "observations": 1000, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 461.692701512, "p50": 455.856501, "p95": 699.8953432, "p99": 745.79368272}, "batch_forward_ms": {"mean": 346.93802127199996, "p50": 352.883353, "p95": 526.398614, "p99": 572.7983714400001}, "amortized_e2e_ms_per_observation": 57.711587689, "amortized_forward_ms_per_observation": 43.367252658999995, "observations_per_second": 17.327542700590143}}
+{"batches": 150, "observations": 1200, "metrics": {"batches": 150, "observations": 1200, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 456.54654110666667, "p50": 444.4038945, "p95": 688.1889353499998, "p99": 745.57749597}, "batch_forward_ms": {"mean": 344.57719022, "p50": 344.50601, "p95": 520.5230037499999, "p99": 572.47391669}, "amortized_e2e_ms_per_observation": 57.06831763833333, "amortized_forward_ms_per_observation": 43.0721487775, "observations_per_second": 17.52285753957973}}
+{"batches": 175, "observations": 1400, "metrics": {"batches": 175, "observations": 1400, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 439.1647124571428, "p50": 425.621208, "p95": 681.6629305, "p99": 745.36130922}, "batch_forward_ms": {"mean": 330.5421525371429, "p50": 330.319369, "p95": 517.6002608, "p99": 572.14946194}, "amortized_e2e_ms_per_observation": 54.89558905714285, "amortized_forward_ms_per_observation": 41.31776906714286, "observations_per_second": 18.216399845150818}}
+{"batches": 200, "observations": 1600, "metrics": {"batches": 200, "observations": 1600, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 433.70512222, "p50": 408.09468, "p95": 671.3071699999998, "p99": 745.14512247}, "batch_forward_ms": {"mean": 325.70385083, "p50": 313.849703, "p95": 503.06401644999977, "p99": 571.8250071900001}, "amortized_e2e_ms_per_observation": 54.2131402775, "amortized_forward_ms_per_observation": 40.71298135375, "observations_per_second": 18.44571251326366}}
+{"batches": 225, "observations": 1800, "metrics": {"batches": 225, "observations": 1800, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 425.5376161822222, "p50": 401.462095, "p95": 663.4664007999999, "p99": 741.1886705999999}, "batch_forward_ms": {"mean": 320.1581464533333, "p50": 304.63892, "p95": 498.92373119999996, "p99": 565.5552733999998}, "amortized_e2e_ms_per_observation": 53.19220202277778, "amortized_forward_ms_per_observation": 40.01976830666666, "observations_per_second": 18.799748120444114}}
+{"batches": 250, "observations": 2000, "metrics": {"batches": 250, "observations": 2000, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 422.84303234799995, "p50": 400.34900500000003, "p95": 658.59071985, "p99": 737.0763743499998}, "batch_forward_ms": {"mean": 317.18425138000003, "p50": 300.7654565, "p95": 493.6210887499999, "p99": 559.0378196499997}, "amortized_e2e_ms_per_observation": 52.855379043499994, "amortized_forward_ms_per_observation": 39.648031422500004, "observations_per_second": 18.919550253854005}}
+{"batches": 275, "observations": 2200, "metrics": {"batches": 275, "observations": 2200, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 429.9683414872727, "p50": 408.355516, "p95": 650.0234964000002, "p99": 732.9640780999998}, "batch_forward_ms": {"mean": 320.6430227490909, "p50": 308.65703, "p95": 490.074453, "p99": 552.5203658999998}, "amortized_e2e_ms_per_observation": 53.74604268590909, "amortized_forward_ms_per_observation": 40.08037784363636, "observations_per_second": 18.606021020821608}}
+{"batches": 300, "observations": 2400, "metrics": {"batches": 300, "observations": 2400, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 442.30703771333344, "p50": 424.4299135, "p95": 660.9118410500001, "p99": 728.8517818499998}, "batch_forward_ms": {"mean": 329.3465369233333, "p50": 322.1029545, "p95": 499.76145275000005, "p99": 548.2840711399998}, "amortized_e2e_ms_per_observation": 55.28837971416668, "amortized_forward_ms_per_observation": 41.16831711541666, "observations_per_second": 18.086983289614608}}
+{"batches": 325, "observations": 2600, "metrics": {"batches": 325, "observations": 2600, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 454.97580170769226, "p50": 435.874944, "p95": 669.5644564, "p99": 741.1886705999999}, "batch_forward_ms": {"mean": 336.70548868923083, "p50": 331.902132, "p95": 506.17853, "p99": 547.49340676}, "amortized_e2e_ms_per_observation": 56.87197521346153, "amortized_forward_ms_per_observation": 42.088186086153854, "observations_per_second": 17.583352718920533}}
+{"batches": 350, "observations": 2800, "metrics": {"batches": 350, "observations": 2800, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 464.5035653714286, "p50": 450.564564, "p95": 689.09154725, "p99": 746.04076638}, "batch_forward_ms": {"mean": 343.7820248057143, "p50": 338.374998, "p95": 517.7943623, "p99": 551.52599098}, "amortized_e2e_ms_per_observation": 58.06294567142857, "amortized_forward_ms_per_observation": 42.972753100714286, "observations_per_second": 17.222688040301694}}
+{"batches": 375, "observations": 3000, "metrics": {"batches": 375, "observations": 3000, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 464.7029807626667, "p50": 452.99065, "p95": 684.6950138000001, "p99": 746.02138188}, "batch_forward_ms": {"mean": 345.26619019733334, "p50": 343.016316, "p95": 514.5519005000001, "p99": 550.92899148}, "amortized_e2e_ms_per_observation": 58.08787259533334, "amortized_forward_ms_per_observation": 43.15827377466667, "observations_per_second": 17.21529736450252}}
+{"batches": 400, "observations": 3200, "metrics": {"batches": 400, "observations": 3200, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 469.69712659000004, "p50": 462.9354045, "p95": 681.1910017499999, "p99": 746.00199738}, "batch_forward_ms": {"mean": 349.4631336575, "p50": 348.3802225, "p95": 513.5463867499998, "p99": 550.33199198}, "amortized_e2e_ms_per_observation": 58.712140823750005, "amortized_forward_ms_per_observation": 43.6828917071875, "observations_per_second": 17.032252375227372}}
+{"batches": 425, "observations": 3400, "metrics": {"batches": 425, "observations": 3400, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 473.2794389741176, "p50": 468.530286, "p95": 677.9378519999996, "p99": 745.79368272}, "batch_forward_ms": {"mean": 351.1555120329412, "p50": 349.390843, "p95": 509.35897999999986, "p99": 549.76530472}, "amortized_e2e_ms_per_observation": 59.1599298717647, "amortized_forward_ms_per_observation": 43.89443900411765, "observations_per_second": 16.903333086560515}}
+{"batches": 450, "observations": 3558, "metrics": {"batches": 450, "observations": 3558, "mean_batch_occupancy": 7.906666666666666, "batch_e2e_ms": {"mean": 463.7996403733333, "p50": 458.5010685, "p95": 669.8981428499999, "p99": 745.57749597}, "batch_forward_ms": {"mean": 344.7587056155555, "p50": 344.1563075, "p95": 504.96999249999976, "p99": 549.19988047}, "amortized_e2e_ms_per_observation": 58.659313706576725, "amortized_forward_ms_per_observation": 43.603546241427765, "observations_per_second": 17.047591197574523}}
+{"batches": 475, "observations": 3678, "metrics": {"batches": 475, "observations": 3678, "mean_batch_occupancy": 7.743157894736842, "batch_e2e_ms": {"mean": 456.4976626926316, "p50": 450.795691, "p95": 665.8998952999998, "p99": 745.36130922}, "batch_forward_ms": {"mean": 340.04199465894743, "p50": 339.893252, "p95": 500.43244149999987, "p99": 548.6344562200001}, "amortized_e2e_ms_per_observation": 58.954972751223494, "amortized_forward_ms_per_observation": 43.91515700462208, "observations_per_second": 16.962097569271574}}
+{"batches": 500, "observations": 3753, "metrics": {"batches": 500, "observations": 3753, "mean_batch_occupancy": 7.506, "batch_e2e_ms": {"mean": 450.169497306, "p50": 444.0535105, "p95": 660.9118410499999, "p99": 745.14512247}, "batch_forward_ms": {"mean": 336.28626672400003, "p50": 334.715389, "p95": 496.2855169499999, "p99": 548.06903197}, "amortized_e2e_ms_per_observation": 59.97461994484412, "amortized_forward_ms_per_observation": 44.80232703490542, "observations_per_second": 16.673719665412698}}
+{"batches": 525, "observations": 3828, "metrics": {"batches": 525, "observations": 3828, "mean_batch_occupancy": 7.291428571428572, "batch_e2e_ms": {"mean": 446.9210916933333, "p50": 432.814715, "p95": 660.1663647999999, "p99": 744.7708016400001}, "batch_forward_ms": {"mean": 334.64135468380954, "p50": 332.284426, "p95": 490.43522299999995, "p99": 547.49340676}, "amortized_e2e_ms_per_observation": 61.29403687016718, "amortized_forward_ms_per_observation": 45.895170117293624, "observations_per_second": 16.31480077121036}}
+{"status": "complete", "phase": "finished", "metrics": {"batches": 549, "observations": 3879, "mean_batch_occupancy": 7.065573770491803, "batch_e2e_ms": {"mean": 439.267322151184, "p50": 427.18085, "p95": 658.6044012, "p99": 744.40512828}, "batch_forward_ms": {"mean": 329.19643701821497, "p50": 326.928984, "p95": 489.3404942000001, "p99": 546.9403985199999}, "amortized_e2e_ms_per_observation": 62.170085037638565, "amortized_forward_ms_per_observation": 46.59160709538541, "observations_per_second": 16.084906420742183}}

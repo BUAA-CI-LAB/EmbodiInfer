@@ -1,0 +1,5487 @@
+{
+  "schema": "rlinf_offline_performance_v2",
+  "report_created_utc": "2026-09-26T04:16:53.179439+00:00",
+  "config": {
+    "schema_version": 1,
+    "model": "activevln",
+    "checkpoint": "/home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000",
+    "checkpoint_revision": "160987313e3e869705f42400d1b8f28177044518",
+    "device": "cuda:0",
+    "dtype": "bfloat16",
+    "seed": 42,
+    "warmup_calls": 33,
+    "repeats": 1,
+    "attention": "sdpa",
+    "cuda_graph": true,
+    "fused_ops": true,
+    "split_attention": true,
+    "tree_decode": true,
+    "tree_fp32_projection": false,
+    "tree_repeat_actions": 1,
+    "query_bucket_size": 1,
+    "prewarm_context_buckets": [
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536
+    ],
+    "graph_workspace_tokens": 65536,
+    "max_new_tokens": 512,
+    "max_context": 128000,
+    "do_sample": false,
+    "repetition_penalty": 1.05,
+    "cpu_threads": 4,
+    "max_steps_per_episode": 12,
+    "datasets": [
+      {
+        "name": "R2R",
+        "root": "/home/qy/benchmark-data/navigation/R2R",
+        "annotations": "/home/qy/benchmark-data/navigation/R2R/annotations_v1-3.json",
+        "episode_limit": 8
+      }
+    ],
+    "output_dir": "/home/qy/lxygit/activevln-benchmark-review/EmbodiInfer-opt/benchmarks/activevln-benchmark/runs/opt-smoke-r2r-b1",
+    "validate_data_only": false
+  },
+  "environment": {
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "capability": [
+      12,
+      0
+    ],
+    "cuda": "13.0",
+    "platform": "Linux-6.14.0-15-generic-x86_64-with-glibc2.41",
+    "python": "3.12.13 (main, May  4 2026, 21:09:48) [Clang 22.1.3 ]",
+    "executable": "/home/qy/lxygit/activevln-benchmark-review/EmbodiInfer-opt/../EmbodiInfer/.venv/bin/python",
+    "virtual_environment": "/home/qy/lxygit/activevln-benchmark-review/EmbodiInfer/.venv",
+    "packages": {
+      "torch": "2.10.0+cu130",
+      "torchvision": "0.25.0+cu130",
+      "transformers": "4.51.3",
+      "triton": "3.6.0",
+      "lerobot": null,
+      "numpy": "2.5.2",
+      "Pillow": "12.3.0",
+      "h5py": "3.16.0"
+    },
+    "source_revision": "8b39867a7c9c3b0f38edd6483101b18bede79e7e",
+    "source_python_sha256": "410a94af1429fba564575d1d2607645a49ffaa2942dd29cdb2a72e12cbd9fe45",
+    "dependency_check": null,
+    "driver_version": "580.95.05"
+  },
+  "batch_size": 1,
+  "timing_boundary": "decoded_cpu_rgb_and_state_to_cpu_action_chunk_including_pre_and_postprocessing",
+  "excluded": [
+    "weights_loading",
+    "file_read_and_decode",
+    "warmup",
+    "simulation",
+    "network",
+    "report_validation_and_hashing"
+  ],
+  "model_timing_contract": {
+    "forward_definition": "vision + text prefill + every autoregressive token forward; includes KV management and stop control",
+    "prefill_ms": "CUDA elapsed: vision/text/state encoding to reusable prefix",
+    "decode_ms": "CUDA elapsed: all generation steps including noise/sampling, before action restoration",
+    "gpu_inference_ms": "CUDA elapsed across prefill plus complete decode; no intermediate synchronization",
+    "pure_inference_ms": "synchronized wall time across the same model interval, including host dispatch",
+    "excluded": [
+      "input_preprocessing",
+      "input_H2D",
+      "output_postprocessing",
+      "output_D2H"
+    ],
+    "e2e_note": "original CPU observation-to-action scope retained; includes profiling overhead"
+  },
+  "runtime": "embodiinfer",
+  "metrics": {
+    "calls": 96,
+    "inference_seconds": 5.345469718,
+    "latency_ms": {
+      "mean": 55.68197622916667,
+      "p50": 56.1282595,
+      "p95": 58.99627725,
+      "p99": 59.8130672
+    },
+    "calls_per_second": 17.9591326982427,
+    "action_slots_per_second": 53.87739809472811,
+    "generated_tokens_per_second": 366.10440302563507,
+    "model_timing_ms": {
+      "prefill_ms": {
+        "mean": 20.025703251361847,
+        "p50": 19.94495964050293,
+        "p95": 21.335647583007812,
+        "p99": 21.943692111968993
+      },
+      "decode_ms": {
+        "mean": 29.58542463183403,
+        "p50": 30.266271591186523,
+        "p95": 31.375927925109863,
+        "p99": 31.60045013427734
+      },
+      "gpu_inference_ms": {
+        "mean": 49.611128052075706,
+        "p50": 50.117231369018555,
+        "p95": 51.81907844543457,
+        "p99": 52.381121444702146
+      },
+      "pure_inference_ms": {
+        "mean": 49.62832355208334,
+        "p50": 50.133145,
+        "p95": 51.836377999999996,
+        "p99": 52.3994011
+      }
+    },
+    "model_calls_per_second": 20.149784002889643
+  },
+  "memory": {
+    "cuda_peak_allocated_mib": 10089.16650390625,
+    "cuda_peak_reserved_mib": 10672.0,
+    "process_peak_rss_mib": 5736.9140625,
+    "note": "RSS is process lifetime peak; on Thor CPU/GPU share physical memory, do not add these figures"
+  },
+  "model": "activevln",
+  "tokenizer_sha256": {
+    "tokenizer.json": "9c5ae00e602b8860cbd784ba82a8aa14e8feecec692e7076590d014d7b7fdafa",
+    "tokenizer_config.json": "c182cc5f590489eba7c5435864b0814fcd9256ef72933f8ccc142116974dbb01"
+  },
+  "dataset": {
+    "name": "R2R",
+    "root": "/home/qy/benchmark-data/navigation/R2R",
+    "annotations": "/home/qy/benchmark-data/navigation/R2R/annotations_v1-3.json",
+    "episode_limit": 8
+  },
+  "episodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "selection_sha256": "214e5078c9fa1838383e30898409de84842d0c330cb32377aa2bca727a8dbb7e",
+  "model_load_seconds": 3.8637806999031454,
+  "warmup_seconds_including_data_io": 34.44383159605786,
+  "warmup_episode": {
+    "dataset": "R2R",
+    "episode_id": 1,
+    "calls": 33
+  },
+  "memory_protocol": "reset_per_episode;recorded_RGB_order;generated_response_history",
+  "output_scope": "navigation_action_chunk",
+  "cuda_graph_runtime": {
+    "enabled": true,
+    "vision_replays": 96,
+    "vision_fallbacks": 0,
+    "prefill_replays": 96,
+    "prefill_fallbacks": 0,
+    "decode_replays": 4,
+    "decode_fallbacks": 0,
+    "memory_restores": 88,
+    "tree_replays": 279,
+    "tree_fallbacks": 0,
+    "tree_accepted_tokens": 1953,
+    "tree_fallback_tokens": 4,
+    "vision_graphs": 1,
+    "text_graphs": 62,
+    "text_shapes": [
+      [
+        1,
+        512
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        4096
+      ],
+      [
+        1,
+        8192
+      ],
+      [
+        1,
+        16384
+      ],
+      [
+        1,
+        32768
+      ],
+      [
+        1,
+        65536
+      ],
+      [
+        144,
+        512
+      ],
+      [
+        144,
+        1024
+      ],
+      [
+        144,
+        2048
+      ],
+      [
+        144,
+        4096
+      ],
+      [
+        144,
+        8192
+      ],
+      [
+        144,
+        16384
+      ],
+      [
+        144,
+        32768
+      ],
+      [
+        144,
+        65536
+      ],
+      [
+        154,
+        512
+      ],
+      [
+        154,
+        1024
+      ],
+      [
+        154,
+        2048
+      ],
+      [
+        154,
+        4096
+      ],
+      [
+        154,
+        8192
+      ],
+      [
+        154,
+        16384
+      ],
+      [
+        154,
+        32768
+      ],
+      [
+        154,
+        65536
+      ],
+      [
+        155,
+        512
+      ],
+      [
+        155,
+        1024
+      ],
+      [
+        155,
+        2048
+      ],
+      [
+        155,
+        4096
+      ],
+      [
+        155,
+        8192
+      ],
+      [
+        155,
+        16384
+      ],
+      [
+        155,
+        32768
+      ],
+      [
+        155,
+        65536
+      ],
+      [
+        160,
+        512
+      ],
+      [
+        160,
+        1024
+      ],
+      [
+        160,
+        2048
+      ],
+      [
+        160,
+        4096
+      ],
+      [
+        160,
+        8192
+      ],
+      [
+        160,
+        16384
+      ],
+      [
+        160,
+        32768
+      ],
+      [
+        160,
+        65536
+      ],
+      [
+        161,
+        512
+      ],
+      [
+        161,
+        1024
+      ],
+      [
+        161,
+        2048
+      ],
+      [
+        161,
+        4096
+      ],
+      [
+        161,
+        8192
+      ],
+      [
+        161,
+        16384
+      ],
+      [
+        161,
+        32768
+      ],
+      [
+        161,
+        65536
+      ],
+      [
+        167,
+        512
+      ],
+      [
+        167,
+        1024
+      ],
+      [
+        167,
+        2048
+      ],
+      [
+        167,
+        4096
+      ],
+      [
+        167,
+        8192
+      ],
+      [
+        167,
+        16384
+      ],
+      [
+        167,
+        32768
+      ],
+      [
+        167,
+        65536
+      ],
+      [
+        289,
+        512
+      ],
+      [
+        299,
+        512
+      ],
+      [
+        300,
+        512
+      ],
+      [
+        305,
+        512
+      ],
+      [
+        306,
+        512
+      ],
+      [
+        312,
+        512
+      ]
+    ],
+    "tree_decode": true,
+    "tree_repeat_actions": 1,
+    "tree_fp32_projection": false,
+    "tree_nodes": {
+      "initial-412": 41,
+      "initial-3397": 21,
+      "initial-9495": 4,
+      "continuation-2484": 41,
+      "continuation-2936": 4,
+      "continuation-3271": 21
+    },
+    "tree_graphs": 48,
+    "tree_shapes": [
+      [
+        "continuation-2484",
+        512
+      ],
+      [
+        "continuation-2484",
+        1024
+      ],
+      [
+        "continuation-2484",
+        2048
+      ],
+      [
+        "continuation-2484",
+        4096
+      ],
+      [
+        "continuation-2484",
+        8192
+      ],
+      [
+        "continuation-2484",
+        16384
+      ],
+      [
+        "continuation-2484",
+        32768
+      ],
+      [
+        "continuation-2484",
+        65536
+      ],
+      [
+        "continuation-2936",
+        512
+      ],
+      [
+        "continuation-2936",
+        1024
+      ],
+      [
+        "continuation-2936",
+        2048
+      ],
+      [
+        "continuation-2936",
+        4096
+      ],
+      [
+        "continuation-2936",
+        8192
+      ],
+      [
+        "continuation-2936",
+        16384
+      ],
+      [
+        "continuation-2936",
+        32768
+      ],
+      [
+        "continuation-2936",
+        65536
+      ],
+      [
+        "continuation-3271",
+        512
+      ],
+      [
+        "continuation-3271",
+        1024
+      ],
+      [
+        "continuation-3271",
+        2048
+      ],
+      [
+        "continuation-3271",
+        4096
+      ],
+      [
+        "continuation-3271",
+        8192
+      ],
+      [
+        "continuation-3271",
+        16384
+      ],
+      [
+        "continuation-3271",
+        32768
+      ],
+      [
+        "continuation-3271",
+        65536
+      ],
+      [
+        "initial-3397",
+        512
+      ],
+      [
+        "initial-3397",
+        1024
+      ],
+      [
+        "initial-3397",
+        2048
+      ],
+      [
+        "initial-3397",
+        4096
+      ],
+      [
+        "initial-3397",
+        8192
+      ],
+      [
+        "initial-3397",
+        16384
+      ],
+      [
+        "initial-3397",
+        32768
+      ],
+      [
+        "initial-3397",
+        65536
+      ],
+      [
+        "initial-412",
+        512
+      ],
+      [
+        "initial-412",
+        1024
+      ],
+      [
+        "initial-412",
+        2048
+      ],
+      [
+        "initial-412",
+        4096
+      ],
+      [
+        "initial-412",
+        8192
+      ],
+      [
+        "initial-412",
+        16384
+      ],
+      [
+        "initial-412",
+        32768
+      ],
+      [
+        "initial-412",
+        65536
+      ],
+      [
+        "initial-9495",
+        512
+      ],
+      [
+        "initial-9495",
+        1024
+      ],
+      [
+        "initial-9495",
+        2048
+      ],
+      [
+        "initial-9495",
+        4096
+      ],
+      [
+        "initial-9495",
+        8192
+      ],
+      [
+        "initial-9495",
+        16384
+      ],
+      [
+        "initial-9495",
+        32768
+      ],
+      [
+        "initial-9495",
+        65536
+      ]
+    ],
+    "capture_enabled": false,
+    "query_bucket_size": 1,
+    "fused_ops": true,
+    "split_attention": true,
+    "workspace_mib": 2304.0,
+    "workspace_tokens": 65536,
+    "model_max_context": 128000
+  },
+  "graph_shape_warmup": {
+    "observations": 16,
+    "initial_query_lengths": [
+      289,
+      299,
+      300,
+      305,
+      306,
+      312
+    ],
+    "recurring_query_lengths": [
+      144,
+      154,
+      155,
+      160,
+      161,
+      167
+    ],
+    "context_buckets": [
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536
+    ],
+    "text_shapes": [
+      [
+        1,
+        512
+      ],
+      [
+        1,
+        1024
+      ],
+      [
+        1,
+        2048
+      ],
+      [
+        1,
+        4096
+      ],
+      [
+        1,
+        8192
+      ],
+      [
+        1,
+        16384
+      ],
+      [
+        1,
+        32768
+      ],
+      [
+        1,
+        65536
+      ],
+      [
+        144,
+        512
+      ],
+      [
+        144,
+        1024
+      ],
+      [
+        144,
+        2048
+      ],
+      [
+        144,
+        4096
+      ],
+      [
+        144,
+        8192
+      ],
+      [
+        144,
+        16384
+      ],
+      [
+        144,
+        32768
+      ],
+      [
+        144,
+        65536
+      ],
+      [
+        154,
+        512
+      ],
+      [
+        154,
+        1024
+      ],
+      [
+        154,
+        2048
+      ],
+      [
+        154,
+        4096
+      ],
+      [
+        154,
+        8192
+      ],
+      [
+        154,
+        16384
+      ],
+      [
+        154,
+        32768
+      ],
+      [
+        154,
+        65536
+      ],
+      [
+        155,
+        512
+      ],
+      [
+        155,
+        1024
+      ],
+      [
+        155,
+        2048
+      ],
+      [
+        155,
+        4096
+      ],
+      [
+        155,
+        8192
+      ],
+      [
+        155,
+        16384
+      ],
+      [
+        155,
+        32768
+      ],
+      [
+        155,
+        65536
+      ],
+      [
+        160,
+        512
+      ],
+      [
+        160,
+        1024
+      ],
+      [
+        160,
+        2048
+      ],
+      [
+        160,
+        4096
+      ],
+      [
+        160,
+        8192
+      ],
+      [
+        160,
+        16384
+      ],
+      [
+        160,
+        32768
+      ],
+      [
+        160,
+        65536
+      ],
+      [
+        161,
+        512
+      ],
+      [
+        161,
+        1024
+      ],
+      [
+        161,
+        2048
+      ],
+      [
+        161,
+        4096
+      ],
+      [
+        161,
+        8192
+      ],
+      [
+        161,
+        16384
+      ],
+      [
+        161,
+        32768
+      ],
+      [
+        161,
+        65536
+      ],
+      [
+        167,
+        512
+      ],
+      [
+        167,
+        1024
+      ],
+      [
+        167,
+        2048
+      ],
+      [
+        167,
+        4096
+      ],
+      [
+        167,
+        8192
+      ],
+      [
+        167,
+        16384
+      ],
+      [
+        167,
+        32768
+      ],
+      [
+        167,
+        65536
+      ],
+      [
+        289,
+        512
+      ],
+      [
+        299,
+        512
+      ],
+      [
+        300,
+        512
+      ],
+      [
+        305,
+        512
+      ],
+      [
+        306,
+        512
+      ],
+      [
+        312,
+        512
+      ]
+    ]
+  },
+  "rows": [
+    {
+      "sample_id": "R2R/1/001.jpg",
+      "episode_id": 1,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 320,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.073471069335938,
+        "decode_ms": 30.931007385253906,
+        "gpu_inference_ms": 52.004478454589844,
+        "pure_inference_ms": 52.026059
+      },
+      "output_sha256": "3ed586e2228f99c06b92a10ed1af6af4e5dd482b137374569c559a275e23bbb5",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 61.279624
+    },
+    {
+      "sample_id": "R2R/1/002.jpg",
+      "episode_id": 1,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 495,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 18.80169677734375,
+        "decode_ms": 30.658912658691406,
+        "gpu_inference_ms": 49.460609436035156,
+        "pure_inference_ms": 49.477465
+      },
+      "output_sha256": "b3beeff46d78ad554a91b9c3e79db20f5e40166fd6232bc52f7255fad920e572",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.384935
+    },
+    {
+      "sample_id": "R2R/1/003.jpg",
+      "episode_id": 1,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 670,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.43391990661621,
+        "decode_ms": 30.270719528198242,
+        "gpu_inference_ms": 49.70463943481445,
+        "pure_inference_ms": 49.724148
+      },
+      "output_sha256": "c82be912089bf608087cecb3bb09053c298208de50d903263f3d596ee0da1aa5",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 30 degrees, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.885709
+    },
+    {
+      "sample_id": "R2R/1/004.jpg",
+      "episode_id": 1,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 845,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.060415267944336,
+        "decode_ms": 29.722944259643555,
+        "gpu_inference_ms": 49.78335952758789,
+        "pure_inference_ms": 49.800723
+      },
+      "output_sha256": "2f95090b80837b614a9580a4ec7e2dbf75e947240b74f6a916b4111be66dbd7f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 45 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.964308
+    },
+    {
+      "sample_id": "R2R/1/005.jpg",
+      "episode_id": 1,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1020,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.92144012451172,
+        "decode_ms": 29.352352142333984,
+        "gpu_inference_ms": 49.2737922668457,
+        "pure_inference_ms": 49.30176
+      },
+      "output_sha256": "a2cf4e290efb0b62112cc60df1e8ea762f21098d0a367635e9bb5e30509794f0",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 30 degrees, move forward 25cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 58.993536
+    },
+    {
+      "sample_id": "R2R/1/006.jpg",
+      "episode_id": 1,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1195,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.304960250854492,
+        "decode_ms": 29.694303512573242,
+        "gpu_inference_ms": 49.999263763427734,
+        "pure_inference_ms": 50.01834
+      },
+      "output_sha256": "fe2ff59757890e5172a9c58f95ab1fee3716ed182f14f64f2eba80da254b6436",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 75cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 58.17459
+    },
+    {
+      "sample_id": "R2R/1/007.jpg",
+      "episode_id": 1,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1370,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.536287307739258,
+        "decode_ms": 29.22831916809082,
+        "gpu_inference_ms": 48.76460647583008,
+        "pure_inference_ms": 48.787994
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.993216
+    },
+    {
+      "sample_id": "R2R/1/008.jpg",
+      "episode_id": 1,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1545,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.545215606689453,
+        "decode_ms": 29.618175506591797,
+        "gpu_inference_ms": 49.16339111328125,
+        "pure_inference_ms": 49.182629
+      },
+      "output_sha256": "6efc5b3c23801ff6875ee0a482be4333b28ae8d293ce39685456226202c11320",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 75cm, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.566386
+    },
+    {
+      "sample_id": "R2R/1/009.jpg",
+      "episode_id": 1,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1720,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.707231521606445,
+        "decode_ms": 30.267391204833984,
+        "gpu_inference_ms": 49.97462463378906,
+        "pure_inference_ms": 49.993852
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.009344
+    },
+    {
+      "sample_id": "R2R/1/010.jpg",
+      "episode_id": 1,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1895,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.29599952697754,
+        "decode_ms": 30.56038475036621,
+        "gpu_inference_ms": 50.85638427734375,
+        "pure_inference_ms": 50.873789
+      },
+      "output_sha256": "2dc362804c876a2271c204c11f00d40192884e3c2aabed5e8488437d53eebba3",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.148892
+    },
+    {
+      "sample_id": "R2R/1/011.jpg",
+      "episode_id": 1,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2070,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.93382453918457,
+        "decode_ms": 30.54863929748535,
+        "gpu_inference_ms": 50.48246383666992,
+        "pure_inference_ms": 50.499805
+      },
+      "output_sha256": "c65d08ba7b33ffe80580a1baa6220bd96f578fdebd0b5718335c03c13b688e83",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 75cm, move forward 25cm, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.374345
+    },
+    {
+      "sample_id": "R2R/1/012.jpg",
+      "episode_id": 1,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2245,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.000064849853516,
+        "decode_ms": 30.55023956298828,
+        "gpu_inference_ms": 50.5503044128418,
+        "pure_inference_ms": 50.566205
+      },
+      "output_sha256": "4a32408ff750a7370e0212f355d416b3f62b57c1902836c751341b37767358dd",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.543349
+    },
+    {
+      "sample_id": "R2R/2/001.jpg",
+      "episode_id": 2,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 310,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.4401912689209,
+        "decode_ms": 30.862592697143555,
+        "gpu_inference_ms": 52.30278396606445,
+        "pure_inference_ms": 52.320171
+      },
+      "output_sha256": "3ed586e2228f99c06b92a10ed1af6af4e5dd482b137374569c559a275e23bbb5",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 59.004501
+    },
+    {
+      "sample_id": "R2R/2/002.jpg",
+      "episode_id": 2,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 475,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.348575592041016,
+        "decode_ms": 29.990400314331055,
+        "gpu_inference_ms": 49.3389778137207,
+        "pure_inference_ms": 49.3554
+      },
+      "output_sha256": "b3beeff46d78ad554a91b9c3e79db20f5e40166fd6232bc52f7255fad920e572",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.615641
+    },
+    {
+      "sample_id": "R2R/2/003.jpg",
+      "episode_id": 2,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 640,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.092031478881836,
+        "decode_ms": 29.703231811523438,
+        "gpu_inference_ms": 49.795265197753906,
+        "pure_inference_ms": 49.811047
+      },
+      "output_sha256": "c82be912089bf608087cecb3bb09053c298208de50d903263f3d596ee0da1aa5",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 30 degrees, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.639296
+    },
+    {
+      "sample_id": "R2R/2/004.jpg",
+      "episode_id": 2,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 805,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.93609619140625,
+        "decode_ms": 29.6997127532959,
+        "gpu_inference_ms": 49.635807037353516,
+        "pure_inference_ms": 49.651416
+      },
+      "output_sha256": "884f215a3b9f9518e56895df92b5b2050058156d4a21d0a9322f9041512c9f36",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, turn right 45 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.560727
+    },
+    {
+      "sample_id": "R2R/2/005.jpg",
+      "episode_id": 2,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 970,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.060895919799805,
+        "decode_ms": 29.859455108642578,
+        "gpu_inference_ms": 49.920352935791016,
+        "pure_inference_ms": 49.936406
+      },
+      "output_sha256": "3669da80f4d8fa279ca7beb8f746ba36743afc4abff9dacb3814fd855b6fb591",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 30 degrees, move forward 25cm, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.799016
+    },
+    {
+      "sample_id": "R2R/2/006.jpg",
+      "episode_id": 2,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1135,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.42742347717285,
+        "decode_ms": 30.35264015197754,
+        "gpu_inference_ms": 49.78006362915039,
+        "pure_inference_ms": 49.798157
+      },
+      "output_sha256": "c27c1e09052d94d6041954d61f7afa0e8652667e0ea3233c801d07ede200f87f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.196276
+    },
+    {
+      "sample_id": "R2R/2/007.jpg",
+      "episode_id": 2,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1300,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.28188705444336,
+        "decode_ms": 30.191104888916016,
+        "gpu_inference_ms": 49.472991943359375,
+        "pure_inference_ms": 49.490103
+      },
+      "output_sha256": "c27c1e09052d94d6041954d61f7afa0e8652667e0ea3233c801d07ede200f87f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.434507
+    },
+    {
+      "sample_id": "R2R/2/008.jpg",
+      "episode_id": 2,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1465,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.407840728759766,
+        "decode_ms": 30.277376174926758,
+        "gpu_inference_ms": 49.68521499633789,
+        "pure_inference_ms": 49.701622
+      },
+      "output_sha256": "c27c1e09052d94d6041954d61f7afa0e8652667e0ea3233c801d07ede200f87f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.899148
+    },
+    {
+      "sample_id": "R2R/2/009.jpg",
+      "episode_id": 2,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1630,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.474048614501953,
+        "decode_ms": 30.344863891601562,
+        "gpu_inference_ms": 49.818912506103516,
+        "pure_inference_ms": 49.835904
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.69526
+    },
+    {
+      "sample_id": "R2R/2/010.jpg",
+      "episode_id": 2,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1795,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.644895553588867,
+        "decode_ms": 30.41417694091797,
+        "gpu_inference_ms": 50.0590705871582,
+        "pure_inference_ms": 50.076918
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.296897
+    },
+    {
+      "sample_id": "R2R/2/011.jpg",
+      "episode_id": 2,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 1,
+      "cache_length": 1940,
+      "stop_reason": "stop",
+      "model_timing_ms": {
+        "prefill_ms": 19.85433578491211,
+        "decode_ms": 6.808608055114746,
+        "gpu_inference_ms": 26.662944793701172,
+        "pure_inference_ms": 26.680985
+      },
+      "output_sha256": "50e90513efa5dd18fff61ad73d00fed63a3b60964cfec4b5d72325177d510781",
+      "token_ids": [
+        9495
+      ],
+      "text": "stop",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        false,
+        false
+      ],
+      "latency_ms": 32.886645
+    },
+    {
+      "sample_id": "R2R/2/012.jpg",
+      "episode_id": 2,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 8,
+      "cache_length": 2092,
+      "stop_reason": "stop",
+      "model_timing_ms": {
+        "prefill_ms": 20.11311912536621,
+        "decode_ms": 15.238143920898438,
+        "gpu_inference_ms": 35.35126495361328,
+        "pure_inference_ms": 35.369708
+      },
+      "output_sha256": "a5c3824b1137c27616c7dacf4e6ec84041c6e1531b558cb56add6892fa7e1f80",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2936
+      ],
+      "text": "move forward 25cm, stop",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        false
+      ],
+      "latency_ms": 41.277346
+    },
+    {
+      "sample_id": "R2R/3/001.jpg",
+      "episode_id": 3,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 327,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.378751754760742,
+        "decode_ms": 31.134912490844727,
+        "gpu_inference_ms": 52.51366424560547,
+        "pure_inference_ms": 52.53341
+      },
+      "output_sha256": "3ed586e2228f99c06b92a10ed1af6af4e5dd482b137374569c559a275e23bbb5",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 59.374407
+    },
+    {
+      "sample_id": "R2R/3/002.jpg",
+      "episode_id": 3,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 509,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 18.975807189941406,
+        "decode_ms": 30.653215408325195,
+        "gpu_inference_ms": 49.629024505615234,
+        "pure_inference_ms": 49.64833
+      },
+      "output_sha256": "b3beeff46d78ad554a91b9c3e79db20f5e40166fd6232bc52f7255fad920e572",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.578663
+    },
+    {
+      "sample_id": "R2R/3/003.jpg",
+      "episode_id": 3,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 691,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.0894718170166,
+        "decode_ms": 30.85990333557129,
+        "gpu_inference_ms": 49.94937515258789,
+        "pure_inference_ms": 49.967411
+      },
+      "output_sha256": "c82be912089bf608087cecb3bb09053c298208de50d903263f3d596ee0da1aa5",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 30 degrees, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.81535
+    },
+    {
+      "sample_id": "R2R/3/004.jpg",
+      "episode_id": 3,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 873,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.05459213256836,
+        "decode_ms": 30.734111785888672,
+        "gpu_inference_ms": 49.78870391845703,
+        "pure_inference_ms": 49.805787
+      },
+      "output_sha256": "2f95090b80837b614a9580a4ec7e2dbf75e947240b74f6a916b4111be66dbd7f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 45 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.695328
+    },
+    {
+      "sample_id": "R2R/3/005.jpg",
+      "episode_id": 3,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1055,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.635744094848633,
+        "decode_ms": 30.279327392578125,
+        "gpu_inference_ms": 49.91507339477539,
+        "pure_inference_ms": 49.933129
+      },
+      "output_sha256": "dbf59d21fb641d1458721de1751b12776e1f905e067b2a1dc088f994a1b251e0",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 30 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.763922
+    },
+    {
+      "sample_id": "R2R/3/006.jpg",
+      "episode_id": 3,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1237,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.42540740966797,
+        "decode_ms": 30.229759216308594,
+        "gpu_inference_ms": 49.65516662597656,
+        "pure_inference_ms": 49.671586
+      },
+      "output_sha256": "fe2ff59757890e5172a9c58f95ab1fee3716ed182f14f64f2eba80da254b6436",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 75cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.531732
+    },
+    {
+      "sample_id": "R2R/3/007.jpg",
+      "episode_id": 3,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1419,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.445600509643555,
+        "decode_ms": 30.265151977539062,
+        "gpu_inference_ms": 49.710750579833984,
+        "pure_inference_ms": 49.728872
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.565102
+    },
+    {
+      "sample_id": "R2R/3/008.jpg",
+      "episode_id": 3,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1601,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.428064346313477,
+        "decode_ms": 29.447168350219727,
+        "gpu_inference_ms": 49.8752326965332,
+        "pure_inference_ms": 49.892889
+      },
+      "output_sha256": "c27c1e09052d94d6041954d61f7afa0e8652667e0ea3233c801d07ede200f87f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.724152
+    },
+    {
+      "sample_id": "R2R/3/009.jpg",
+      "episode_id": 3,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1783,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.536800384521484,
+        "decode_ms": 29.445152282714844,
+        "gpu_inference_ms": 49.98195266723633,
+        "pure_inference_ms": 50.000331
+      },
+      "output_sha256": "2dc362804c876a2271c204c11f00d40192884e3c2aabed5e8488437d53eebba3",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.848259
+    },
+    {
+      "sample_id": "R2R/3/010.jpg",
+      "episode_id": 3,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1965,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.142175674438477,
+        "decode_ms": 29.612415313720703,
+        "gpu_inference_ms": 49.75459289550781,
+        "pure_inference_ms": 49.775201
+      },
+      "output_sha256": "c65d08ba7b33ffe80580a1baa6220bd96f578fdebd0b5718335c03c13b688e83",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 75cm, move forward 25cm, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.149324
+    },
+    {
+      "sample_id": "R2R/3/011.jpg",
+      "episode_id": 3,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2147,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.86262321472168,
+        "decode_ms": 30.19219207763672,
+        "gpu_inference_ms": 51.05481719970703,
+        "pure_inference_ms": 51.074901
+      },
+      "output_sha256": "a6e4fbdb29506e3707e1689f0b14e29e1d958d48a452eaad5494be0cb2c90f6f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        20,
+        15,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 50cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.454021
+    },
+    {
+      "sample_id": "R2R/3/012.jpg",
+      "episode_id": 3,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2329,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.684415817260742,
+        "decode_ms": 29.844383239746094,
+        "gpu_inference_ms": 50.52880096435547,
+        "pure_inference_ms": 50.547616
+      },
+      "output_sha256": "359f23acccfbad6036c7591a5dd24aeb6ea3ca1d0a376199799774579a7a6ec6",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, move forward 75cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.847116
+    },
+    {
+      "sample_id": "R2R/4/001.jpg",
+      "episode_id": 4,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 321,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.237056732177734,
+        "decode_ms": 31.137088775634766,
+        "gpu_inference_ms": 52.3741455078125,
+        "pure_inference_ms": 52.392348
+      },
+      "output_sha256": "a07595b260016bab0fb71880b7b3508944ff8b79411a79a28c52a60f30c98219",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 15 degrees, turn left 15 degrees, turn left 45 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 59.014404
+    },
+    {
+      "sample_id": "R2R/4/002.jpg",
+      "episode_id": 4,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 497,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.01103973388672,
+        "decode_ms": 30.544544219970703,
+        "gpu_inference_ms": 49.55558395385742,
+        "pure_inference_ms": 49.573848
+      },
+      "output_sha256": "7793c9b43e0fd0aca1f1ae3680f71c1a423ad881bfde337a7caac233b07136b3",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 45 degrees, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.433144
+    },
+    {
+      "sample_id": "R2R/4/003.jpg",
+      "episode_id": 4,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 673,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.18160057067871,
+        "decode_ms": 30.540512084960938,
+        "gpu_inference_ms": 49.722110748291016,
+        "pure_inference_ms": 49.740308
+      },
+      "output_sha256": "90d11b08ba5ba7bf27b7bca789c016e1d6651ec0ffce323bd8f52eb2e3dd9003",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 45 degrees, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.859877
+    },
+    {
+      "sample_id": "R2R/4/004.jpg",
+      "episode_id": 4,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 849,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.4005126953125,
+        "decode_ms": 31.1397762298584,
+        "gpu_inference_ms": 50.540287017822266,
+        "pure_inference_ms": 50.557481
+      },
+      "output_sha256": "0b53af147a4f4fe3bdec6f172e31226ea4b16c2d54c52b6b3d3f8471dc747914",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 45 degrees, turn left 15 degrees, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.37917
+    },
+    {
+      "sample_id": "R2R/4/005.jpg",
+      "episode_id": 4,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1025,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.21776008605957,
+        "decode_ms": 29.978303909301758,
+        "gpu_inference_ms": 50.19606399536133,
+        "pure_inference_ms": 50.214083
+      },
+      "output_sha256": "20de1fbfd1239398991c682d786725fcc88fe790d23e69ed219b9927283e58fd",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.017534
+    },
+    {
+      "sample_id": "R2R/4/006.jpg",
+      "episode_id": 4,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1201,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.411392211914062,
+        "decode_ms": 30.00761604309082,
+        "gpu_inference_ms": 50.41900634765625,
+        "pure_inference_ms": 50.435926
+      },
+      "output_sha256": "b3beeff46d78ad554a91b9c3e79db20f5e40166fd6232bc52f7255fad920e572",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.256233
+    },
+    {
+      "sample_id": "R2R/4/007.jpg",
+      "episode_id": 4,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1377,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.346399307250977,
+        "decode_ms": 30.75446319580078,
+        "gpu_inference_ms": 51.10086441040039,
+        "pure_inference_ms": 51.118205
+      },
+      "output_sha256": "e6d70d6d0fb340a5c6d0e67a98c77666dd524ea25e106c7762f9fc7d8385dc8b",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.992534
+    },
+    {
+      "sample_id": "R2R/4/008.jpg",
+      "episode_id": 4,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1553,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.498559951782227,
+        "decode_ms": 30.124256134033203,
+        "gpu_inference_ms": 50.6228141784668,
+        "pure_inference_ms": 50.640124
+      },
+      "output_sha256": "65fc2b5be7d338dd353a79f9c0b675236434433fc66a2bb033fe4d56dfa2c112",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.474873
+    },
+    {
+      "sample_id": "R2R/4/009.jpg",
+      "episode_id": 4,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1729,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.706623077392578,
+        "decode_ms": 31.11801528930664,
+        "gpu_inference_ms": 50.82463836669922,
+        "pure_inference_ms": 50.851433
+      },
+      "output_sha256": "3669da80f4d8fa279ca7beb8f746ba36743afc4abff9dacb3814fd855b6fb591",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 30 degrees, move forward 25cm, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.159585
+    },
+    {
+      "sample_id": "R2R/4/010.jpg",
+      "episode_id": 4,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1905,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.95382308959961,
+        "decode_ms": 30.755264282226562,
+        "gpu_inference_ms": 50.70908737182617,
+        "pure_inference_ms": 50.727476
+      },
+      "output_sha256": "c27c1e09052d94d6041954d61f7afa0e8652667e0ea3233c801d07ede200f87f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.725641
+    },
+    {
+      "sample_id": "R2R/4/011.jpg",
+      "episode_id": 4,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2081,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.194400787353516,
+        "decode_ms": 31.18899154663086,
+        "gpu_inference_ms": 51.383392333984375,
+        "pure_inference_ms": 51.403044
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.280127
+    },
+    {
+      "sample_id": "R2R/4/012.jpg",
+      "episode_id": 4,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2257,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.05388832092285,
+        "decode_ms": 30.774431228637695,
+        "gpu_inference_ms": 50.82831954956055,
+        "pure_inference_ms": 50.845324
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 59.73588
+    },
+    {
+      "sample_id": "R2R/5/001.jpg",
+      "episode_id": 5,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 321,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.939903259277344,
+        "decode_ms": 30.127744674682617,
+        "gpu_inference_ms": 52.067649841308594,
+        "pure_inference_ms": 52.084502
+      },
+      "output_sha256": "a5fd54d4e895bcd38f95a30703c185ced98c7026cdf63db1f56ca09be3abcffe",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 45 degrees, turn left 45 degrees, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 58.24979
+    },
+    {
+      "sample_id": "R2R/5/002.jpg",
+      "episode_id": 5,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 497,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.739328384399414,
+        "decode_ms": 29.626527786254883,
+        "gpu_inference_ms": 49.3658561706543,
+        "pure_inference_ms": 49.382438
+      },
+      "output_sha256": "40cc79a44dc9b7cd83f8cd8d76cd7f3746978aeeccf4b27f82b5fe0378271ee3",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn left 45 degrees, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.183866
+    },
+    {
+      "sample_id": "R2R/5/003.jpg",
+      "episode_id": 5,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 673,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.11814308166504,
+        "decode_ms": 29.708351135253906,
+        "gpu_inference_ms": 49.82649612426758,
+        "pure_inference_ms": 49.843202
+      },
+      "output_sha256": "90d11b08ba5ba7bf27b7bca789c016e1d6651ec0ffce323bd8f52eb2e3dd9003",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 45 degrees, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.394964
+    },
+    {
+      "sample_id": "R2R/5/004.jpg",
+      "episode_id": 5,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 849,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.068927764892578,
+        "decode_ms": 30.594207763671875,
+        "gpu_inference_ms": 49.66313552856445,
+        "pure_inference_ms": 49.679485
+      },
+      "output_sha256": "0b53af147a4f4fe3bdec6f172e31226ea4b16c2d54c52b6b3d3f8471dc747914",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 45 degrees, turn left 15 degrees, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.327853
+    },
+    {
+      "sample_id": "R2R/5/005.jpg",
+      "episode_id": 5,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1025,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.251232147216797,
+        "decode_ms": 30.907808303833008,
+        "gpu_inference_ms": 50.15903854370117,
+        "pure_inference_ms": 50.175734
+      },
+      "output_sha256": "2f95090b80837b614a9580a4ec7e2dbf75e947240b74f6a916b4111be66dbd7f",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 45 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.751241
+    },
+    {
+      "sample_id": "R2R/5/006.jpg",
+      "episode_id": 5,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1201,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.32137680053711,
+        "decode_ms": 30.754047393798828,
+        "gpu_inference_ms": 50.07542419433594,
+        "pure_inference_ms": 50.090556
+      },
+      "output_sha256": "20de1fbfd1239398991c682d786725fcc88fe790d23e69ed219b9927283e58fd",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.672543
+    },
+    {
+      "sample_id": "R2R/5/007.jpg",
+      "episode_id": 5,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1377,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.466175079345703,
+        "decode_ms": 30.94646453857422,
+        "gpu_inference_ms": 50.41263961791992,
+        "pure_inference_ms": 50.429457
+      },
+      "output_sha256": "b3beeff46d78ad554a91b9c3e79db20f5e40166fd6232bc52f7255fad920e572",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.023302
+    },
+    {
+      "sample_id": "R2R/5/008.jpg",
+      "episode_id": 5,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1553,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.499040603637695,
+        "decode_ms": 31.546560287475586,
+        "gpu_inference_ms": 51.04560089111328,
+        "pure_inference_ms": 51.060969
+      },
+      "output_sha256": "e6d70d6d0fb340a5c6d0e67a98c77666dd524ea25e106c7762f9fc7d8385dc8b",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.636056
+    },
+    {
+      "sample_id": "R2R/5/009.jpg",
+      "episode_id": 5,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1729,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.68956756591797,
+        "decode_ms": 30.111936569213867,
+        "gpu_inference_ms": 49.8015022277832,
+        "pure_inference_ms": 49.817423
+      },
+      "output_sha256": "dbf59d21fb641d1458721de1751b12776e1f905e067b2a1dc088f994a1b251e0",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 30 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.379651
+    },
+    {
+      "sample_id": "R2R/5/010.jpg",
+      "episode_id": 5,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1905,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.89619255065918,
+        "decode_ms": 29.578720092773438,
+        "gpu_inference_ms": 50.474910736083984,
+        "pure_inference_ms": 50.492471
+      },
+      "output_sha256": "fe2ff59757890e5172a9c58f95ab1fee3716ed182f14f64f2eba80da254b6436",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 75cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.154549
+    },
+    {
+      "sample_id": "R2R/5/011.jpg",
+      "episode_id": 5,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2081,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.93984031677246,
+        "decode_ms": 29.727455139160156,
+        "gpu_inference_ms": 50.66729736328125,
+        "pure_inference_ms": 50.682556
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.164393
+    },
+    {
+      "sample_id": "R2R/5/012.jpg",
+      "episode_id": 5,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2257,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.177888870239258,
+        "decode_ms": 29.744672775268555,
+        "gpu_inference_ms": 50.92256164550781,
+        "pure_inference_ms": 50.937561
+      },
+      "output_sha256": "8e60f172f1695372fbc1f5e50433c39b1a263adcfbb50d5c31a0226e069a67cc",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn left 15 degrees, move forward 25cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.422572
+    },
+    {
+      "sample_id": "R2R/6/001.jpg",
+      "episode_id": 6,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 333,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 22.01568031311035,
+        "decode_ms": 28.901344299316406,
+        "gpu_inference_ms": 50.917022705078125,
+        "pure_inference_ms": 50.933495
+      },
+      "output_sha256": "8e60f172f1695372fbc1f5e50433c39b1a263adcfbb50d5c31a0226e069a67cc",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn left 15 degrees, move forward 25cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.105652
+    },
+    {
+      "sample_id": "R2R/6/002.jpg",
+      "episode_id": 6,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 521,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.257728576660156,
+        "decode_ms": 29.111839294433594,
+        "gpu_inference_ms": 48.36956787109375,
+        "pure_inference_ms": 48.385362
+      },
+      "output_sha256": "3862af00f7c11b3ede4ed8c898fb03325af0858f37e59e27b1cf81b43a2c5737",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 45 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 54.118668
+    },
+    {
+      "sample_id": "R2R/6/003.jpg",
+      "episode_id": 6,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 709,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.12758445739746,
+        "decode_ms": 30.68822479248047,
+        "gpu_inference_ms": 49.8158073425293,
+        "pure_inference_ms": 49.831002
+      },
+      "output_sha256": "40cc79a44dc9b7cd83f8cd8d76cd7f3746978aeeccf4b27f82b5fe0378271ee3",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn left 45 degrees, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.416545
+    },
+    {
+      "sample_id": "R2R/6/004.jpg",
+      "episode_id": 6,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 897,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.08470344543457,
+        "decode_ms": 31.35433578491211,
+        "gpu_inference_ms": 50.43904113769531,
+        "pure_inference_ms": 50.453831
+      },
+      "output_sha256": "28ff233f0864b9d17e51cdd635a76d3f8d0913eaec7ec98e8c6c25716ea50b3a",
+      "token_ids": [
+        412,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn left 15 degrees, turn left 45 degrees, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.037681
+    },
+    {
+      "sample_id": "R2R/6/005.jpg",
+      "episode_id": 6,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1085,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.668575286865234,
+        "decode_ms": 30.877695083618164,
+        "gpu_inference_ms": 50.54627227783203,
+        "pure_inference_ms": 50.562586
+      },
+      "output_sha256": "20de1fbfd1239398991c682d786725fcc88fe790d23e69ed219b9927283e58fd",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.484195
+    },
+    {
+      "sample_id": "R2R/6/006.jpg",
+      "episode_id": 6,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1273,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.48601531982422,
+        "decode_ms": 31.593120574951172,
+        "gpu_inference_ms": 51.07913589477539,
+        "pure_inference_ms": 51.095078
+      },
+      "output_sha256": "e6d70d6d0fb340a5c6d0e67a98c77666dd524ea25e106c7762f9fc7d8385dc8b",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.846341
+    },
+    {
+      "sample_id": "R2R/6/007.jpg",
+      "episode_id": 6,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1461,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.530879974365234,
+        "decode_ms": 30.893760681152344,
+        "gpu_inference_ms": 50.42464065551758,
+        "pure_inference_ms": 50.440041
+      },
+      "output_sha256": "b3beeff46d78ad554a91b9c3e79db20f5e40166fd6232bc52f7255fad920e572",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.062479
+    },
+    {
+      "sample_id": "R2R/6/008.jpg",
+      "episode_id": 6,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1649,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.75507164001465,
+        "decode_ms": 31.73971176147461,
+        "gpu_inference_ms": 51.49478530883789,
+        "pure_inference_ms": 51.51367
+      },
+      "output_sha256": "e6d70d6d0fb340a5c6d0e67a98c77666dd524ea25e106c7762f9fc7d8385dc8b",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.253746
+    },
+    {
+      "sample_id": "R2R/6/009.jpg",
+      "episode_id": 6,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1837,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.002784729003906,
+        "decode_ms": 29.521472930908203,
+        "gpu_inference_ms": 50.52425765991211,
+        "pure_inference_ms": 50.540112
+      },
+      "output_sha256": "dbf59d21fb641d1458721de1751b12776e1f905e067b2a1dc088f994a1b251e0",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 30 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.237904
+    },
+    {
+      "sample_id": "R2R/6/010.jpg",
+      "episode_id": 6,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2025,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.23891258239746,
+        "decode_ms": 29.620159149169922,
+        "gpu_inference_ms": 50.859073638916016,
+        "pure_inference_ms": 50.874306
+      },
+      "output_sha256": "fe2ff59757890e5172a9c58f95ab1fee3716ed182f14f64f2eba80da254b6436",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 75cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.842465
+    },
+    {
+      "sample_id": "R2R/6/011.jpg",
+      "episode_id": 6,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2213,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.828319549560547,
+        "decode_ms": 29.77292823791504,
+        "gpu_inference_ms": 51.60124969482422,
+        "pure_inference_ms": 51.617806
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.400897
+    },
+    {
+      "sample_id": "R2R/6/012.jpg",
+      "episode_id": 6,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2401,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.25935935974121,
+        "decode_ms": 30.4979190826416,
+        "gpu_inference_ms": 51.75727844238281,
+        "pure_inference_ms": 51.773151
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.764956
+    },
+    {
+      "sample_id": "R2R/7/001.jpg",
+      "episode_id": 7,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 333,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.130399703979492,
+        "decode_ms": 30.062816619873047,
+        "gpu_inference_ms": 51.193214416503906,
+        "pure_inference_ms": 51.2092
+      },
+      "output_sha256": "a2cf4e290efb0b62112cc60df1e8ea762f21098d0a367635e9bb5e30509794f0",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 30 degrees, move forward 25cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.196079
+    },
+    {
+      "sample_id": "R2R/7/002.jpg",
+      "episode_id": 7,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 521,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 18.765119552612305,
+        "decode_ms": 30.08777618408203,
+        "gpu_inference_ms": 48.85289764404297,
+        "pure_inference_ms": 48.867569
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 54.778923
+    },
+    {
+      "sample_id": "R2R/7/003.jpg",
+      "episode_id": 7,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 709,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 18.872224807739258,
+        "decode_ms": 31.072160720825195,
+        "gpu_inference_ms": 49.94438552856445,
+        "pure_inference_ms": 49.961299
+      },
+      "output_sha256": "3ed586e2228f99c06b92a10ed1af6af4e5dd482b137374569c559a275e23bbb5",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 45 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.625721
+    },
+    {
+      "sample_id": "R2R/7/004.jpg",
+      "episode_id": 7,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 897,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.328960418701172,
+        "decode_ms": 30.042144775390625,
+        "gpu_inference_ms": 49.3711051940918,
+        "pure_inference_ms": 49.38603
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 54.997592
+    },
+    {
+      "sample_id": "R2R/7/005.jpg",
+      "episode_id": 7,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1085,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.47599983215332,
+        "decode_ms": 31.440704345703125,
+        "gpu_inference_ms": 50.91670227050781,
+        "pure_inference_ms": 50.931841
+      },
+      "output_sha256": "e6d70d6d0fb340a5c6d0e67a98c77666dd524ea25e106c7762f9fc7d8385dc8b",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.523183
+    },
+    {
+      "sample_id": "R2R/7/006.jpg",
+      "episode_id": 7,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1273,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.485279083251953,
+        "decode_ms": 30.95929527282715,
+        "gpu_inference_ms": 50.444576263427734,
+        "pure_inference_ms": 50.460961
+      },
+      "output_sha256": "884f215a3b9f9518e56895df92b5b2050058156d4a21d0a9322f9041512c9f36",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, turn right 45 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.107195
+    },
+    {
+      "sample_id": "R2R/7/007.jpg",
+      "episode_id": 7,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1461,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.154272079467773,
+        "decode_ms": 29.88047981262207,
+        "gpu_inference_ms": 50.034751892089844,
+        "pure_inference_ms": 50.051814
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.855876
+    },
+    {
+      "sample_id": "R2R/7/008.jpg",
+      "episode_id": 7,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1649,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.681631088256836,
+        "decode_ms": 30.118303298950195,
+        "gpu_inference_ms": 50.79993438720703,
+        "pure_inference_ms": 50.815655
+      },
+      "output_sha256": "b25d0a214c74a4305a723478b12ef9b0952a5fd4887ef60ffd57eadfe34be1bc",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 25cm, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.547208
+    },
+    {
+      "sample_id": "R2R/7/009.jpg",
+      "episode_id": 7,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1837,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.186368942260742,
+        "decode_ms": 30.272192001342773,
+        "gpu_inference_ms": 51.458560943603516,
+        "pure_inference_ms": 51.474919
+      },
+      "output_sha256": "09a183a981bbd122b20dd762edd36a3b989f948b7b849aaa47b31e5d2b100cbf",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        20,
+        15,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 50cm, turn right 15 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.226583
+    },
+    {
+      "sample_id": "R2R/7/010.jpg",
+      "episode_id": 7,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2025,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.25836753845215,
+        "decode_ms": 30.535839080810547,
+        "gpu_inference_ms": 50.79420852661133,
+        "pure_inference_ms": 50.810798
+      },
+      "output_sha256": "45fb4f66ac573ce6bed563780860ec05e26da726b2359c4bd5dd61285386d125",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "move forward 75cm, move forward 25cm, turn left 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.608901
+    },
+    {
+      "sample_id": "R2R/7/011.jpg",
+      "episode_id": 7,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2213,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.710559844970703,
+        "decode_ms": 30.51750373840332,
+        "gpu_inference_ms": 51.228065490722656,
+        "pure_inference_ms": 51.243561
+      },
+      "output_sha256": "4a32408ff750a7370e0212f355d416b3f62b57c1902836c751341b37767358dd",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 75cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.877387
+    },
+    {
+      "sample_id": "R2R/7/012.jpg",
+      "episode_id": 7,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2401,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.718687057495117,
+        "decode_ms": 30.727359771728516,
+        "gpu_inference_ms": 51.446048736572266,
+        "pure_inference_ms": 51.46206
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.156517
+    },
+    {
+      "sample_id": "R2R/8/001.jpg",
+      "episode_id": 8,
+      "step": 0,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 326,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 21.321279525756836,
+        "decode_ms": 29.78441619873047,
+        "gpu_inference_ms": 51.10569763183594,
+        "pure_inference_ms": 51.121467
+      },
+      "output_sha256": "a2cf4e290efb0b62112cc60df1e8ea762f21098d0a367635e9bb5e30509794f0",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        18,
+        15,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 30 degrees, move forward 25cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 57.082655
+    },
+    {
+      "sample_id": "R2R/8/002.jpg",
+      "episode_id": 8,
+      "step": 1,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 507,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 18.986591339111328,
+        "decode_ms": 30.220256805419922,
+        "gpu_inference_ms": 49.20684814453125,
+        "pure_inference_ms": 49.222663
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 54.926785
+    },
+    {
+      "sample_id": "R2R/8/003.jpg",
+      "episode_id": 8,
+      "step": 2,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 688,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.24720001220703,
+        "decode_ms": 31.4968318939209,
+        "gpu_inference_ms": 50.74403381347656,
+        "pure_inference_ms": 50.759321
+      },
+      "output_sha256": "a13e0a0e287d5f032cb4f56bddc5c772a25509baa250011ef32efb06286dc142",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 45 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.429691
+    },
+    {
+      "sample_id": "R2R/8/004.jpg",
+      "episode_id": 8,
+      "step": 3,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 869,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.08950424194336,
+        "decode_ms": 29.128320693969727,
+        "gpu_inference_ms": 49.21782302856445,
+        "pure_inference_ms": 49.23357
+      },
+      "output_sha256": "53f37f67c489bd13fb86dac374eb88bc35231e5a3303aa0401f3fac53c17cab9",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        22,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 75cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 54.958984
+    },
+    {
+      "sample_id": "R2R/8/005.jpg",
+      "episode_id": 8,
+      "step": 4,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1050,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.335519790649414,
+        "decode_ms": 30.707712173461914,
+        "gpu_inference_ms": 51.04323196411133,
+        "pure_inference_ms": 51.058853
+      },
+      "output_sha256": "a13e0a0e287d5f032cb4f56bddc5c772a25509baa250011ef32efb06286dc142",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        19,
+        20,
+        12348,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, turn right 45 degrees, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.824116
+    },
+    {
+      "sample_id": "R2R/8/006.jpg",
+      "episode_id": 8,
+      "step": 5,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1231,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.980224609375,
+        "decode_ms": 29.25529670715332,
+        "gpu_inference_ms": 49.23551940917969,
+        "pure_inference_ms": 49.251126
+      },
+      "output_sha256": "be3097cdc5d86dd17784c81bdaefb1e867cb9953374679664b99b3009bc7191b",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        2115,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn left 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 54.897912
+    },
+    {
+      "sample_id": "R2R/8/007.jpg",
+      "episode_id": 8,
+      "step": 6,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1412,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.461984634399414,
+        "decode_ms": 29.330272674560547,
+        "gpu_inference_ms": 49.79225540161133,
+        "pure_inference_ms": 49.808237
+      },
+      "output_sha256": "918ec02c87495b80537776b3ffd510be9fdb93329c6321f372aacba49efb5649",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 25cm, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.372297
+    },
+    {
+      "sample_id": "R2R/8/008.jpg",
+      "episode_id": 8,
+      "step": 7,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1593,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.6015682220459,
+        "decode_ms": 29.643775939941406,
+        "gpu_inference_ms": 49.24534225463867,
+        "pure_inference_ms": 49.261382
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 55.310594
+    },
+    {
+      "sample_id": "R2R/8/009.jpg",
+      "episode_id": 8,
+      "step": 8,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 1774,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 19.79497528076172,
+        "decode_ms": 30.88319969177246,
+        "gpu_inference_ms": 50.67817687988281,
+        "pure_inference_ms": 50.694592
+      },
+      "output_sha256": "8f306eca92a90032773c6ff81ad0707f30d0320222f43cbc87b4d6b1fa31cc48",
+      "token_ids": [
+        412,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        20,
+        15,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        151645
+      ],
+      "text": "turn right 15 degrees, move forward 50cm, turn right 15 degrees",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.516872
+    },
+    {
+      "sample_id": "R2R/8/010.jpg",
+      "episode_id": 8,
+      "step": 9,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 8,
+      "cache_length": 1942,
+      "stop_reason": "stop",
+      "model_timing_ms": {
+        "prefill_ms": 20.036191940307617,
+        "decode_ms": 15.197183609008789,
+        "gpu_inference_ms": 35.233375549316406,
+        "pure_inference_ms": 35.248231
+      },
+      "output_sha256": "a5c3824b1137c27616c7dacf4e6ec84041c6e1531b558cb56add6892fa7e1f80",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2936
+      ],
+      "text": "move forward 25cm, stop",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        false
+      ],
+      "latency_ms": 40.853582
+    },
+    {
+      "sample_id": "R2R/8/011.jpg",
+      "episode_id": 8,
+      "step": 10,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 8,
+      "cache_length": 2110,
+      "stop_reason": "stop",
+      "model_timing_ms": {
+        "prefill_ms": 20.16089630126953,
+        "decode_ms": 15.212575912475586,
+        "gpu_inference_ms": 35.373470306396484,
+        "pure_inference_ms": 35.388332
+      },
+      "output_sha256": "a5c3824b1137c27616c7dacf4e6ec84041c6e1531b558cb56add6892fa7e1f80",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2936
+      ],
+      "text": "move forward 25cm, stop",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        false
+      ],
+      "latency_ms": 41.080735
+    },
+    {
+      "sample_id": "R2R/8/012.jpg",
+      "episode_id": 8,
+      "step": 11,
+      "repeat": 0,
+      "action_slots": 3,
+      "generated_tokens": 21,
+      "cache_length": 2291,
+      "stop_reason": "eos",
+      "model_timing_ms": {
+        "prefill_ms": 20.75209617614746,
+        "decode_ms": 29.770687103271484,
+        "gpu_inference_ms": 50.52278518676758,
+        "pure_inference_ms": 50.539117
+      },
+      "output_sha256": "6f00afe4b1eeaac5d7534fdfec3533efb5e253006a8ca97f6b0b76cad0d70c08",
+      "token_ids": [
+        3397,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        11,
+        2484,
+        1290,
+        220,
+        16,
+        20,
+        12348,
+        11,
+        3271,
+        4637,
+        220,
+        17,
+        20,
+        6226,
+        151645
+      ],
+      "text": "move forward 25cm, turn right 15 degrees, move forward 25cm",
+      "parsed_valid": true,
+      "action_mask": [
+        true,
+        true,
+        true
+      ],
+      "latency_ms": 56.482149
+    }
+  ]
+}

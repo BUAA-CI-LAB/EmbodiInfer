@@ -1,0 +1,63 @@
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:00<00:00, 132.46it/s]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+{"batches": 25, "observations": 50, "peak_allocated_gib": 12.468132019042969}
+{"batches": 50, "observations": 100, "peak_allocated_gib": 12.79043436050415}
+{"batches": 75, "observations": 150, "peak_allocated_gib": 12.79043436050415}
+{"batches": 100, "observations": 200, "peak_allocated_gib": 12.865480422973633}
+{"batches": 125, "observations": 250, "peak_allocated_gib": 12.923552989959717}
+{"batches": 150, "observations": 300, "peak_allocated_gib": 12.993046760559082}
+{"batches": 175, "observations": 350, "peak_allocated_gib": 13.011637687683105}
+{"batches": 200, "observations": 400, "peak_allocated_gib": 13.13250732421875}
+{"batches": 225, "observations": 450, "peak_allocated_gib": 13.13250732421875}
+{"batches": 250, "observations": 500, "peak_allocated_gib": 13.189454078674316}
+{"batches": 275, "observations": 550, "peak_allocated_gib": 13.541659355163574}
+{"batches": 300, "observations": 600, "peak_allocated_gib": 13.884644508361816}
+{"batches": 325, "observations": 650, "peak_allocated_gib": 13.884644508361816}
+{"batches": 350, "observations": 700, "peak_allocated_gib": 13.884644508361816}
+{"batches": 375, "observations": 750, "peak_allocated_gib": 13.884644508361816}
+{"batches": 400, "observations": 800, "peak_allocated_gib": 13.884644508361816}
+{"batches": 425, "observations": 850, "peak_allocated_gib": 13.884644508361816}
+{"batches": 450, "observations": 900, "peak_allocated_gib": 13.884644508361816}
+{"batches": 475, "observations": 950, "peak_allocated_gib": 13.884644508361816}
+{"batches": 500, "observations": 1000, "peak_allocated_gib": 13.884644508361816}
+{"batches": 525, "observations": 1050, "peak_allocated_gib": 13.884644508361816}
+{"batches": 550, "observations": 1100, "peak_allocated_gib": 13.884644508361816}
+{"batches": 575, "observations": 1150, "peak_allocated_gib": 13.884644508361816}
+{"batches": 600, "observations": 1200, "peak_allocated_gib": 13.884644508361816}
+{"batches": 625, "observations": 1250, "peak_allocated_gib": 13.884644508361816}
+{"batches": 650, "observations": 1300, "peak_allocated_gib": 13.884644508361816}
+{"batches": 675, "observations": 1350, "peak_allocated_gib": 13.884644508361816}
+{"batches": 700, "observations": 1400, "peak_allocated_gib": 13.884644508361816}
+{"batches": 725, "observations": 1450, "peak_allocated_gib": 13.884644508361816}
+{"batches": 750, "observations": 1500, "peak_allocated_gib": 13.884644508361816}
+{"batches": 775, "observations": 1550, "peak_allocated_gib": 13.884644508361816}
+{"batches": 800, "observations": 1600, "peak_allocated_gib": 13.884644508361816}
+{"batches": 825, "observations": 1650, "peak_allocated_gib": 13.884644508361816}
+{"batches": 850, "observations": 1700, "peak_allocated_gib": 13.884644508361816}
+{"batches": 875, "observations": 1750, "peak_allocated_gib": 13.884644508361816}
+{"batches": 900, "observations": 1800, "peak_allocated_gib": 13.884644508361816}
+{"batches": 925, "observations": 1850, "peak_allocated_gib": 13.884644508361816}
+{"batches": 950, "observations": 1900, "peak_allocated_gib": 13.884644508361816}
+{"batches": 975, "observations": 1950, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1000, "observations": 2000, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1025, "observations": 2050, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1050, "observations": 2100, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1075, "observations": 2150, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1100, "observations": 2200, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1125, "observations": 2250, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1150, "observations": 2300, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1175, "observations": 2350, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1200, "observations": 2400, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1225, "observations": 2450, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1250, "observations": 2500, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1275, "observations": 2550, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1300, "observations": 2600, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1325, "observations": 2650, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1350, "observations": 2700, "peak_allocated_gib": 13.884644508361816}
+{"batches": 1375, "observations": 2750, "peak_allocated_gib": 14.119009494781494}
+{"batches": 1400, "observations": 2800, "peak_allocated_gib": 14.119009494781494}
+{"batches": 1425, "observations": 2850, "peak_allocated_gib": 14.119009494781494}
+{"batches": 1450, "observations": 2900, "peak_allocated_gib": 14.119009494781494}
+{"batches": 1475, "observations": 2950, "peak_allocated_gib": 14.119009494781494}
+{"batches": 1500, "observations": 2985, "peak_allocated_gib": 14.119009494781494}
+{"status": "complete", "phase": "finished", "metrics": {"batches": 1512, "observations": 2997, "mean_batch_occupancy": 1.9821428571428572, "batch_e2e_ms": {"mean": 87.67957302248678, "p50": 88.0221645, "p95": 102.80696255000001, "p99": 109.62456145}, "batch_forward_ms": {"mean": 76.21490237830687, "p50": 76.42588649999999, "p95": 91.12012605, "p99": 98.44601097000007}, "batch_prefill_ms": {"mean": 38.953088568631934}, "batch_decode_ms": {"mean": 37.238966262529765}, "amortized_e2e_ms_per_observation": 44.23473954287621, "amortized_forward_ms_per_observation": 38.450761560226894, "observations_per_second": 22.606666396909873}, "memory": {"peak_allocated_bytes": 15160171008, "peak_reserved_bytes": 16234053632, "device_total_bytes": 33668988928, "peak_scope": "measurement"}}

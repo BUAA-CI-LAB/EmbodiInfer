@@ -1,0 +1,965 @@
+[transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+WARNING 09-26 01:32:55 [arg_utils.py:1812] The global random seed is set to 42. Since VLLM_ENABLE_V1_MULTIPROCESSING is set to False, this may affect the random state of the Python process that launched vLLM.
+INFO 09-26 01:32:55 [model.py:692] Resolved architecture: Qwen2_5_VLForConditionalGeneration
+INFO 09-26 01:32:55 [model.py:2361] Downcasting torch.float32 to torch.bfloat16.
+INFO 09-26 01:32:55 [model.py:2030] Using max model len 128000
+INFO 09-26 01:32:56 [scheduler.py:288] Chunked prefill is enabled with max_num_batched_tokens=4148.
+INFO 09-26 01:32:56 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+WARNING 09-26 01:32:56 [vllm.py:2135] max_num_scheduled_tokens is set to 4148 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.
+WARNING 09-26 01:32:56 [vllm.py:716] Model Runner V2 does not yet support speculative method 'ngram_gpu'; using the V1 model runner instead.
+INFO 09-26 01:32:59 [core.py:123] Initializing a V1 LLM engine (v0.30.0) with config: model='/home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000', speculative_config=SpeculativeConfig(method='ngram_gpu', model='/home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000', num_spec_tokens=16), tokenizer='/home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128000, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=None, quantization_config=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=42, served_model_name=/home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'ir_enable_torch_wrap': True, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen4_exp_ple_short_conv', 'vllm::qwen4_exp_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::hpc_rope_norm_forward', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': True, 'cudagraph_mm_encoder': True, 'encoder_cudagraph_token_budgets': [88, 128, 176, 256, 264, 352, 384, 512], 'encoder_cudagraph_max_vision_items_per_batch': 4, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [4148], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 17, 24, 32, 34, 51, 64, 68, 96, 128, 192, 256, 512, 1037, 2074, 3111, 4148], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 4148, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, moe_backend='auto', sparse_indexer_topk_backend='auto', linear_backend='auto', linear_backend_per_quant=None)
+INFO 09-26 01:32:59 [parallel_state.py:1827] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_0e8e16454e834fcaaf62da8220ad8dbf backend=nccl
+INFO 09-26 01:33:00 [parallel_state.py:2267] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+INFO 09-26 01:33:00 [topk_topp_sampler.py:78] Using FlashInfer for top-p & top-k sampling.
+INFO 09-26 01:33:00 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+INFO 09-26 01:33:00 [compilation.py:336] Enabled custom fusions: rope_kvcache_cat_mla
+INFO 09-26 01:33:01 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:01 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/35ee1376d178dc3b292fd3a73a5f2f9c0d9a02724025aabcbfc74dbff5f3e716/rank_0_0/model
+INFO 09-26 01:33:01 [monitor.py:53] torch.compile took 0.10 s in total
+INFO 09-26 01:33:01 [monitor.py:81] Initial profiling/warmup run took 0.01 s
+WARNING 09-26 01:33:01 [__init__.py:205] min_p and logit_bias parameters won't work with speculative decoding.
+INFO 09-26 01:33:01 [gpu_model_runner.py:5317] Starting to load model /home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000...
+INFO 09-26 01:33:01 [cuda.py:579] Using backend AttentionBackendEnum.FLASH_ATTN for vit attention
+INFO 09-26 01:33:01 [mm_encoder_attention.py:372] Using AttentionBackendEnum.FLASH_ATTN for MMEncoderAttention.
+INFO 09-26 01:33:01 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+INFO 09-26 01:33:01 [cuda.py:478] Using AttentionBackendEnum.FLASH_ATTN backend.
+INFO 09-26 01:33:01 [flash_attn.py:1116] Using FlashAttention version 2
+INFO 09-26 01:33:01 [weight_utils.py:895] Filesystem type for checkpoints: EXT4. Checkpoint size: 15.15 GiB. Available RAM: 98.49 GiB.
+INFO 09-26 01:33:01 [weight_utils.py:918] Auto-prefetch is disabled because the filesystem (EXT4) is not a recognized network FS (NFS/Lustre). If you want to force prefetching, start vLLM with --safetensors-load-strategy=prefetch.
+Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:00<00:01,  1.90it/s]
+Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:01<00:01,  1.45it/s]
+Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:02<00:00,  1.36it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:02<00:00,  1.69it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:02<00:00,  1.61it/s]
+
+INFO 09-26 01:33:04 [default_loader.py:430] Loading weights took 2.55 seconds
+INFO 09-26 01:33:04 [gpu_model_runner.py:5348] Loading drafter model...
+INFO 09-26 01:33:05 [gpu_model_runner.py:5416] Model loading took 7.16 GiB memory and 3.391296 seconds
+INFO 09-26 01:33:05 [utils.py:320] Using LBNHC KV cache layout.
+INFO 09-26 01:33:05 [gpu_model_runner.py:6496] Encoder cache will be initialized with a budget of 4148 tokens, and profiled with 42 image items of the maximum feature size.
+[transformers] Keyword argument `use_fast` is not a valid argument for this processor and will be ignored.
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mm_permute_t_unfold_view_0
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:05.872000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/b730659502c60dbb11bf0f1eea9bb203744abd680be2049ed9016cd4447a0e00/inductor_cache/triton/0/KUYSMZNAWRW2PJFH6LSFC24SIDOTJLM2DWORPCTQ22OVAAZVRP4A/triton_poi_fused_mm_permute_t_unfold_view_0.cubin')
+INFO 09-26 01:33:05 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:05 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/b730659502c60dbb11bf0f1eea9bb203744abd680be2049ed9016cd4447a0e00/rank_0_0/model
+INFO 09-26 01:33:05 [monitor.py:53] torch.compile took 0.01 s in total
+INFO 09-26 01:33:05 [monitor.py:81] Initial profiling/warmup run took 0.09 s
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.024000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.025000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.08 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.01 s
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.108000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.109000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.176000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.177000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.243000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.310000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.05 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.377000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.444000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.445000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.512000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.05 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.578000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.645000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.646000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.05 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.713000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.780000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.781000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.848000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.915000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:06 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:06 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:06 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:06 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.983000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:06.984000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.051000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.052000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.119000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.187000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.188000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.254000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.255000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.322000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.389000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.390000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.456000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.457000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.526000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.594000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.595000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.663000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.732000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.800000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.868000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:07.936000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:07 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:07 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:07 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:07 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.004000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:08 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:08 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:08 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:08 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.071000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:08 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:08 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:08 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:08 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_clone_permute_slice_view_1
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.139000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/X36GVLE2MPAXSFFKBV2QV2JEOKU46WFGU6ORBBYEYDLDWDSHRUTQ/triton_poi_fused_clone_permute_slice_view_1.cubin')
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_view_3
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/KC5KGRIWMYDZZNPIF3UOXZGD7KWWI33K6SGRURXO3ZFHLXEG6HKA/triton_poi_fused_mul_silu_slice_view_3.cubin')
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_add_fused_add_rms_norm_view_4
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.140000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/inductor_cache/triton/0/57I2N4HOJLLWDT33YFTHWO7SYQEYAPTGSDLAYIWHKK4S4QAAC7GA/triton_poi_fused_add_fused_add_rms_norm_view_4.cubin')
+INFO 09-26 01:33:08 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:08 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/f6a141a1f167287c638b27df4f01d576b3a6d3c87c43d1a7c6ce090619b3e47e/rank_0_0/model
+INFO 09-26 01:33:08 [monitor.py:53] torch.compile took 0.06 s in total
+INFO 09-26 01:33:08 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_addmm_rms_norm_t_view_1
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/9bb7e1e45c60df135ba33876f9170421ef9096588b7be46c480384ab7175b4ce/inductor_cache/triton/0/SFX2HGJIYJOM6FP5YG7DSAQEC5IHPENEBP2JNFY4FEEQKFPWWAWA/triton_poi_fused_addmm_rms_norm_t_view_1.cubin')
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_gelu_2
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.221000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/9bb7e1e45c60df135ba33876f9170421ef9096588b7be46c480384ab7175b4ce/inductor_cache/triton/0/RRXPKDYZ5ZENZIHN5JZL4J4555USPGZ4SQ5GM3PBXCOCPEH4UYVQ/triton_poi_fused_gelu_2.cubin')
+INFO 09-26 01:33:08 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=1 num_submods=1
+INFO 09-26 01:33:08 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/9bb7e1e45c60df135ba33876f9170421ef9096588b7be46c480384ab7175b4ce/rank_0_0/model
+INFO 09-26 01:33:08 [monitor.py:53] torch.compile took 0.03 s in total
+INFO 09-26 01:33:08 [monitor.py:81] Initial profiling/warmup run took 0.00 s
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_0
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/1b1f8e285aa8c5939828eca48bf72ae01f4a47cc2c5842b3f9134e3469b9554f/inductor_cache/triton/0/BUU5QTA33CBFZS7XOVZ2CE5IOPYG3OIYGUXQYXZMZIGB4HAAUNCQ/triton_poi_fused_0.cubin')
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_2
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.302000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/1b1f8e285aa8c5939828eca48bf72ae01f4a47cc2c5842b3f9134e3469b9554f/inductor_cache/triton/0/7TQTDSSKG2VNRGZNZJCPFJFOPIUYYYCRQ2GZJHADTBIS5HIJAMUA/triton_poi_fused_2.cubin')
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_mul_silu_slice_1
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.308000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/1b1f8e285aa8c5939828eca48bf72ae01f4a47cc2c5842b3f9134e3469b9554f/inductor_cache/triton/0/3SSD5AKZQ27MMDHAMQNW2ECTKS2XAGGRI77OMNLNQC3EAZU6PJCA/triton_poi_fused_mul_silu_slice_1.cubin')
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_cat_index_select_split_split_with_sizes_3
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.310000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/1b1f8e285aa8c5939828eca48bf72ae01f4a47cc2c5842b3f9134e3469b9554f/inductor_cache/triton/0/RZOYTVTD4DIJ4PPW6BHD53UVLZDASSGA5KNF5MMBFZHZ6IB46RVA/triton_poi_fused_cat_index_select_split_split_with_sizes_3.cubin')
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242] Failed to reload cubin file statically launchable autotuner triton_poi_fused_4
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242] Traceback (most recent call last):
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/triton_bundler.py", line 240, in load_autotuners
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242]     compile_result.reload_cubin_path()
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242]   File "/home/qy/lxygit/activevln-benchmark-review/vllm-env/lib/python3.12/site-packages/torch/_inductor/runtime/triton_heuristics.py", line 2592, in reload_cubin_path
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242]     raise RuntimeError(
+[rank0]:W0926 01:33:08.311000 59754 torch/_inductor/triton_bundler.py:242] RuntimeError: ('Cubin file saved by TritonBundler not found at %s', '/home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/1b1f8e285aa8c5939828eca48bf72ae01f4a47cc2c5842b3f9134e3469b9554f/inductor_cache/triton/0/CCMPZRZZVB32XXI6OUHAGULUHTTYCRAOB2AX4EZMBUSZLJVICCCA/triton_poi_fused_4.cubin')
+INFO 09-26 01:33:08 [caching.py:343] reconstructed serializable fn from standalone compile artifacts. num_artifacts=4 num_submods=37
+INFO 09-26 01:33:08 [decorators.py:313] Directly load AOT compilation from path /home/qy/.cache/vllm/torch_compile_cache/torch_aot_compile/1b1f8e285aa8c5939828eca48bf72ae01f4a47cc2c5842b3f9134e3469b9554f/rank_0_0/model
+INFO 09-26 01:33:08 [monitor.py:53] torch.compile took 0.09 s in total
+INFO 09-26 01:33:08 [monitor.py:81] Initial profiling/warmup run took 0.01 s
+INFO 09-26 01:33:09 [encoder_cudagraph.py:207] EncoderCudaGraphManager initialized with paths={'default': [88, 128, 176, 256, 264, 352, 384, 512]}, max_batch_size=4, max_frames_per_batch=0, use_dp=False, capture_axes=()
+INFO 09-26 01:33:09 [gpu_model_runner.py:6697] Profiling CUDA graph memory: PIECEWISE=13 (largest=4148), FULL=4 (largest=68), ENCODER=8 (largest=512)
+INFO 09-26 01:33:10 [encoder_cudagraph.py:268] Encoder CUDA graph capture complete. Captured 8 graphs across 1 paths.
+INFO 09-26 01:33:10 [gpu_model_runner.py:6822] Estimated CUDA graph memory: 0.62 GiB total
+INFO 09-26 01:33:10 [gpu_worker.py:640] Available KV cache memory: 18.06 GiB
+INFO 09-26 01:33:10 [gpu_worker.py:655] CUDA graph memory profiling is enabled (default since v0.21.0). The current --gpu-memory-utilization=0.8500 is equivalent to --gpu-memory-utilization=0.8302 without CUDA graph memory profiling. To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.8698. To disable, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0.
+INFO 09-26 01:33:10 [kv_cache_utils.py:2395] GPU KV cache size: 525,888 tokens, Maximum concurrency for 128,000 tokens per request: 4.11x
+INFO 09-26 01:33:10 [kernel_warmup.py:172] JIT kernel warmup starting.
+JIT kernel warmup (130 compile keys):   0%|          | 0/9 [00:00<?, ?kernel/s]JIT kernel warmup (130 compile keys):  11%|█         | 1/9 [00:00<00:00,  9.26kernel/s, _DecoratedTritonJitKernel (16 keys)]JIT kernel warmup (130 compile keys):  33%|███▎      | 3/9 [00:00<00:00,  8.71kernel/s, _DecoratedTritonJitKernel (60 keys)]JIT kernel warmup (130 compile keys): 100%|██████████| 9/9 [00:00<00:00, 20.63kernel/s, ComputeSlotMappingKernel (1 keys)]  
+INFO 09-26 01:33:11 [kernel_warmup.py:185] JIT kernel warmup finished in 0.46s.
+INFO 09-26 01:33:11 [qwen_vl_triton_warmup.py:98] Warmed M-RoPE Triton kernels.
+INFO 09-26 01:33:11 [encoder_cudagraph.py:207] EncoderCudaGraphManager initialized with paths={'default': [88, 128, 176, 256, 264, 352, 384, 512]}, max_batch_size=4, max_frames_per_batch=0, use_dp=False, capture_axes=()
+INFO 09-26 01:33:11 [gpu_model_runner.py:6658] Initialized EncoderCudaGraphManager for vision encoder
+INFO 09-26 01:33:11 [gpu_model_runner.py:6883] Rank 0: Torch profiler disabled for CUDA graph capture
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/13 [00:00<?, ?it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   8%|▊         | 1/13 [00:00<00:01,  7.68it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  23%|██▎       | 3/13 [00:00<00:00, 10.36it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  54%|█████▍    | 7/13 [00:00<00:00, 19.50it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 13/13 [00:00<00:00, 30.84it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 13/13 [00:00<00:00, 24.24it/s]
+Capturing CUDA graphs (decode, FULL):   0%|          | 0/4 [00:00<?, ?it/s]Capturing CUDA graphs (decode, FULL): 100%|██████████| 4/4 [00:00<00:00, 57.59it/s]
+INFO 09-26 01:33:12 [encoder_cudagraph.py:268] Encoder CUDA graph capture complete. Captured 8 graphs across 1 paths.
+INFO 09-26 01:33:13 [gpu_model_runner.py:6929] Graph capturing finished in 2 secs, took 0.62 GiB
+INFO 09-26 01:33:13 [gpu_worker.py:825] CUDA graph pool memory: 0.62 GiB (actual), 0.62 GiB (estimated), difference: 0.0 GiB (0.5%).
+INFO 09-26 01:33:13 [gpu_worker.py:888] Free memory on device (28.34/31.36 GiB) on startup. Desired GPU memory utilization is (0.85, 26.65 GiB). Actual usage is 7.57 GiB for consumed memory (weights + non-torch), 1.03 GiB for peak activation, and 0.62 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=18564757709` (17.29 GiB) to fit into requested memory, or `--kv-cache-memory=20375596032` (18.98 GiB) to fully utilize gpu memory. Current kv cache memory in use is 18.06 GiB.
+INFO 09-26 01:33:13 [jit_monitor.py:85] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+WARNING 09-26 01:33:13 [torch_utils.py:275] OMP_NUM_THREADS=4 is set; leaving Torch threads at 4 for serving. Multi-threaded torch CPU ops during serving can degrade performance through spin-wait contention and cgroup CPU-quota throttling.
+INFO 09-26 01:33:13 [core.py:362] init engine (profile, create kv cache, warmup model) took 8.33 s (compilation: 2.04 s — language_model: 0.18 s, encoder: 1.86 s)
+INFO 09-26 01:33:23 [block_pool.py:854] Successfully reset prefix cache
+{"batches": 25, "observations": 100, "metrics": {"batches": 25, "observations": 100, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 131.1598742, "p50": 133.176535, "p95": 146.971051, "p99": 149.34319108}, "batch_forward_ms": {"mean": 103.37945668, "p50": 102.550119, "p95": 118.2468966, "p99": 120.88856859999999}, "amortized_e2e_ms_per_observation": 32.78996855, "amortized_forward_ms_per_observation": 25.84486417, "observations_per_second": 30.497132026068993}}
+{"batches": 50, "observations": 200, "metrics": {"batches": 50, "observations": 200, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 135.3074235, "p50": 133.894127, "p95": 160.48631129999995, "p99": 168.47057969}, "batch_forward_ms": {"mean": 103.12566438, "p50": 102.2381695, "p95": 124.9344241, "p99": 135.8850197}, "amortized_e2e_ms_per_observation": 33.826855875, "amortized_forward_ms_per_observation": 25.781416095, "observations_per_second": 29.56231000880746}}
+{"batches": 75, "observations": 300, "metrics": {"batches": 75, "observations": 300, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 138.20990632000002, "p50": 136.738309, "p95": 173.77012769999996, "p99": 193.68271488000005}, "batch_forward_ms": {"mean": 105.24782778666666, "p50": 102.550119, "p95": 141.16243310000002, "p99": 150.60370826000005}, "amortized_e2e_ms_per_observation": 34.552476580000004, "amortized_forward_ms_per_observation": 26.311956946666665, "observations_per_second": 28.941485502050224}}
+{"batches": 100, "observations": 400, "metrics": {"batches": 100, "observations": 400, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 142.76262966000002, "p50": 139.33595, "p95": 186.1239307, "p99": 199.79936804000008}, "batch_forward_ms": {"mean": 107.84634866, "p50": 108.81501349999999, "p95": 145.3717594, "p99": 158.49783195000003}, "amortized_e2e_ms_per_observation": 35.690657415000004, "amortized_forward_ms_per_observation": 26.961587165, "observations_per_second": 28.018536850479023}}
+{"batches": 125, "observations": 500, "metrics": {"batches": 125, "observations": 500, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 144.86928747999997, "p50": 141.301896, "p95": 186.9849232, "p99": 198.72343124000002}, "batch_forward_ms": {"mean": 109.869992264, "p50": 110.310083, "p95": 145.0652936, "p99": 156.42317860000006}, "amortized_e2e_ms_per_observation": 36.21732186999999, "amortized_forward_ms_per_observation": 27.467498066, "observations_per_second": 27.611097352516644}}
+{"batches": 150, "observations": 600, "metrics": {"batches": 150, "observations": 600, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 151.45591689333335, "p50": 146.9004085, "p95": 196.79750209999997, "p99": 210.34270057999996}, "batch_forward_ms": {"mean": 114.12037058000001, "p50": 113.0731255, "p95": 149.63715484999997, "p99": 161.95117944999996}, "amortized_e2e_ms_per_observation": 37.86397922333334, "amortized_forward_ms_per_observation": 28.530092645000003, "observations_per_second": 26.410325077079037}}
+{"batches": 175, "observations": 700, "metrics": {"batches": 175, "observations": 700, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 160.84794925714286, "p50": 152.537741, "p95": 229.20662869999995, "p99": 248.24767627999998}, "batch_forward_ms": {"mean": 120.1532341257143, "p50": 115.425125, "p95": 167.68598849999987, "p99": 186.73123819999998}, "amortized_e2e_ms_per_observation": 40.211987314285714, "amortized_forward_ms_per_observation": 30.038308531428576, "observations_per_second": 24.8682063928917}}
+{"batches": 200, "observations": 800, "metrics": {"batches": 200, "observations": 800, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 164.69522249000002, "p50": 159.266838, "p95": 233.09089264999994, "p99": 251.88397634999998}, "batch_forward_ms": {"mean": 121.25322177999999, "p50": 115.904852, "p95": 173.236484, "p99": 185.95227069999996}, "amortized_e2e_ms_per_observation": 41.173805622500005, "amortized_forward_ms_per_observation": 30.313305444999997, "observations_per_second": 24.287286173361053}}
+{"batches": 225, "observations": 900, "metrics": {"batches": 225, "observations": 900, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 165.02938562222224, "p50": 160.266666, "p95": 232.0811834, "p99": 251.77929628}, "batch_forward_ms": {"mean": 122.2357522088889, "p50": 117.606675, "p95": 173.59846059999998, "p99": 185.17424159999996}, "amortized_e2e_ms_per_observation": 41.25734640555556, "amortized_forward_ms_per_observation": 30.558938052222224, "observations_per_second": 24.238107564410488}}
+{"batches": 250, "observations": 1000, "metrics": {"batches": 250, "observations": 1000, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.896866388, "p50": 164.412162, "p95": 229.85351594999995, "p99": 251.68607053}, "batch_forward_ms": {"mean": 123.71125775600001, "p50": 120.22358299999999, "p95": 171.43099539999994, "p99": 184.39625159999997}, "amortized_e2e_ms_per_observation": 41.724216597, "amortized_forward_ms_per_observation": 30.927814439000002, "observations_per_second": 23.966896961988752}}
+{"batches": 275, "observations": 1100, "metrics": {"batches": 275, "observations": 1100, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.9249734290909, "p50": 164.055021, "p95": 227.61814280000002, "p99": 251.59284478}, "batch_forward_ms": {"mean": 123.52176114909092, "p50": 120.407044, "p95": 166.52628210000006, "p99": 183.61826159999998}, "amortized_e2e_ms_per_observation": 41.731243357272724, "amortized_forward_ms_per_observation": 30.88044028727273, "observations_per_second": 23.962861385143096}}
+{"batches": 300, "observations": 1200, "metrics": {"batches": 300, "observations": 1200, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.73969002666666, "p50": 163.8505035, "p95": 225.00619610000004, "p99": 251.49961903}, "batch_forward_ms": {"mean": 123.93339658, "p50": 120.82657950000001, "p95": 165.29230055, "p99": 182.8402716}, "amortized_e2e_ms_per_observation": 41.684922506666666, "amortized_forward_ms_per_observation": 30.983349145, "observations_per_second": 23.989489241345478}}
+{"batches": 325, "observations": 1300, "metrics": {"batches": 325, "observations": 1300, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 168.1999037907692, "p50": 167.101725, "p95": 224.612344, "p99": 250.44241527999998}, "batch_forward_ms": {"mean": 124.88288827076921, "p50": 122.403228, "p95": 164.27805240000006, "p99": 182.56721184}, "amortized_e2e_ms_per_observation": 42.0499759476923, "amortized_forward_ms_per_observation": 31.220722067692304, "observations_per_second": 23.78122644455115}}
+{"batches": 350, "observations": 1400, "metrics": {"batches": 350, "observations": 1400, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.36290146571432, "p50": 162.41662000000002, "p95": 223.2870628, "p99": 249.34504577999996}, "batch_forward_ms": {"mean": 123.81255630571428, "p50": 120.68373700000001, "p95": 160.429193, "p99": 182.31519083999999}, "amortized_e2e_ms_per_observation": 41.59072536642858, "amortized_forward_ms_per_observation": 30.95313907642857, "observations_per_second": 24.043822058635826}}
+{"batches": 375, "observations": 1500, "metrics": {"batches": 375, "observations": 1500, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.60407882666667, "p50": 163.645986, "p95": 217.4919674000001, "p99": 248.24767627999998}, "batch_forward_ms": {"mean": 123.68559343200002, "p50": 120.820987, "p95": 160.2611333, "p99": 182.06316983999997}, "amortized_e2e_ms_per_observation": 41.651019706666666, "amortized_forward_ms_per_observation": 30.921398358000005, "observations_per_second": 24.00901603472483}}
+{"batches": 400, "observations": 1600, "metrics": {"batches": 400, "observations": 1600, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.58954938000002, "p50": 164.20584150000002, "p95": 214.25715374999996, "p99": 247.15030677999997}, "batch_forward_ms": {"mean": 123.78688526999998, "p50": 121.038103, "p95": 160.22569305, "p99": 181.81114884}, "amortized_e2e_ms_per_observation": 41.647387345000006, "amortized_forward_ms_per_observation": 30.946721317499996, "observations_per_second": 24.011110029932176}}
+{"batches": 425, "observations": 1700, "metrics": {"batches": 425, "observations": 1700, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.6967277811765, "p50": 164.358381, "p95": 214.05722799999998, "p99": 246.677676}, "batch_forward_ms": {"mean": 123.90513395764708, "p50": 121.672237, "p95": 159.77128879999998, "p99": 181.7048772}, "amortized_e2e_ms_per_observation": 41.67418194529412, "amortized_forward_ms_per_observation": 30.97628348941177, "observations_per_second": 23.99567198014119}}
+{"batches": 450, "observations": 1800, "metrics": {"batches": 450, "observations": 1800, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.93007247555553, "p50": 165.738857, "p95": 213.96631799999997, "p99": 246.23107599999997}, "batch_forward_ms": {"mean": 124.07168426222223, "p50": 121.95640449999999, "p95": 159.70505104999998, "p99": 181.77876662999998}, "amortized_e2e_ms_per_observation": 41.73251811888888, "amortized_forward_ms_per_observation": 31.01792106555556, "observations_per_second": 23.962129415511644}}
+{"batches": 475, "observations": 1900, "metrics": {"batches": 475, "observations": 1900, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 166.6114233663158, "p50": 164.541071, "p95": 213.4924949, "p99": 245.78447599999998}, "batch_forward_ms": {"mean": 124.11420644, "p50": 122.292027, "p95": 159.4774952, "p99": 181.76738838}, "amortized_e2e_ms_per_observation": 41.65285584157895, "amortized_forward_ms_per_observation": 31.02855161, "observations_per_second": 24.00795767289921}}
+{"batches": 500, "observations": 2000, "metrics": {"batches": 500, "observations": 2000, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 167.54550464599998, "p50": 166.3697635, "p95": 214.24964759999995, "p99": 245.33787599999997}, "batch_forward_ms": {"mean": 124.92419309799999, "p50": 122.66903099999999, "p95": 160.22569305, "p99": 181.75601013}, "amortized_e2e_ms_per_observation": 41.886376161499996, "amortized_forward_ms_per_observation": 31.231048274499997, "observations_per_second": 23.874111146410257}}
+{"batches": 525, "observations": 2100, "metrics": {"batches": 525, "observations": 2100, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 167.69630718666667, "p50": 166.303797, "p95": 214.19302399999998, "p99": 243.92795895999993}, "batch_forward_ms": {"mean": 125.22202336380951, "p50": 122.998623, "p95": 160.13973979999997, "p99": 181.67028732}, "amortized_e2e_ms_per_observation": 41.92407679666667, "amortized_forward_ms_per_observation": 31.305505840952378, "observations_per_second": 23.852642118991366}}
+{"batches": 550, "observations": 2200, "metrics": {"batches": 550, "observations": 2200, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 168.10582748181815, "p50": 166.82998500000002, "p95": 213.96631799999997, "p99": 242.47790370999994}, "batch_forward_ms": {"mean": 125.47489861636365, "p50": 123.851337, "p95": 160.429193, "p99": 181.58146682}, "amortized_e2e_ms_per_observation": 42.02645687045454, "amortized_forward_ms_per_observation": 31.36872465409091, "observations_per_second": 23.794535025459652}}
+{"batches": 575, "observations": 2300, "metrics": {"batches": 575, "observations": 2300, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 167.32378990086954, "p50": 165.863811, "p95": 213.4924949, "p99": 241.02784845999994}, "batch_forward_ms": {"mean": 124.7467151373913, "p50": 122.89094, "p95": 160.26113329999998, "p99": 181.49264632}, "amortized_e2e_ms_per_observation": 41.830947475217386, "amortized_forward_ms_per_observation": 31.186678784347826, "observations_per_second": 23.905745873732524}}
+{"batches": 600, "observations": 2400, "metrics": {"batches": 600, "observations": 2400, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 167.303918575, "p50": 166.11938049999998, "p95": 213.39470165, "p99": 239.57779320999995}, "batch_forward_ms": {"mean": 124.97733468833331, "p50": 123.22900100000001, "p95": 160.22569305, "p99": 181.40382582}, "amortized_e2e_ms_per_observation": 41.82597964375, "amortized_forward_ms_per_observation": 31.24433367208333, "observations_per_second": 23.908585250541254}}
+{"batches": 625, "observations": 2500, "metrics": {"batches": 625, "observations": 2500, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 168.8106073184, "p50": 167.248364, "p95": 214.9529216, "p99": 239.20246228}, "batch_forward_ms": {"mean": 125.96279767840002, "p50": 124.372896, "p95": 161.07814119999998, "p99": 181.67028732}, "amortized_e2e_ms_per_observation": 42.2026518296, "amortized_forward_ms_per_observation": 31.490699419600006, "observations_per_second": 23.695193468828947}}
+{"batches": 650, "observations": 2600, "metrics": {"batches": 650, "observations": 2600, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 169.27554878, "p50": 167.2959795, "p95": 215.62241774999995, "p99": 238.87191152999998}, "batch_forward_ms": {"mean": 126.37818749538462, "p50": 124.503512, "p95": 164.88996564999997, "p99": 181.77876662999998}, "amortized_e2e_ms_per_observation": 42.318887195, "amortized_forward_ms_per_observation": 31.594546873846156, "observations_per_second": 23.63011095712721}}
+{"batches": 675, "observations": 2700, "metrics": {"batches": 675, "observations": 2700, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 171.45116357185185, "p50": 168.471226, "p95": 227.2686522, "p99": 253.26764685999999}, "batch_forward_ms": {"mean": 127.95668237185187, "p50": 125.36867, "p95": 171.06105079999995, "p99": 191.97971166}, "amortized_e2e_ms_per_observation": 42.86279089296296, "amortized_forward_ms_per_observation": 31.989170592962967, "observations_per_second": 23.33025869680772}}
+{"batches": 700, "observations": 2800, "metrics": {"batches": 700, "observations": 2800, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 172.76034837285712, "p50": 170.4658645, "p95": 228.49893035, "p99": 254.07719701}, "batch_forward_ms": {"mean": 128.92268853714288, "p50": 126.1972785, "p95": 173.74462189999994, "p99": 193.82527126999994}, "amortized_e2e_ms_per_observation": 43.19008709321428, "amortized_forward_ms_per_observation": 32.23067213428572, "observations_per_second": 23.15346106716031}}
+{"batches": 725, "observations": 2900, "metrics": {"batches": 725, "observations": 2900, "mean_batch_occupancy": 4.0, "batch_e2e_ms": {"mean": 175.28813775034482, "p50": 172.012282, "p95": 237.3300314, "p99": 265.86273924}, "batch_forward_ms": {"mean": 130.74645246758618, "p50": 127.717669, "p95": 180.68607819999983, "p99": 209.28355087999998}, "amortized_e2e_ms_per_observation": 43.822034437586204, "amortized_forward_ms_per_observation": 32.686613116896545, "observations_per_second": 22.819570401831893}}
+{"batches": 750, "observations": 2965, "metrics": {"batches": 750, "observations": 2965, "mean_batch_occupancy": 3.953333333333333, "batch_e2e_ms": {"mean": 175.30476611466668, "p50": 171.718027, "p95": 238.99384719999995, "p99": 269.10347211}, "batch_forward_ms": {"mean": 130.83652380533334, "p50": 127.8026265, "p95": 181.78058714999997, "p99": 208.83734762999998}, "amortized_e2e_ms_per_observation": 44.343532744013494, "amortized_forward_ms_per_observation": 33.09524210927488, "observations_per_second": 22.551202804990837}}
+{"batches": 775, "observations": 2990, "metrics": {"batches": 775, "observations": 2990, "mean_batch_occupancy": 3.858064516129032, "batch_e2e_ms": {"mean": 172.7473118387097, "p50": 169.597696, "p95": 238.24361969999998, "p99": 268.44225686}, "batch_forward_ms": {"mean": 129.21891796129032, "p50": 126.816745, "p95": 181.66164229999998, "p99": 208.39114438}, "amortized_e2e_ms_per_observation": 44.7756410284281, "amortized_forward_ms_per_observation": 33.49319779933111, "observations_per_second": 22.333571938480993}}
+{"status": "complete", "phase": "finished", "metrics": {"batches": 782, "observations": 2997, "mean_batch_occupancy": 3.8324808184143224, "batch_e2e_ms": {"mean": 171.62764420716113, "p50": 169.0981285, "p95": 238.18106764999996, "p99": 268.25711658999984}, "batch_forward_ms": {"mean": 128.33218278132992, "p50": 126.2670535, "p95": 181.61033795, "p99": 208.2662074699999}, "amortized_e2e_ms_per_observation": 44.78238831164498, "amortized_forward_ms_per_observation": 33.48540771938605, "observations_per_second": 22.330206978710095}}

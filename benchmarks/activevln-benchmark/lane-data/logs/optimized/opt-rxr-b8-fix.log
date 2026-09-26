@@ -1,0 +1,7 @@
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:00<00:00, 133.05it/s]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+{"batches": 25, "observations": 200, "peak_allocated_gib": 21.401272773742676}
+{"batches": 50, "observations": 400, "peak_allocated_gib": 23.37919855117798}
+{"batches": 75, "observations": 600, "peak_allocated_gib": 24.13196086883545}
+{"batches": 100, "observations": 800, "peak_allocated_gib": 26.155014038085938}
+{"status": "oom", "phase": "measurement", "metrics": {"batches": 105, "observations": 840, "mean_batch_occupancy": 8.0, "batch_e2e_ms": {"mean": 518.3305232952381, "p50": 478.16298, "p95": 746.030324, "p99": 809.0727188799998}, "batch_forward_ms": {"mean": 475.3197575238095, "p50": 437.962687, "p95": 704.8072502, "p99": 768.3851461999998}, "batch_prefill_ms": {"mean": 292.64222470238093}, "batch_decode_ms": {"mean": 182.65421447753906}, "amortized_e2e_ms_per_observation": 64.79131541190476, "amortized_forward_ms_per_observation": 59.41496969047619, "observations_per_second": 15.434167274465612}, "memory": {"peak_allocated_bytes": 28535774720, "peak_reserved_bytes": 29743906816, "device_total_bytes": 33668988928, "peak_scope": "measurement"}}

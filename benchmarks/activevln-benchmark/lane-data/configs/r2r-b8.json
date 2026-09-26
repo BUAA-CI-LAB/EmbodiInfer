@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "model": "activevln",
+  "checkpoint": "/home/qy/models/activevln/Qwen2.5-VL-3B_rl_r2r_4000",
+  "checkpoint_revision": "160987313e3e869705f42400d1b8f28177044518",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 42,
+  "warmup_calls": 33,
+  "repeats": 1,
+  "attention": "sdpa",
+  "cuda_graph": true,
+  "fused_ops": true,
+  "split_attention": true,
+  "tree_decode": true,
+  "tree_fp32_projection": false,
+  "tree_repeat_actions": 1,
+  "query_bucket_size": 1,
+  "prewarm_context_buckets": [
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+  ],
+  "graph_workspace_tokens": 65536,
+  "max_new_tokens": 512,
+  "max_context": 128000,
+  "do_sample": false,
+  "repetition_penalty": 1.05,
+  "cpu_threads": 4,
+  "max_steps_per_episode": null,
+  "datasets": [
+    {
+      "name": "R2R",
+      "root": "/home/qy/benchmark-data/navigation/R2R",
+      "annotations": "/home/qy/benchmark-data/navigation/R2R/annotations_v1-3.json",
+      "episode_limit": 48
+    }
+  ],
+  "batch_size": 8,
+  "kv_pool_tokens": 256000,
+  "output_dir": "runs/opt-full-r2r-b8"
+}

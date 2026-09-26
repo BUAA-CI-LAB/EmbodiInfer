@@ -1,0 +1,34 @@
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:00<00:00, 134.22it/s]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+{"batches": 25, "observations": 100, "peak_allocated_gib": 13.495555400848389}
+{"batches": 50, "observations": 200, "peak_allocated_gib": 13.567640781402588}
+{"batches": 75, "observations": 300, "peak_allocated_gib": 13.567640781402588}
+{"batches": 100, "observations": 400, "peak_allocated_gib": 14.130827903747559}
+{"batches": 125, "observations": 500, "peak_allocated_gib": 14.130827903747559}
+{"batches": 150, "observations": 600, "peak_allocated_gib": 14.552950382232666}
+{"batches": 175, "observations": 700, "peak_allocated_gib": 14.814793586730957}
+{"batches": 200, "observations": 800, "peak_allocated_gib": 15.399270057678223}
+{"batches": 225, "observations": 900, "peak_allocated_gib": 15.399270057678223}
+{"batches": 250, "observations": 1000, "peak_allocated_gib": 15.399270057678223}
+{"batches": 275, "observations": 1100, "peak_allocated_gib": 15.399270057678223}
+{"batches": 300, "observations": 1200, "peak_allocated_gib": 15.399270057678223}
+{"batches": 325, "observations": 1300, "peak_allocated_gib": 15.399270057678223}
+{"batches": 350, "observations": 1400, "peak_allocated_gib": 15.399270057678223}
+{"batches": 375, "observations": 1500, "peak_allocated_gib": 15.399270057678223}
+{"batches": 400, "observations": 1600, "peak_allocated_gib": 15.399270057678223}
+{"batches": 425, "observations": 1700, "peak_allocated_gib": 15.399270057678223}
+{"batches": 450, "observations": 1800, "peak_allocated_gib": 15.399270057678223}
+{"batches": 475, "observations": 1900, "peak_allocated_gib": 15.399270057678223}
+{"batches": 500, "observations": 2000, "peak_allocated_gib": 15.399270057678223}
+{"batches": 525, "observations": 2100, "peak_allocated_gib": 15.399270057678223}
+{"batches": 550, "observations": 2200, "peak_allocated_gib": 15.399270057678223}
+{"batches": 575, "observations": 2300, "peak_allocated_gib": 15.399270057678223}
+{"batches": 600, "observations": 2400, "peak_allocated_gib": 15.399270057678223}
+{"batches": 625, "observations": 2500, "peak_allocated_gib": 15.399270057678223}
+{"batches": 650, "observations": 2600, "peak_allocated_gib": 15.399270057678223}
+{"batches": 675, "observations": 2700, "peak_allocated_gib": 15.399270057678223}
+{"batches": 700, "observations": 2800, "peak_allocated_gib": 15.399270057678223}
+{"batches": 725, "observations": 2900, "peak_allocated_gib": 15.399270057678223}
+{"batches": 750, "observations": 2965, "peak_allocated_gib": 15.399270057678223}
+{"batches": 775, "observations": 2990, "peak_allocated_gib": 15.399270057678223}
+{"status": "complete", "phase": "finished", "metrics": {"batches": 782, "observations": 2997, "mean_batch_occupancy": 3.8324808184143224, "batch_e2e_ms": {"mean": 144.10271832608694, "p50": 143.84250350000002, "p95": 177.25850639999996, "p99": 197.29583182999994}, "batch_forward_ms": {"mean": 123.31010208823531, "p50": 122.22507999999999, "p95": 155.20034709999996, "p99": 175.90023015999998}, "batch_prefill_ms": {"mean": 69.44056826052459}, "batch_decode_ms": {"mean": 53.84975254688116}, "amortized_e2e_ms_per_observation": 37.60037561928595, "amortized_forward_ms_per_observation": 32.17500828595262, "observations_per_second": 26.595478995350273}, "memory": {"peak_allocated_bytes": 16534840320, "peak_reserved_bytes": 17792237568, "device_total_bytes": 33668988928, "peak_scope": "measurement"}}
