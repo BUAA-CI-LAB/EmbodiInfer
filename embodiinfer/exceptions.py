@@ -53,6 +53,18 @@ class UnsupportedRecurrentModeError(EmbodiInferError):
     """The first recurrent implementation was asked to use an unsupported runtime mode."""
 
 
+class UnsupportedAsyncGuidanceError(EmbodiInferError):
+    """A decoder was handed RTC prefix guidance it cannot apply.
+
+    Only flow-matching decoders implement prefix guidance; a single-pass
+    categorical decoder or a planning-only diffusion decoder has no denoising
+    loop to correct. Raised explicitly instead of ignoring the guidance, because
+    silently decoding without it would hand the robot an action chunk that
+    contradicts the prefix it is already executing — the exact failure RTC
+    exists to prevent.
+    """
+
+
 class ReplicaExecutionError(EmbodiInferError):
     """A data-parallel replica failed to execute one or more requests.
 

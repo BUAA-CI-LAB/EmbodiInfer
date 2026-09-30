@@ -39,6 +39,7 @@ from ..models.schedulers.flow import euler_step
 from ..types import DecodeTrace
 
 if TYPE_CHECKING:
+    from ..engine.async_inference.rtc import RTCGuidance
     from .base import FlowVLAPolicy, MemoryState, PrefixState
 
 
@@ -95,13 +96,54 @@ class ActionDecoder(abc.ABC):
 
     @abc.abstractmethod
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
         """Deterministic generation: prefix (+ staged state) -> actions ``[bucket, H, A]``.
 
         ``graphs`` is the engine's :class:`~embodiinfer.engine.graph.GraphManager` (or ``None``
         when CUDA graphs are disabled); the decoder uses it to replay a captured loop.
+
+        ``guidance`` carries Real-Time Chunking conditioning for an asynchronous
+        deployment: the unexecuted prefix of the previous chunk, plus the weights
+        and coefficient that hold the new chunk to it. Only decoders that declare
+        :attr:`supports_rtc_guidance` accept it; the rest must reject a non-``None``
+        value rather than decode without it, because a chunk that silently
+        contradicts the prefix already being executed is a control hazard.
         """
+
+    @property
+    def supports_rtc_guidance(self) -> bool:
+        """Whether this decoder can apply RTC prefix guidance.
+
+        Default ``False``: prefix guidance is defined on the denoising loop of a
+        flow-matching decoder. A single-pass categorical decoder has one forward
+        to correct, and a planning-only diffusion decoder has no committed action
+        prefix to reconcile against.
+        """
+        return False
+
+    def reject_rtc_guidance(self, guidance: RTCGuidance | None) -> None:
+        """Fail loudly when a decoder that cannot guide is handed RTC conditioning.
+
+        Decoders that do not declare :attr:`supports_rtc_guidance` call this from
+        ``produce_chunk`` instead of ignoring the argument: decoding without the
+        prefix correction would hand the robot a chunk that contradicts the
+        actions it is already committed to executing.
+        """
+        if guidance is not None and guidance.enabled:
+            from ..exceptions import UnsupportedAsyncGuidanceError
+
+            raise UnsupportedAsyncGuidanceError(
+                f"{type(self).__name__} does not support RTC prefix guidance; "
+                "only flow-matching decoders declare supports_rtc_guidance"
+            )
 
 
 class RLDecoder(ActionDecoder):
@@ -158,8 +200,16 @@ class AutoregressiveDecoder(ActionDecoder):
         """Generate tokens eagerly and return the final memory plus trace."""
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
+        self.reject_rtc_guidance(guidance)
         return self.decode(state, prefix, num_steps, bucket, graphs).actions
 
 
@@ -168,10 +218,19 @@ class FlowDecoder(RLDecoder):
 
     Policies own the internal state shape, output conversion, and optional
     likelihood mask. Integration and stochastic trajectory scoring are shared.
+
+    This is the only decoder that declares :attr:`supports_rtc_guidance`: RTC
+    conditions the *denoising trajectory* on the previous chunk's unexecuted
+    prefix, which presupposes exactly the loop this decoder owns. See
+    :mod:`embodiinfer.engine.async_inference.rtc`.
     """
 
     def __init__(self, policy: FlowVLAPolicy):
         self.policy = policy
+
+    @property
+    def supports_rtc_guidance(self) -> bool:
+        return True
 
     def state_shape(self, batch_size: int) -> tuple[int, int, int]:
         """Expose the policy's internal flow shape for static graph buffers."""
@@ -181,21 +240,46 @@ class FlowDecoder(RLDecoder):
         return self.policy.new_noise(batch_size, generator=generator)
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
         """Integrate the flow field, then restore the policy's public action representation."""
-        return self.policy.finalize_actions(self.integrate(state, prefix, num_steps, bucket, graphs), prefix)
+        integrated = self.integrate(state, prefix, num_steps, bucket, graphs, guidance=guidance)
+        return self.policy.finalize_actions(integrated, prefix)
 
     def integrate(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
         """Run all flow steps and return model-space actions before output transforms.
 
         This is the same eager/graph execution used by ``produce_chunk``. Callers
         measuring model execution can time it separately from ``finalize_actions``.
+
+        When ``guidance`` is active the loop runs eagerly and ignores ``graphs``.
+        RTC's soft correction is a Jacobian-vector product through the velocity
+        field, which a captured graph cannot express, and its hard variant mutates
+        the state between steps, which a captured loop would bake in. Both costs
+        are the reference's, and both are why VLASH's future-state conditioning —
+        which needs no per-step correction — exists.
         """
         if state is None:
             raise ValueError("Flow decoding requires an initial state")
+        if guidance is not None and guidance.enabled:
+            return self._integrate_rtc(state, prefix, num_steps, guidance)
+
         x = state
         policy = self.policy
         device, dtype = x.device, x.dtype
@@ -211,6 +295,67 @@ class FlowDecoder(RLDecoder):
                 t = torch.full((bucket,), t_val, device=device, dtype=dtype)
                 velocity = graph.run(x, t) if graph is not None else policy.denoise_step(x, t, prefix)
                 x = euler_step(x, velocity, dt)
+        return x
+
+    def _integrate_rtc(
+        self,
+        state: torch.Tensor,
+        prefix: PrefixState,
+        num_steps: int,
+        guidance: RTCGuidance,
+    ) -> torch.Tensor:
+        """Eager RTC-conditioned integration (soft guidance or fixed prefix)."""
+        from ..engine.async_inference.rtc import (
+            clamp_prefix,
+            flow_noise_end,
+            hard_prefix_mask,
+            rtc_guided_velocity,
+        )
+
+        policy = self.policy
+        prefix_left_over = guidance.prev_chunk_left_over
+        if prefix_left_over is None:  # pragma: no cover - guarded by `enabled`
+            raise ValueError("RTC guidance requires a previous chunk left-over")
+        if prefix_left_over.shape != state.shape:
+            raise ValueError(
+                f"RTC prefix shape {tuple(prefix_left_over.shape)} must match the decode state "
+                f"{tuple(state.shape)}"
+            )
+        # The prefix typically arrives as a host-side tensor assembled from the wire
+        # payload (see `batch_rtc_guidance`), while the decode runs on the policy's
+        # device. Move it once here rather than re-copying inside every step.
+        prefix_left_over = prefix_left_over.to(device=state.device, dtype=state.dtype)
+
+        schedule = policy.flow_schedule(num_steps)
+        # The policy declares its own flow direction; RTC's arithmetic is written
+        # in the reference's action-ness coordinate, so it needs this one bit.
+        noise_at = flow_noise_end(schedule)
+
+        device, dtype = state.device, state.dtype
+        x = state
+        mask = None
+        if guidance.hard_prefix:
+            mask = hard_prefix_mask(guidance.inference_delay, state.shape[1], device=device)
+
+        for t_val, dt in schedule:
+            if mask is not None:
+                x = clamp_prefix(x, prefix_left_over, mask)
+                t = torch.full((state.shape[0],), t_val, device=device, dtype=dtype)
+                velocity = policy.denoise_step(x, t, prefix)
+            else:
+                t = torch.full((state.shape[0],), t_val, device=device, dtype=dtype)
+                # Bind the timestep per iteration; a late-bound closure would read
+                # the loop's final `t` if the callable were ever deferred.
+                velocity = rtc_guided_velocity(
+                    lambda x_in, t=t: policy.denoise_step(x_in, t, prefix),
+                    x,
+                    t_val,
+                    guidance,
+                    noise_at=noise_at,
+                )
+            x = euler_step(x, velocity, dt)
+            if mask is not None:
+                x = clamp_prefix(x, prefix_left_over, mask)
         return x
 
     def sample_with_logprob(
@@ -259,8 +404,16 @@ class ParallelDecoder(RLDecoder):
         return None
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
+        self.reject_rtc_guidance(guidance)
         logits = self.policy.decode_action_logits(prefix, graphs=graphs, bucket=bucket)
         idxs, _ = self.policy.head.sample(logits, do_sample=False)
         return self.policy.head.tokens_to_actions(idxs)
