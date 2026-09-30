@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any
 
 from .contracts import (
+    SESSION_SCHEMA_ALIASES,
     ModelAction,
     RawPolicyRequest,
     ServeError,
@@ -72,7 +73,7 @@ class PolicyService:
         return self.adapter.action_space
 
     def open_session(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        if request.get("schema") != "vvla.policy.session.v1":
+        if request.get("schema") not in SESSION_SCHEMA_ALIASES:
             raise ServeError(400, "unsupported_schema", "unsupported session schema")
         robot_id = _identifier(request.get("robot_id"), "robot_id")
         action_space = _identifier(request.get("action_space"), "action_space")
