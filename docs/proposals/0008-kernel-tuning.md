@@ -79,6 +79,20 @@ the incumbent and initial baseline. Weights default to equal. Repeat paired
 measurements before promotion. Stop at 20 attempts, two hours of active execution,
 or five consecutive failures/non-improvements; all limits are configurable.
 
+Every timed sample starts from a cold L2 (a 256 MiB buffer is zeroed) with
+freshly copied inputs. CUDA Graph samples queue the flush and the input copy
+ahead of the start event and do not synchronize per sample, so the events bracket
+only the replay's device execution. FlashInfer's `do_bench` synchronizes first;
+its start event then precedes the host launch, adding several microseconds of
+launch latency and scheduler jitter to every sample. On an RTX 5090 that
+inflated microsecond kernels to about 10 µs and let three identical solutions
+differ by up to 53%, far above the 3% promotion threshold. Without it, and with
+1000 iterations (the generated-task default), identical solutions differed by at
+most 4.5% and mostly under 2%. A single trivial kernel replays in about 4.1 µs
+under this protocol, the device's floor; tasks whose baseline is already there
+leave an agent nothing to win, so preflight prints every baseline latency.
+Eager timing still uses FlashInfer's `time_runnable`, including launch cost.
+
 Runs snapshot task files and record source digests, evaluator identity, hardware
 and software fingerprints, precision settings, agent settings, attempts, raw
 measurements, and decisions. Resume requires matching task/tool/environment

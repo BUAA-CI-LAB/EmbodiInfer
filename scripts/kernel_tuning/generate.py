@@ -182,7 +182,13 @@ def tuning_settings(operator: Operator, overrides: dict[str, Any] | None = None)
         "target_hardware": ["cuda"],
         "seeds": [0, 1, 2],
         "precision": {"matmul_precision": "highest", "allow_tf32": False, **operator.precision},
-        "timing": {"mode": operator.timing, "warmup": 10, "iterations": 100, "trials": 3, "paired_rounds": 2},
+        "timing": {
+            "mode": operator.timing,
+            "warmup": 10,
+            "iterations": 1000,
+            "trials": 3,
+            "paired_rounds": 2,
+        },
         "acceptance": {"min_improvement": 0.03, "max_regression": 0.05},
         "search": {
             "max_candidates": 20,

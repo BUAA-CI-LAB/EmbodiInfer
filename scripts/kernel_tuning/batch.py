@@ -88,7 +88,7 @@ def preflight(root: Path, names: list[str] | None = None) -> dict[str, str | Non
     batch = read_json(root / "batch.json")
     results: dict[str, str | None] = {}
     for name, item in batch["items"].items():
-        if names is not None and name not in names or item["status"] != "pending":
+        if (names is not None and name not in names) or item["status"] != "pending":
             continue
         task = TaskPackage.load(root / item["task"])
         try:
@@ -96,6 +96,14 @@ def preflight(root: Path, names: list[str] | None = None) -> dict[str, str | Non
             report = asyncio.run(evaluate(store, store.root / "baseline/evaluation"))
             validate_measurement(task, report["measurement"])
             results[name] = None
+            # Baselines already at the device's launch floor leave an agent nothing to win.
+            rounds = report["measurement"]["rounds"]
+            item["baseline_us"] = {
+                work: 1000
+                * sum(sum(r[work]["baseline"]) / len(r[work]["baseline"]) for r in rounds)
+                / len(rounds)
+                for work in task.workload_ids
+            }
         except ContractError as exc:
             results[name] = str(exc)
             item.update(status="preflight_failed", error=str(exc))

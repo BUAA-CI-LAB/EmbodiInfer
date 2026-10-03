@@ -135,8 +135,13 @@ def _tune_all(args: argparse.Namespace) -> int:
         print((root / "summary.md").read_text(encoding="utf-8"))
         return 0
     if not args.skip_preflight:
-        for name, error in batch.preflight(root).items():
-            print(f"preflight {name}: {'ok' if error is None else error}", flush=True)
+        results = batch.preflight(root)
+        items = read_json(root / "batch.json")["items"]
+        for name, error in results.items():
+            timings = ", ".join(
+                f"{work} {us:.1f} us" for work, us in items[name].get("baseline_us", {}).items()
+            )
+            print(f"preflight {name}: {f'ok ({timings})' if error is None else error}", flush=True)
     if args.preflight_only:
         batch.write_summary(root)
         return (

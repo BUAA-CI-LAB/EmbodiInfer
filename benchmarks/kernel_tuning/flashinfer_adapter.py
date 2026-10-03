@@ -111,6 +111,7 @@ class FlashInferAdapter:
         self._driver = self._command(
             ["nvidia-smi", "--query-gpu=uuid,driver_version", "--format=csv,noheader"]
         )
+        self._flush: Any = None
 
     @staticmethod
     def _command(argv: list[str]) -> str:
@@ -200,7 +201,10 @@ class FlashInferAdapter:
                 "timing": asdict(self.cfg.timing),
                 "precision": asdict(self.cfg.precision),
                 "seeds": list(self.cfg.seeds),
-                "cache_policy": "FlashInfer cold L2; input cloning excluded",
+                "cache_policy": (
+                    "cold L2 per sample; input copy/clone excluded; graph samples are device "
+                    "time without host launch latency"
+                ),
             },
         }
 
@@ -361,7 +365,7 @@ class FlashInferAdapter:
         return error
 
     def _time(self, runnable: Any, inputs: list[Any]) -> float:
-        from flashinfer_bench.bench.timing import do_bench, time_runnable
+        from flashinfer_bench.bench.timing import time_runnable
 
         args, _ = self._call(runnable, self._clone(inputs))
         if self.cfg.timing.mode == "eager":
@@ -370,23 +374,47 @@ class FlashInferAdapter:
             )
         else:
             graph, args, _ = self._capture(runnable, self._clone(inputs))
-
-            def reset() -> None:
-                import torch
-
-                for dst, src in zip(args, inputs):
-                    if isinstance(dst, torch.Tensor):
-                        dst.copy_(src)
-
-            result = do_bench(
-                lambda _: graph.replay(),
-                warmup=self.cfg.timing.warmup,
-                rep=self.cfg.timing.iterations,
-                setup=reset,
-                device=self.device,
-            )
+            result = self._time_graph(graph, args, inputs)
         self._check_flags()
         return float(result)
+
+    def _time_graph(self, graph: Any, args: list[Any], inputs: list[Any]) -> float:
+        """Mean device time of graph replays, each from a cold L2 and freshly reset inputs.
+
+        FlashInfer's do_bench synchronizes before every timed call. The idle GPU then
+        records the start event before the host has launched the replay, so each
+        sample also contains host launch latency and its scheduler jitter: several
+        microseconds, comparable to the kernels themselves. Here the L2 flush and
+        the input reset are queued ahead of the start event instead. The flush keeps
+        the device busy while the replay is enqueued, so the events bracket only the
+        replay's execution on the device.
+        """
+        import torch
+
+        if self._flush is None:
+            # The same 256 MiB buffer FlashInfer zeroes to evict inputs from L2.
+            self._flush = torch.empty(64 * 1024 * 1024, dtype=torch.int, device=self.device)
+        tensors = [(dst, src) for dst, src in zip(args, inputs) if isinstance(dst, torch.Tensor)]
+
+        def prepare() -> None:
+            self._flush.zero_()
+            for dst, src in tensors:
+                dst.copy_(src)
+
+        for _ in range(self.cfg.timing.warmup):
+            prepare()
+            graph.replay()
+        count = self.cfg.timing.iterations
+        starts = [torch.cuda.Event(enable_timing=True) for _ in range(count)]
+        ends = [torch.cuda.Event(enable_timing=True) for _ in range(count)]
+        torch.cuda.synchronize(self.device)
+        for start, end in zip(starts, ends):
+            prepare()
+            start.record()
+            graph.replay()
+            end.record()
+        torch.cuda.synchronize(self.device)
+        return sum(start.elapsed_time(end) for start, end in zip(starts, ends)) / count
 
     def evaluate(self, solutions: dict[str, dict[str, Any]]) -> dict[str, Any]:
         """Verify all seeds before timing and alternate role order in paired rounds."""

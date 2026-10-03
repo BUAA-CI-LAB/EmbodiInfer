@@ -163,6 +163,9 @@ def test_failed_preflight_skips_the_operator(tmp_path: Path, monkeypatch) -> Non
 
     monkeypatch.setattr(batch, "evaluate", evaluate)
     assert batch.preflight(root) == {"gated_residual": None, "rms_norm": "Evaluator failed (exit 1)"}
+    items = read_json(root / "batch.json")["items"]
+    assert items["gated_residual"]["baseline_us"] == {"pi05-expert-b1": 10000.0, "pi05-expert-b8": 10000.0}
+    assert "baseline_us" not in items["rms_norm"]
     runs = FakeRuns({"gated_residual": ["complete"]})
     record = batch.execute(root, launcher=runs)
     assert record["items"]["rms_norm"]["status"] == "preflight_failed"
