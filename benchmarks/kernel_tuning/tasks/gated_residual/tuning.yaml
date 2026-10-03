@@ -1,0 +1,29 @@
+schema_version: 1
+language: triton
+# Set --agent explicitly when starting a real run, or fill in a valid hmz spec.
+agent: ""
+# Change to the absolute Python executable in the prepared Thor/runtime environment.
+evaluator_python: python
+device: cuda:0
+target_hardware: [cuda]
+seeds: [0, 1, 2]
+precision:
+  mode: bit_exact
+  matmul_precision: highest
+  allow_tf32: false
+timing:
+  mode: eager
+  warmup: 10
+  iterations: 100
+  trials: 3
+  paired_rounds: 2
+acceptance:
+  min_improvement: 0.03
+  max_regression: 0.05
+search:
+  max_candidates: 20
+  max_seconds: 7200
+  patience: 5
+  agent_timeout_seconds: 600
+  evaluation_timeout_seconds: 300
+profile: false

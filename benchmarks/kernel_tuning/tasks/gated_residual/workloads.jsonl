@@ -1,0 +1,3 @@
+{"definition":"gated_residual_bf16","workload":{"uuid":"broadcast-small","axes":{"B":1,"T":16,"H":1024,"G":1},"inputs":{"residual":{"type":"random"},"update":{"type":"random"},"gate":{"type":"random"}}},"solution":null,"evaluation":null}
+{"definition":"gated_residual_bf16","workload":{"uuid":"broadcast-wide","axes":{"B":2,"T":32,"H":2048,"G":1},"inputs":{"residual":{"type":"random"},"update":{"type":"random"},"gate":{"type":"random"}}},"solution":null,"evaluation":null}
+{"definition":"gated_residual_bf16","workload":{"uuid":"token-gate-tail","axes":{"B":1,"T":17,"H":1000,"G":17},"inputs":{"residual":{"type":"random"},"update":{"type":"random"},"gate":{"type":"random"}}},"solution":null,"evaluation":null}

@@ -1,0 +1,4 @@
+# Install into the already prepared target-machine runtime. Do not replace its
+# Torch/CUDA/Triton pins with those from a different GPU's environment.
+flashinfer-bench==0.1.2
+PyYAML>=6.0.3,<7

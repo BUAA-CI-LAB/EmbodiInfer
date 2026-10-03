@@ -1,0 +1,14 @@
+{
+  "name": "gated_residual_bf16",
+  "op_type": "elementwise",
+  "description": "Residual plus a gated update, with BF16 product rounding before addition.",
+  "axes": {"B": {"type": "var"}, "T": {"type": "var"}, "H": {"type": "var"}, "G": {"type": "var"}},
+  "inputs": {
+    "residual": {"shape": ["B", "T", "H"], "dtype": "bfloat16"},
+    "update": {"shape": ["B", "T", "H"], "dtype": "bfloat16"},
+    "gate": {"shape": ["B", "G", "H"], "dtype": "bfloat16"}
+  },
+  "outputs": {"output": {"shape": ["B", "T", "H"], "dtype": "bfloat16"}},
+  "constraints": ["G == 1 or G == T", "B > 0", "T > 0", "H > 0"],
+  "reference": "import torch\n\ndef run(residual, update, gate):\n    product = (update * gate).to(update.dtype)\n    return (residual + product).to(residual.dtype)\n"
+}

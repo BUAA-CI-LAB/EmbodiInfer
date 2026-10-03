@@ -147,6 +147,12 @@ vvla-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
 [tool.setuptools.packages.find]
 include = ["embodiinfer*", "vvla"]
 
+# Repository-only tooling has its own Python >=3.12 environment and does not
+# enter the inference package, model groups, or core dependency resolution.
+[tool.embodiinfer.kernel-tuning]
+tooling-project = "scripts/kernel_tuning"
+evaluator-requirements = "benchmarks/kernel_tuning/requirements.txt"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
