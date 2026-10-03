@@ -96,7 +96,7 @@ OPERATORS: tuple[Operator, ...] = (
         axes={"B": None, "T": None, "H": None, "H3": None, "ONE": 1},
         inputs={
             "x": Tensor(("B", "T", "H"), BF16),
-            "modulation": Tensor(("B", "H3"), "float32"),
+            "modulation": Tensor(("B", "H3"), BF16),
             "eps": Tensor(None, "float32"),
         },
         outputs={"output": Tensor(("B", "T", "H"), BF16), "gate": Tensor(("B", "ONE", "H"), BF16)},
@@ -124,8 +124,9 @@ def run(x, modulation, eps):
         precision=_tolerance(
             "The production kernel reduces the FP32 variance in a different order than torch.mean."
         ),
-        notes="`modulation` is the FP32 AdaRMS projection in scale/shift/gate order. "
-        "The gate output is the FP32 gate cast to the hidden dtype, one row per batch item.",
+        notes="`modulation` is the AdaRMS projection in scale/shift/gate order, in the checkpoint "
+        "dtype (BF16 in pi05_libero_finetuned_v044, as captured). The gate output is cast to the "
+        "hidden dtype, one row per batch item.",
     ),
     Operator(
         name="gated_residual",

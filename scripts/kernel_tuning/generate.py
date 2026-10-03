@@ -304,6 +304,11 @@ def _readme(operator: Operator, vendored: dict[str, tuple[str, str]], revision: 
         if operator.timing == "cuda_graph"
         else ""
     )
+    origin = (
+        "Shapes and weights come from captured production calls (`capture`); weights are call counts."
+        if all(work.uuid.startswith("captured") for work in operator.workloads)
+        else "Shapes are representative of the listed models, not traced traffic."
+    )
     hardware_note = (
         "\nTarget-hardware notes supplied for this machine are in `HARDWARE.md`.\n" if hardware else ""
     )
@@ -341,7 +346,7 @@ a candidate only has to handle the declared definition and workloads.{graph_note
 
 ## Workloads
 
-Shapes are representative of the listed models, not traced traffic.
+{origin}
 
 | uuid | axes and scalars | weight | where |
 |---|---|---|---|

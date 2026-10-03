@@ -1,0 +1,8 @@
+{"axes": {"B": 1, "H": 1024, "H3": 3072, "T": 50}, "operator": "ada_rms_norm", "scalars": {"eps": 1e-06}, "count": 74370}
+{"axes": {"B": 1, "G": 1, "H": 1024, "T": 50}, "operator": "gated_residual", "count": 72360}
+{"axes": {"B": 1, "D": 256, "HK": 1, "HQ": 8, "S": 50}, "operator": "rotate_qk", "count": 36180}
+{"axes": {"B": 1, "I": 4096, "T": 50}, "operator": "gated_gelu", "count": 36180}
+{"axes": {"B": 1, "D": 256, "HK": 1, "HQ": 8, "P": 576, "S": 50}, "operator": "split_kv_attention", "scalars": {"scaling": 0.0625}, "count": 30780}
+{"axes": {"B": 1, "D": 256, "HK": 1, "HQ": 8, "P": 560, "S": 50}, "operator": "split_kv_attention", "scalars": {"scaling": 0.0625}, "count": 5400}
+{"axes": {"B": 1, "D": 256, "HK": 1, "HQ": 8, "P": 0, "S": 576}, "operator": "split_kv_attention", "scalars": {"scaling": 0.0625}, "count": 3078}
+{"axes": {"B": 1, "D": 256, "HK": 1, "HQ": 8, "P": 0, "S": 560}, "operator": "split_kv_attention", "scalars": {"scaling": 0.0625}, "count": 540}

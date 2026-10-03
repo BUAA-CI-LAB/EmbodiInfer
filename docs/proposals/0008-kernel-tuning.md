@@ -316,3 +316,32 @@ over the production baseline from the weakest paired round. Machine-specific
 settings (`evaluator_python`, `device`, budgets) are passed with `--set` at
 generation time, and `--hardware-notes` copies target-hardware notes into each
 task as `HARDWARE.md` for the agent.
+
+### Captured workloads
+
+Catalog shapes are estimates. `capture` replaces them with production traffic:
+it runs an unmodified model script in the model's runtime with every catalog
+kernel wrapped, converts each call to the operator's task axes, scalars, and
+fixed integer inputs, and writes one JSONL row per distinct case with its call
+count. Calls outside a task's semantics (another dtype, broadcast tables,
+custom attention scaling) are counted as skipped with the reason. Shapes depend
+on the configuration and inputs, not on weight values; run with CUDA Graphs and
+compilation disabled so every call reaches Python. `generate --captured` and
+`tune-all --captured` then use the most frequent cases as workloads, weighted by
+call count; operators the capture never saw keep their estimates.
+
+`benchmarks/kernel_tuning/captures/pi05-libero10.jsonl` comes from
+`benchmarks/pi05-benchmark` on 200 LIBERO-10 frames (10 tasks), with the
+production Triton paths enabled (`native_inference`, Triton prefix and denoise
+attention). It corrected three estimates. The prefix holds two cameras plus a
+48- or 64-token language bucket (560 or 576 tokens, not 968). `split_kv_attention`
+also runs once per layer over the whole prefix with no cached keys (`P=0`,
+`S=576`). The checkpoint's AdaRMS modulation is BF16, not FP32; the catalog now
+declares BF16 (recalibrated: at most 0.79 of its bound on an RTX 5090). At B=1,
+four of the five pi0.5 kernels measure about 4 µs on an RTX 5090, the device's
+launch floor; only `split_kv_attention` (16-35 µs) leaves room to tune.
+
+```bash
+PYTHONPATH=/path/to/EmbodiInfer /path/to/model-runtime/python -m scripts.kernel_tuning capture   --output pi05.jsonl -- benchmark.py --config capture-config.yaml
+python -m scripts.kernel_tuning tune-all --model pi05 --captured pi05.jsonl --agent ...
+```

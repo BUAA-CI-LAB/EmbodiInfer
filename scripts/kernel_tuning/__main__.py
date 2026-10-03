@@ -84,13 +84,19 @@ def _selection(parser: argparse.ArgumentParser) -> None:
         help="Override tuning.yaml, e.g. evaluator_python=/abs/python or search.max_candidates=10",
     )
     parser.add_argument("--hardware-notes", type=Path, help="Target-hardware notes copied into each task")
+    parser.add_argument(
+        "--captured", type=Path, help="Replace estimated workloads with shapes from a `capture` file"
+    )
 
 
 def _generate(args: argparse.Namespace) -> None:
+    from .capture import apply_file
     from .generate import parse_overrides, render
     from .operators import select
 
-    operators = select(args.operators or None, args.model)
+    operators, notes = apply_file(select(args.operators or None, args.model), args.captured)
+    for note in notes:
+        print(note)
     if args.list:
         for operator in operators:
             print(f"{operator.name:22} {','.join(operator.models):10} {operator.summary}")
@@ -111,19 +117,23 @@ def _generate(args: argparse.Namespace) -> None:
 
 def _tune_all(args: argparse.Namespace) -> int:
     from . import batch
+    from .capture import apply_file
     from .generate import parse_overrides
     from .operators import select
 
     if args.resume:
-        if args.operators or args.model or args.set or args.hardware_notes or args.agent:
+        if args.operators or args.model or args.set or args.hardware_notes or args.agent or args.captured:
             raise ContractError("--resume continues the recorded batch; omit selection, --set, and --agent")
         root = args.resume.resolve(strict=True)
     else:
         agent = args.agent or ""
         if not (args.dry_run or args.preflight_only) and "/" not in agent:
             raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
+        operators, notes = apply_file(select(args.operators or None, args.model), args.captured)
+        for note in notes:
+            print(note, flush=True)
         root = batch.create(
-            select(args.operators or None, args.model),
+            operators,
             args.output,
             agent=agent,
             overrides=parse_overrides(args.set),
@@ -190,9 +200,31 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--dry-run", action="store_true", help="Only generate and validate the tasks")
     mode.add_argument("--preflight-only", action="store_true", help="Stop after measuring the baselines")
     mode.add_argument("--skip-preflight", action="store_true", help="Let each run measure its baseline")
-    args = parser.parse_args(argv)
+    capture = commands.add_parser(
+        "capture", help="Record production kernel shapes while a model script runs (model runtime)"
+    )
+    capture.add_argument("operators", nargs="*", help="Catalog operators to record (default: all)")
+    capture.add_argument("--output", type=Path, required=True, help="JSONL file of captured cases")
+    capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
+    raw = sys.argv[1:] if argv is None else argv
+    if "--" in raw and raw[0] == "capture":
+        split = raw.index("--")
+        raw, command = raw[:split], raw[split + 1 :]
+    else:
+        command = None
+    args = parser.parse_args(raw)
     try:
-        if args.command == "generate":
+        if args.command == "capture":
+            from .capture import run as run_capture
+            from .operators import select
+
+            rows = run_capture(command or args.script, args.output, select(args.operators or None))
+            calls = sum(row["count"] for row in rows if "axes" in row)
+            print(f"Captured {calls} calls in {sum('axes' in row for row in rows)} cases -> {args.output}")
+            for row in rows:
+                if "skipped" in row:
+                    print(f"  skipped {row['count']} {row['operator']} calls: {row['skipped']}")
+        elif args.command == "generate":
             _generate(args)
         elif args.command == "tune-all":
             return _tune_all(args)
