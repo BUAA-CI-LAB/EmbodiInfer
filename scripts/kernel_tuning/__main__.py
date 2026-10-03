@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from .artifacts import REPOSITORY, RunStore, atomic_json, run_lock, runtime_identity
-from .contracts import HMZ_REVISION, ContractError, TaskPackage
+from .contracts import HMZ_REVISION, ContractError, TaskPackage, read_json
 from .runner import evaluate
 
 
@@ -73,6 +73,84 @@ def _execute(store: RunStore, *, resume: bool) -> dict:
             )
 
 
+def _selection(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("operators", nargs="*", help="Catalog operator names (default: all)")
+    parser.add_argument("--model", action="append", help="Select operators used by a model, e.g. pi05")
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override tuning.yaml, e.g. evaluator_python=/abs/python or search.max_candidates=10",
+    )
+    parser.add_argument("--hardware-notes", type=Path, help="Target-hardware notes copied into each task")
+
+
+def _generate(args: argparse.Namespace) -> None:
+    from .generate import parse_overrides, render
+    from .operators import select
+
+    operators = select(args.operators or None, args.model)
+    if args.list:
+        for operator in operators:
+            print(f"{operator.name:22} {','.join(operator.models):10} {operator.summary}")
+        return
+    overrides = parse_overrides(args.set)
+    for operator in operators:
+        task = render(
+            operator,
+            args.output / operator.name,
+            overrides=overrides,
+            hardware_notes=args.hardware_notes,
+            force=args.force,
+        )
+        print(
+            f"{operator.name}: {task.root} ({len(task.workloads)} workloads, {task.settings.precision.mode})"
+        )
+
+
+def _tune_all(args: argparse.Namespace) -> int:
+    from . import batch
+    from .generate import parse_overrides
+    from .operators import select
+
+    if args.resume:
+        if args.operators or args.model or args.set or args.hardware_notes or args.agent:
+            raise ContractError("--resume continues the recorded batch; omit selection, --set, and --agent")
+        root = args.resume.resolve(strict=True)
+    else:
+        agent = args.agent or ""
+        if not (args.dry_run or args.preflight_only) and "/" not in agent:
+            raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
+        root = batch.create(
+            select(args.operators or None, args.model),
+            args.output,
+            agent=agent,
+            overrides=parse_overrides(args.set),
+            hardware_notes=args.hardware_notes,
+        )
+    print(f"Batch: {root}", flush=True)
+    if args.dry_run:
+        batch.write_summary(root)
+        print((root / "summary.md").read_text(encoding="utf-8"))
+        return 0
+    if not args.skip_preflight:
+        for name, error in batch.preflight(root).items():
+            print(f"preflight {name}: {'ok' if error is None else error}", flush=True)
+    if args.preflight_only:
+        batch.write_summary(root)
+        return (
+            0
+            if all(
+                i["status"] != "preflight_failed" for i in read_json(root / "batch.json")["items"].values()
+            )
+            else 1
+        )
+    record = batch.execute(root)
+    print((root / "summary.md").read_text(encoding="utf-8"))
+    return 0 if all(item["status"] == "completed" for item in record["items"].values()) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run only the requested command; checking/status/export never invoke an agent."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -91,9 +169,29 @@ def main(argv: list[str] | None = None) -> int:
     export = commands.add_parser("export", help="Export best verified source and evidence; no execution")
     export.add_argument("run", type=Path)
     export.add_argument("destination", type=Path)
+    generate = commands.add_parser("generate", help="Write task packages for catalog operators; no execution")
+    _selection(generate)
+    generate.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning/tasks")
+    generate.add_argument(
+        "--force", action="store_true", help="Replace previously generated task directories"
+    )
+    generate.add_argument("--list", action="store_true", help="List catalog operators and exit")
+    tune_all = commands.add_parser("tune-all", help="Generate, preflight, and tune every selected operator")
+    _selection(tune_all)
+    tune_all.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec for every operator")
+    tune_all.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning/batches")
+    tune_all.add_argument("--resume", type=Path, metavar="BATCH", help="Continue an existing batch directory")
+    mode = tune_all.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="Only generate and validate the tasks")
+    mode.add_argument("--preflight-only", action="store_true", help="Stop after measuring the baselines")
+    mode.add_argument("--skip-preflight", action="store_true", help="Let each run measure its baseline")
     args = parser.parse_args(argv)
     try:
-        if args.command == "check":
+        if args.command == "generate":
+            _generate(args)
+        elif args.command == "tune-all":
+            return _tune_all(args)
+        elif args.command == "check":
             task = TaskPackage.load(args.task)
             result = {
                 "task": task.definition["name"],

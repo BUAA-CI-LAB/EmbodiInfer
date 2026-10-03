@@ -255,3 +255,50 @@ nonce, runtime, and numerical/timing conditions. Use the evaluator Python record
 in the task. The new response's request digest reflects relocated paths. This
 executes evaluation, not agent search. Actual Thor compilation and performance
 are not established by CPU/fake-agent tests.
+
+### Generated catalog tasks and batch tuning
+
+Hand-writing a task package per operator does not scale to every core kernel.
+`scripts/kernel_tuning/operators.py` declares each core Triton operator once:
+its eager Torch reference, the production call used as the baseline, the
+model-derived workload shapes, and the numerical contract. `generate` renders a
+complete task package from an entry. The baseline is the production kernel
+itself: the defining repository module and the repository modules it imports
+are copied byte-for-byte under `vendor/` (absolute `embodiinfer.` imports are
+rewritten to relative ones; package `__init__` files are never copied), and
+`baseline.py` calls it as the engine does. `generated.json` records the
+repository revision and source digests. Structured integer inputs such as
+segment offsets are written as safetensors data inside the task.
+
+The catalog covers the Triton paths of pi0.5 (`ada_rms_norm`, `gated_residual`,
+`gated_gelu`, `rotate_qk`, `split_kv_attention`), ActiveVLN's Qwen2.5-VL vision
+tower (`rotate_half_rope`, `segmented_attention`), and StreamVLN's Qwen2 decode
+path (`rms_norm`, `add_rms_norm`, `swiglu`). Shapes are representative of those
+models, not traced traffic. All generated tasks time with CUDA Graphs.
+
+Contracts follow the production kernel, not an aspiration. `gated_residual`
+and `rotate_qk` are bit-exact against Torch. The other kernels already round
+differently from eager Torch, so their contract is a tolerance with a stated
+reason: `atol = 2**-10` and `rtol = k * 2**-8`, where `k` counts BF16 roundings
+the production kernel and the eager reference do not share (2 when only the
+final casts differ; 3 for `rms_norm` and `swiglu`; 4 for `gated_gelu` and
+`add_rms_norm`). The `gpu`-marked
+`test_production_baseline_meets_generated_contract` checks every production
+baseline against its contract, including changed-input CUDA Graph replay, and
+prints the fraction of the bound it uses. Every baseline passed on an RTX 4060
+Laptop GPU (Torch 2.6, Triton 3.2; at most 0.85 of its bound) and on an RTX
+5090 (Torch 2.12, Triton 3.7; at most 0.90), and the evaluator preflight passed
+for all ten tasks on both. Re-run both on each target before trusting a
+contract there.
+
+`tune-all` generates the selected operators into a new batch directory under
+`results/kernel_tuning/batches/`, measures every production baseline with the
+evaluator (preflight), and then runs each operator serially in its own
+`run`/`resume` subprocess. A failed operator does not stop the batch; an
+interrupt does, and `tune-all --resume BATCH` continues it, resuming existing
+run archives. Promoted kernels are exported to `exports/<operator>`, and
+`summary.md`/`summary.json` report attempts, promotions, and the improvement
+over the production baseline from the weakest paired round. Machine-specific
+settings (`evaluator_python`, `device`, budgets) are passed with `--set` at
+generation time, and `--hardware-notes` copies target-hardware notes into each
+task as `HARDWARE.md` for the agent.

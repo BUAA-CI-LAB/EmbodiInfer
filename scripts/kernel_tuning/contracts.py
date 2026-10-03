@@ -214,8 +214,14 @@ class Settings:
             data = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueLoader)
         except yaml.YAMLError as exc:
             raise ContractError(f"Invalid tuning.yaml: {exc}") from exc
+        return cls.load_mapping(data)
+
+    @classmethod
+    def load_mapping(cls, data: Any) -> Settings:
+        """Validate parsed tuning.yaml data, e.g. settings rendered by the task generator."""
         if not isinstance(data, dict):
             raise ContractError("tuning.yaml must contain a mapping")
+        data = dict(data)
         for key, kind in (
             ("precision", Precision),
             ("timing", Timing),
@@ -308,6 +314,10 @@ class TaskPackage:
                     shape is not None and (not isinstance(shape, list) or set(shape) - axes.keys())
                 ) or not spec.get("dtype"):
                     raise ContractError(f"Invalid {kind} tensor spec")
+        bound = {axis for spec in definition["inputs"].values() for axis in spec.get("shape") or ()}
+        if unbound := {name for name, axis in axes.items() if axis["type"] == "var"} - bound:
+            # FlashInfer infers variable axes from input shapes when sizing outputs.
+            raise ContractError(f"Variable axes must appear in an input shape: {sorted(unbound)}")
         for source in (definition["reference"], (root / "baseline.py").read_text(encoding="utf-8")):
             functions = [
                 n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == "run"
