@@ -6,8 +6,9 @@ each catalog operator's production function wrapped. Every call is converted to
 the operator's task axes, scalars, and fixed integer inputs, so captured traffic
 can replace the catalog's estimated workloads (``generate --captured``).
 
-Run it in the model's own runtime, with CUDA Graphs and compilation disabled:
-inside a graph only the capture pass reaches Python, so counts would be lost.
+Run it in the model's own runtime with its production configuration. Calls
+captured into a CUDA Graph are counted on every replay. Disable compilation:
+compiled code may call kernels through traced graphs this cannot observe.
 Shapes depend on the configuration and inputs, never on the weight values.
 """
 
@@ -26,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .artifacts import REPOSITORY
 from .contracts import ContractError
 from .operators import Operator, Workload, catalog
 
@@ -80,9 +82,7 @@ def _split_kv_attention(a: Bound) -> dict[str, Any]:
 
 def _rotate_half_rope(a: Bound) -> dict[str, Any]:
     q, k, cos = a["q"], a["k"], a["cos"]
-    _bf16(q, k)
-    if str(cos.dtype) != "torch.float32":
-        raise Skip(f"cos dtype {cos.dtype}")
+    _bf16(q, k, cos, a["sin"])
     if cos.shape[0] != q.shape[0]:
         raise Skip("broadcast cos/sin rows")
     tokens, heads, width = q.shape
@@ -100,9 +100,16 @@ def _segmented_attention(a: Bound) -> dict[str, Any]:
         raise Skip("non-default scaling")
     if str(offsets.dtype) != "torch.int32":
         raise Skip(f"offset dtype {offsets.dtype}")
+    key = (offsets.data_ptr(), offsets.numel()) if hasattr(offsets, "data_ptr") else None
     if _capturing(q):
-        raise Skip("offsets unreadable during CUDA Graph capture")
-    bounds = [int(x) for x in offsets.tolist()]
+        # Production warms each layout eagerly before capture; reuse the values read then.
+        if key not in _OFFSETS:
+            raise Skip("offsets unreadable during CUDA Graph capture")
+        bounds = _OFFSETS[key]
+    else:
+        bounds = [int(x) for x in offsets.tolist()]
+        if key is not None:
+            _OFFSETS[key] = bounds
     longest = max(end - start for start, end in zip(bounds, bounds[1:]))
     bound = a["max_query_length"] or longest
     if (a["max_key_length"] or longest) != bound:
@@ -151,8 +158,12 @@ MAPPINGS: dict[str, Callable[[Bound], dict[str, Any]]] = {
 }
 
 
+#: Segment offsets seen in eager calls, keyed by device address, for calls made during capture.
+_OFFSETS: dict[tuple[int, int], list[int]] = {}
+
+
 def _capturing(tensor: Any) -> bool:
-    if not tensor.is_cuda:
+    if not getattr(tensor, "is_cuda", False):
         return False
     import torch
 
@@ -160,11 +171,18 @@ def _capturing(tensor: Any) -> bool:
 
 
 class Recorder:
-    """Convert production calls to task cases; counts identical cases instead of storing calls."""
+    """Convert production calls to task cases; counts identical cases instead of storing calls.
+
+    Kernels launched while a CUDA Graph is captured run on every replay without
+    reaching Python again. Their cases are attached to the graph during capture
+    and counted once per replay, so counts follow execution with or without graphs.
+    """
 
     def __init__(self) -> None:
         self.cases: Counter[str] = Counter()
         self.skipped: Counter[tuple[str, str]] = Counter()
+        self.graphs: dict[int, Counter[str]] = {}
+        self._capturing: list[Counter[str]] = []
 
     def record(self, name: str, bound: Bound) -> None:
         """Count one call. A mapping failure must never break the model being measured."""
@@ -176,7 +194,20 @@ class Recorder:
         except Exception as exc:  # noqa: BLE001 -- recording is best effort by design
             self.skipped[name, f"unmapped call: {type(exc).__name__}: {exc}"] += 1
             return
-        self.cases[json.dumps({"operator": name, **case}, sort_keys=True)] += 1
+        key = json.dumps({"operator": name, **case}, sort_keys=True)
+        (self._capturing[-1] if self._capturing else self.cases)[key] += 1
+
+    def begin_graph(self) -> None:
+        """Start attaching recorded calls to the graph being captured."""
+        self._capturing.append(Counter())
+
+    def end_graph(self, graph: int) -> None:
+        """Bind the calls recorded since :meth:`begin_graph` to ``graph``."""
+        self.graphs[graph] = self._capturing.pop()
+
+    def replay(self, graph: int) -> None:
+        """Count one execution of every call captured in ``graph``."""
+        self.cases.update(self.graphs.get(graph, Counter()))
 
     def rows(self) -> list[dict[str, Any]]:
         """One row per distinct case with its call count, plus counted skips."""
@@ -223,12 +254,48 @@ def install(operators: list[Operator], recorder: Recorder) -> list[tuple[Any, st
     return replaced
 
 
+def install_graph_hooks(recorder: Recorder) -> list[tuple[Any, str, Any]]:
+    """Attribute captured kernel calls to CUDA Graphs and count them on each replay."""
+    try:
+        import torch
+    except ImportError:
+        return []
+    graph_class = torch.cuda.CUDAGraph
+    begin, end, replay = graph_class.capture_begin, graph_class.capture_end, graph_class.replay
+
+    def capture_begin(self: Any, *args: Any, **kwargs: Any) -> Any:
+        recorder.begin_graph()
+        return begin(self, *args, **kwargs)
+
+    def capture_end(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return end(self, *args, **kwargs)
+        finally:
+            recorder.end_graph(id(self))
+
+    def replayed(self: Any, *args: Any, **kwargs: Any) -> Any:
+        recorder.replay(id(self))
+        return replay(self, *args, **kwargs)
+
+    graph_class.capture_begin, graph_class.capture_end, graph_class.replay = (
+        capture_begin,
+        capture_end,
+        replayed,
+    )
+    return [
+        (graph_class, "capture_begin", begin),
+        (graph_class, "capture_end", end),
+        (graph_class, "replay", replay),
+    ]
+
+
 def run(command: list[str], output: Path, operators: list[Operator]) -> list[dict[str, Any]]:
     """Run ``SCRIPT [ARGS]`` or ``-m MODULE [ARGS]`` as ``__main__`` and write the captured cases."""
     if not command:
         raise ContractError("Give the script to run after --, e.g. -- benchmark.py --config config.yaml")
     recorder = Recorder()
-    replaced = install(operators, recorder)
+    _OFFSETS.clear()
+    replaced = install(operators, recorder) + install_graph_hooks(recorder)
     argv = sys.argv
     try:
         if command[0] == "-m":
@@ -252,9 +319,19 @@ def run(command: list[str], output: Path, operators: list[Operator]) -> list[dic
     return rows
 
 
+#: Captures committed with the repository; they replace catalog estimates by default.
+COMMITTED = REPOSITORY / "benchmarks/kernel_tuning/captures"
+
+
 def load(path: Path) -> list[dict[str, Any]]:
-    """Read a capture file written by :func:`run`."""
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    """Read a capture file written by :func:`run`, or every ``*.jsonl`` in a directory."""
+    files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
+    rows = [
+        json.loads(line)
+        for file in files
+        for line in file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     if not rows:
         raise ContractError(f"{path} contains no captured calls")
     return rows
@@ -297,10 +374,16 @@ def apply(operator: Operator, rows: list[dict[str, Any]], *, top: int = 8) -> tu
     return dataclasses.replace(operator, workloads=tuple(workloads)), summary
 
 
-def apply_file(operators: list[Operator], path: Path | None) -> tuple[list[Operator], list[str]]:
-    """Apply a capture file to every selected operator; ``None`` keeps the catalog shapes."""
+def apply_file(
+    operators: list[Operator], path: Path | None = None, *, estimated: bool = False
+) -> tuple[list[Operator], list[str]]:
+    """Apply captured shapes: ``path``, else the committed captures, unless ``estimated``."""
+    if estimated:
+        return operators, ["using the catalog's estimated shapes"]
     if path is None:
-        return operators, []
+        if not COMMITTED.is_dir() or not any(COMMITTED.glob("*.jsonl")):
+            return operators, []
+        path = COMMITTED
     rows = load(path)
     if unknown := {row["operator"] for row in rows} - catalog().keys():
         raise ContractError(f"Capture names operators outside the catalog: {sorted(unknown)}")

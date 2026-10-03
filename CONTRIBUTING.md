@@ -79,9 +79,10 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all 
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --resume results/kernel_tuning/batches/BATCH_ID
 ```
 
-Select a subset with operator names or `--model pi05|activevln|streamvln`. Add
-`--captured FILE` to tune with shapes recorded from real traffic by `capture`, for example
-`benchmarks/kernel_tuning/captures/pi05-libero10.jsonl`.
+Select a subset with operator names or `--model pi05|qwen25-vln|streamvln`. Workloads come
+from the captures in `benchmarks/kernel_tuning/captures/` (recorded by `capture`, optionally
+on a random-weight `skeleton` checkpoint); `--captured FILE` selects another capture and
+`--estimated` uses the catalog's estimates.
 
 Run these commands from the repository root. Humanize2 is pinned to a reviewed
 source revision in the tool's `pyproject.toml`; it drives an existing, separately

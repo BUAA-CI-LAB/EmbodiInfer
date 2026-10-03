@@ -285,10 +285,13 @@ repository revision and source digests. Structured integer inputs such as
 segment offsets are written as safetensors data inside the task.
 
 The catalog covers the Triton paths of pi0.5 (`ada_rms_norm`, `gated_residual`,
-`gated_gelu`, `rotate_qk`, `split_kv_attention`), ActiveVLN's Qwen2.5-VL vision
-tower (`rotate_half_rope`, `segmented_attention`), and StreamVLN's Qwen2 decode
-path (`rms_norm`, `add_rms_norm`, `swiglu`). Shapes are representative of those
-models, not traced traffic. All generated tasks time with CUDA Graphs.
+`gated_gelu`, `rotate_qk`, `split_kv_attention`), the Qwen2.5-VL vision tower of
+the Qwen R2R low-level and panoramic policies (`rotate_half_rope`,
+`segmented_attention`), and StreamVLN's Qwen2 decode path (`rms_norm`,
+`add_rms_norm`, `swiglu`). ActiveVLN runs the Transformers vision tower and an
+eager attention backend, so it currently calls none of these kernels. Workloads
+come from committed captures (see below); the catalog's estimates are only the
+fallback (`--estimated`). All generated tasks time with CUDA Graphs.
 
 Contracts follow the production kernel, not an aspiration. `gated_residual`
 and `rotate_qk` are bit-exact against Torch. The other kernels already round
@@ -324,11 +327,21 @@ it runs an unmodified model script in the model's runtime with every catalog
 kernel wrapped, converts each call to the operator's task axes, scalars, and
 fixed integer inputs, and writes one JSONL row per distinct case with its call
 count. Calls outside a task's semantics (another dtype, broadcast tables,
-custom attention scaling) are counted as skipped with the reason. Shapes depend
-on the configuration and inputs, not on weight values; run with CUDA Graphs and
-compilation disabled so every call reaches Python. `generate --captured` and
-`tune-all --captured` then use the most frequent cases as workloads, weighted by
-call count; operators the capture never saw keep their estimates.
+custom attention scaling) are counted as skipped with the reason. Kernels
+launched while a CUDA Graph is captured are attached to that graph and counted on
+every replay, so production graph configurations can be captured; compilation
+should be disabled. Captures committed under `benchmarks/kernel_tuning/captures/`
+replace the catalog estimates by default, using each operator's most frequent
+cases weighted by call count; `--captured FILE` selects another capture and
+`--estimated` restores the estimates.
+
+Shapes depend on the configuration and the inputs, never on weight values.
+`skeleton REPO --revision REV` therefore builds a random-weight copy of a
+Hugging Face checkpoint: it downloads the small files and synthesizes each
+safetensors file from its header, read with an HTTP range request. Benchmark
+scripts then run unchanged on it, with synthetic frames where the policy resizes
+images to a fixed size anyway. Random weights do not reproduce generated text, so
+decode lengths are fixed in the capture configuration.
 
 `benchmarks/kernel_tuning/captures/pi05-libero10.jsonl` comes from
 `benchmarks/pi05-benchmark` on 200 LIBERO-10 frames (10 tasks), with the
@@ -340,6 +353,20 @@ also runs once per layer over the whole prefix with no cached keys (`P=0`,
 declares BF16 (recalibrated: at most 0.79 of its bound on an RTX 5090). At B=1,
 four of the five pi0.5 kernels measure about 4 µs on an RTX 5090, the device's
 launch floor; only `split_kv_attention` (16-35 µs) leaves room to tune.
+
+The Qwen R2R captures (`qwen-r2r-low.jsonl`, `qwen-r2r-panoramic.jsonl`) use
+skeleton checkpoints and synthetic R2R/RxR episodes (the trajectory release is
+gated; episode lengths follow the benchmark READMEs) with `attention_backend:
+triton` and CUDA Graphs on: only the graph path runs EmbodiInfer's Triton vision
+forward. Each call encodes 4 history frames plus the current one: 1,980 patches
+in 46 ragged windows (low-level) or 7,704 patches in 172 windows (panoramic),
+not the estimated uniform 1,024/4,096. The rotary tables are BF16, which makes
+the production RoPE bit-exact; the catalog now declares both. These shapes put
+`segmented_attention` at 357 µs and 1,405 µs and `rotate_half_rope` at 18 µs and
+61 µs on an RTX 5090. The StreamVLN capture (`streamvln-r2r-rxr.jsonl`, skeleton
+weights, decode capped at the five tokens of its fast action path) sees only
+single-row decode calls: `swiglu` never runs on prefill chunks, and all three
+StreamVLN kernels sit at the launch floor.
 
 ```bash
 PYTHONPATH=/path/to/EmbodiInfer /path/to/model-runtime/python -m scripts.kernel_tuning capture   --output pi05.jsonl -- benchmark.py --config capture-config.yaml

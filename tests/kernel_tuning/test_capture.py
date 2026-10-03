@@ -202,3 +202,46 @@ def test_cli_capture_and_generate_from_capture(
     assert main(argv) == 0
     assert "rms_norm: 1 captured shapes covering 100% of 7 calls" in capsys.readouterr().out
     assert TaskPackage.load(tmp_path / "tasks/rms_norm").workload_ids == ("captured1-M1-H3584",)
+
+
+def test_calls_captured_in_a_cuda_graph_count_once_per_replay() -> None:
+    recorder = capture.Recorder()
+    arguments = {"packed": FakeTensor(1, 1, 37888)}
+    recorder.record("swiglu", arguments)  # eager warmup before capture
+    recorder.begin_graph()
+    recorder.record("swiglu", arguments)
+    recorder.record("swiglu", arguments)
+    recorder.end_graph(7)
+    assert recorder.rows()[0]["count"] == 1
+    for _ in range(3):
+        recorder.replay(7)
+    recorder.replay(8)  # an unrelated graph contributes nothing
+    assert recorder.rows() == [{"operator": "swiglu", "axes": {"M": 1, "I": 18944}, "count": 7}]
+
+
+def test_committed_captures_replace_estimates_by_default() -> None:
+    operators, notes = capture.apply_file([catalog()["split_kv_attention"], catalog()["segmented_attention"]])
+    split_kv, segmented = operators
+    assert {w.axes["P"] for w in split_kv.workloads} == {576, 560, 0}
+    assert all(w.uuid.startswith("captured") for w in segmented.workloads)
+    assert all(w.fixed["segment_offsets"][-1] == w.axes["T"] for w in segmented.workloads)
+    assert len(notes) == 2
+    kept, notes = capture.apply_file([catalog()["swiglu"]], estimated=True)
+    assert kept == [catalog()["swiglu"]] and notes == ["using the catalog's estimated shapes"]
+
+
+def test_skeleton_reads_only_the_safetensors_header(monkeypatch) -> None:
+    from scripts.kernel_tuning import skeleton
+    from scripts.kernel_tuning.generate import safetensors_bytes
+
+    data = safetensors_bytes({"layer.weight": ("int32", (1, 2, 3, 4))})
+    requested = []
+
+    def request(url: str, *, start=None, end=None) -> bytes:
+        requested.append((start, end))
+        return data[start : end + 1]
+
+    monkeypatch.setattr(skeleton, "_request", request)
+    header = skeleton.read_header("org/model", "abc", "model.safetensors")
+    assert header == {"layer.weight": {"dtype": "I32", "shape": [4], "data_offsets": [0, 16]}}
+    assert requested[0] == (0, 7) and requested[1][1] < len(data) - 16

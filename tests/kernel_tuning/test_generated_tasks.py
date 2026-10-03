@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from scripts.kernel_tuning.capture import apply_file
 from scripts.kernel_tuning.contracts import ContractError, TaskPackage, read_json
 from scripts.kernel_tuning.generate import (
     MARKER,
@@ -183,7 +184,8 @@ def test_production_baseline_meets_generated_contract(name: str, tmp_path: Path)
     spec.loader.exec_module(adapter)
     compare = adapter.compare_outputs
 
-    task = render(catalog()[name], tmp_path / "task")
+    (operator,), _ = apply_file([catalog()[name]])  # calibrate on the committed captured shapes
+    task = render(operator, tmp_path / "task")
     baseline = _load_baseline(task, tmp_path / "build")
     reference_scope: dict[str, Any] = {}
     exec(compile(task.definition["reference"], "reference", "exec"), reference_scope)

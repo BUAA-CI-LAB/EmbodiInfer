@@ -84,9 +84,13 @@ def _selection(parser: argparse.ArgumentParser) -> None:
         help="Override tuning.yaml, e.g. evaluator_python=/abs/python or search.max_candidates=10",
     )
     parser.add_argument("--hardware-notes", type=Path, help="Target-hardware notes copied into each task")
-    parser.add_argument(
-        "--captured", type=Path, help="Replace estimated workloads with shapes from a `capture` file"
+    shapes = parser.add_mutually_exclusive_group()
+    shapes.add_argument(
+        "--captured",
+        type=Path,
+        help="Shapes from this `capture` file or directory (default: benchmarks/kernel_tuning/captures)",
     )
+    shapes.add_argument("--estimated", action="store_true", help="Use the catalog's estimated shapes")
 
 
 def _generate(args: argparse.Namespace) -> None:
@@ -94,7 +98,9 @@ def _generate(args: argparse.Namespace) -> None:
     from .generate import parse_overrides, render
     from .operators import select
 
-    operators, notes = apply_file(select(args.operators or None, args.model), args.captured)
+    operators, notes = apply_file(
+        select(args.operators or None, args.model), args.captured, estimated=args.estimated
+    )
     for note in notes:
         print(note)
     if args.list:
@@ -122,14 +128,24 @@ def _tune_all(args: argparse.Namespace) -> int:
     from .operators import select
 
     if args.resume:
-        if args.operators or args.model or args.set or args.hardware_notes or args.agent or args.captured:
+        if (
+            args.operators
+            or args.model
+            or args.set
+            or args.hardware_notes
+            or args.agent
+            or args.captured
+            or args.estimated
+        ):
             raise ContractError("--resume continues the recorded batch; omit selection, --set, and --agent")
         root = args.resume.resolve(strict=True)
     else:
         agent = args.agent or ""
         if not (args.dry_run or args.preflight_only) and "/" not in agent:
             raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
-        operators, notes = apply_file(select(args.operators or None, args.model), args.captured)
+        operators, notes = apply_file(
+            select(args.operators or None, args.model), args.captured, estimated=args.estimated
+        )
         for note in notes:
             print(note, flush=True)
         root = batch.create(
@@ -206,6 +222,12 @@ def main(argv: list[str] | None = None) -> int:
     capture.add_argument("operators", nargs="*", help="Catalog operators to record (default: all)")
     capture.add_argument("--output", type=Path, required=True, help="JSONL file of captured cases")
     capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
+    skeleton = commands.add_parser(
+        "skeleton", help="Random-weight copy of a Hugging Face checkpoint for shape capture (model runtime)"
+    )
+    skeleton.add_argument("repo", help="Model repository, e.g. org/name; HF_ENDPOINT selects a mirror")
+    skeleton.add_argument("--revision", required=True, help="Immutable commit to copy")
+    skeleton.add_argument("--output", type=Path, required=True)
     raw = sys.argv[1:] if argv is None else argv
     if "--" in raw and raw[0] == "capture":
         split = raw.index("--")
@@ -224,6 +246,15 @@ def main(argv: list[str] | None = None) -> int:
             for row in rows:
                 if "skipped" in row:
                     print(f"  skipped {row['count']} {row['operator']} calls: {row['skipped']}")
+        elif args.command == "skeleton":
+            from .skeleton import build
+
+            summary = build(args.repo, args.revision, args.output)
+            tensors = sum(summary["synthesized"].values())
+            print(
+                f"{args.output}: {len(summary['copied'])} files copied, "
+                f"{tensors} random tensors in {len(summary['synthesized'])} safetensors files"
+            )
         elif args.command == "generate":
             _generate(args)
         elif args.command == "tune-all":

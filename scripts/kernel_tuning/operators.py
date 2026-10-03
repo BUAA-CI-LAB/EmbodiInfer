@@ -4,8 +4,10 @@ Each entry states only what a person must decide: the mathematical reference, th
 production kernel call used as the baseline, model-derived workload shapes, and
 the numerical contract. ``generate.py`` turns an entry into a complete KDA task.
 
-Shapes come from the models named in each entry and are representative, not
-traced traffic. Override them by editing the entry or adding workloads here.
+The ``workloads`` here are estimates from model configurations. Shapes captured
+from real runs (``benchmarks/kernel_tuning/captures/*.jsonl``, see
+``capture.py``) replace them by default; the estimates remain the fallback for
+operators no capture covers.
 """
 
 from __future__ import annotations
@@ -80,8 +82,9 @@ PI05_BATCHES = (1, 8)
 PI05_TOKENS = 50
 PI05_PREFIX = 968
 
-# ActiveVLN vision tower (Qwen2.5-VL ViT): 16 heads, head_dim 80, 64-patch
-# windows. 1024 patches is one 448x448 frame; 4096 is four frames.
+# Qwen R2R low-level / panoramic policies (Qwen2.5-VL-3B ViT through
+# EmbodiInfer's Triton vision path): 16 heads, head_dim 80, 64-patch windows.
+# ActiveVLN runs the Transformers vision tower and uses none of these kernels.
 # StreamVLN language model (Qwen2-7B): hidden 3584, MLP 18944, decode rows.
 
 OPERATORS: tuple[Operator, ...] = (
@@ -287,8 +290,8 @@ def run(query, prefix_key, prefix_value, suffix_key, suffix_value, scaling):
     ),
     Operator(
         name="rotate_half_rope",
-        summary="Rotate-half RoPE for packed vision Q/K with FP32 cosine/sine tables.",
-        models=("activevln",),
+        summary="Rotate-half RoPE for packed vision Q/K, computed in FP32.",
+        models=("qwen25-vln",),
         op_type="rope",
         source="embodiinfer/backend/triton/packed_rope.py",
         entry="rotate_half_rope",
@@ -297,8 +300,8 @@ def run(query, prefix_key, prefix_value, suffix_key, suffix_value, scaling):
         inputs={
             "q": Tensor(("T", "HQ", "D"), BF16),
             "k": Tensor(("T", "HK", "D"), BF16),
-            "cos": Tensor(("T", "D"), "float32"),
-            "sin": Tensor(("T", "D"), "float32"),
+            "cos": Tensor(("T", "D"), BF16),
+            "sin": Tensor(("T", "D"), BF16),
         },
         outputs={"q_out": Tensor(("T", "HQ", "D"), BF16), "k_out": Tensor(("T", "HK", "D"), BF16)},
         constraints=("D % 2 == 0", "D <= 256"),
@@ -322,15 +325,13 @@ def run(q, k, cos, sin):
             Workload("vit-1frame", {"T": 1024, "HQ": 16, "HK": 16, "D": 80}, note="one 448x448 frame"),
             Workload("vit-4frames", {"T": 4096, "HQ": 16, "HK": 16, "D": 80}, note="four frames"),
         ),
-        precision=_tolerance(
-            "The production kernel may contract the FP32 multiply-add into an FMA before the BF16 cast."
-        ),
-        notes="Every vision block applies this before attention. head_dim 80 is not a power of two.",
+        notes="Every vision block applies this before attention. head_dim 80 is not a power of two. "
+        "Products of BF16 values are exact in FP32, so the production kernel is bit-exact.",
     ),
     Operator(
         name="segmented_attention",
         summary="Non-causal attention independently inside packed variable-length segments.",
-        models=("activevln",),
+        models=("qwen25-vln",),
         op_type="attention",
         source="embodiinfer/backend/triton/segmented_attention.py",
         entry="segmented_attention",
