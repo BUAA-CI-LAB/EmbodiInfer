@@ -68,21 +68,48 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning --help
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check benchmarks/kernel_tuning/tasks/gated_residual
 ```
 
-To tune every core operator, generate tasks from the operator catalog and run
-them as one batch (see the
-[generated-task section](docs/proposals/0008-kernel-tuning.md#generated-catalog-tasks-and-batch-tuning)):
+To tune one model, capture its existing preparation forward in its model runtime,
+then generate and preflight every eligible observed call before starting agents
+(see [model discovery](docs/proposals/0008-kernel-tuning.md#model-scoped-operator-discovery)):
 
 ```bash
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --list
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --preflight-only --set evaluator_python=/absolute/runtime/python
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --output results/kernel_tuning/captures/pi05 -- /absolute/preparation.py
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --model pi05 --captured results/kernel_tuning/captures/pi05 --list
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05 --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --resume results/kernel_tuning/batches/BATCH_ID
 ```
 
-Select a subset with operator names or `--model pi05|qwen25-vln|streamvln`. Workloads come
-from the captures in `benchmarks/kernel_tuning/captures/` (recorded by `capture`, optionally
-on a random-weight `skeleton` checkpoint); `--captured FILE` selects another capture and
-`--estimated` uses the catalog's estimates.
+`/absolute/preparation.py` is your existing preparation driver, constructing the
+selected canonical policy through `make_policy` and running its normal forward
+path. Disable compilation explicitly; select the same checkpoint, backend,
+dtype, batching and decoding settings that will be tuned. Discovery covers only
+paths exercised by that preparation. The capture records ATen overloads and
+existing backend entrypoints, all observed shapes/layouts, and call counts.
+Quantized calls and their internals are excluded; views/allocations and host work
+are listed separately. No new fusion is introduced. A missing replay contract,
+required fixture, or failing baseline blocks the entire model batch. `--dry-run`
+only builds tasks; `--preflight-only` measures baselines without opening agents.
+Model batches cannot use `--skip-preflight`, partial operator selection, or
+estimated shapes. A standalone `run` cannot bypass their preflight barrier.
+
+Capture may store input data under a 64 MiB limit (`--fixture-bytes`): small
+floating fixtures when space permits, and required integer/index fixtures.
+Capture directories and tasks are hashed and checked again on resume. Large
+floating inputs use seeded generation; calls needing more specific inputs must
+pass preflight or receive a dedicated replay adapter. Start with a new output
+directory when changing preparation/configuration.
+
+Default-generator `randn` tasks save required before/after RNG fixtures, check
+both output bytes and generator advancement, and support eager timing only.
+Explicit generators and other unsupported RNG calls remain coverage gaps.
+SDPA with zero/default dropout is eligible; nonzero dropout still needs an adapter.
+Discovered float64 tensors use the opt-in replay definition schema and retain
+double precision through task generation and evaluation.
+
+The old catalog workflow remains available explicitly with `generate --catalog`,
+`tune-all --catalog`, and `capture --catalog`. Only that workflow accepts legacy
+JSONL captures, catalog model groups, operator subsets and `--estimated`; it
+does not certify model coverage. Existing JSONL must be recaptured for model tuning.
 
 Run these commands from the repository root. Humanize2 is pinned to a reviewed
 source revision in the tool's `pyproject.toml`; it drives an existing, separately
@@ -125,7 +152,8 @@ uv run --project scripts/kernel_tuning ruff check scripts/kernel_tuning benchmar
 uv run --project scripts/kernel_tuning ruff format --check scripts/kernel_tuning benchmarks/kernel_tuning tests/kernel_tuning
 ```
 
-The `--confcutdir` option avoids loading the core test suite's Torch-dependent
+CPU discovery/replay tests also need Torch in the selected interpreter; they do
+not load checkpoints or run GPU tuning. The `--confcutdir` option avoids loading the core test suite's Torch-dependent
 fixtures in the separate tooling environment. Optional numerical/GPU tests skip
 when their dependencies/hardware are unavailable; skips are not GPU validation.
 After preparing the target GPU runtime and CUDA toolkit, exercise both the Triton

@@ -80,7 +80,7 @@ class FlashInferAdapter:
 
     def __init__(self, task: TaskPackage) -> None:
         import torch
-        from flashinfer_bench.data import Definition, Trace
+        from flashinfer_bench.data import Trace
 
         if importlib.metadata.version("flashinfer-bench") != FLASHINFER_VERSION:
             raise ContractError(f"This adapter requires flashinfer-bench=={FLASHINFER_VERSION}")
@@ -95,7 +95,7 @@ class FlashInferAdapter:
         self.device = str(torch.device(self.cfg.device))
         torch.cuda.set_device(self.device)
         self.device = f"cuda:{torch.cuda.current_device()}"
-        self.definition = Definition.model_validate(task.definition)
+        self.definition = self._load_definition(task.definition)
         self.traces = [Trace.model_validate(trace) for trace in task.workloads]
         for trace in self.traces:
             axes = {k: v.value for k, v in self.definition.axes.items() if v.type == "const"}
@@ -112,6 +112,12 @@ class FlashInferAdapter:
             ["nvidia-smi", "--query-gpu=uuid,driver_version", "--format=csv,noheader"]
         )
         self._flush: Any = None
+
+    def _load_definition(self, definition: dict[str, Any]) -> Any:
+        """Validate the upstream schema; specialized replay adapters may extend its dtype set."""
+        from flashinfer_bench.data import Definition
+
+        return Definition.model_validate(definition)
 
     @staticmethod
     def _command(argv: list[str]) -> str:
@@ -425,7 +431,7 @@ class FlashInferAdapter:
         if set(solutions) != set(ROLES):
             raise ContractError("Expected baseline, incumbent, and candidate solutions")
         registry = BuilderRegistry.get_instance()
-        reference = registry.build_reference(self.definition)
+        reference = self._build_reference(registry)
         runnables = {
             role: registry.build(self.definition, Solution.model_validate(solution))
             for role, solution in solutions.items()
@@ -470,6 +476,9 @@ class FlashInferAdapter:
                     measurements[trace.workload.uuid] = row
                 rounds.append(measurements)
         return {"checks": checks, "rounds": rounds}
+
+    def _build_reference(self, registry: Any) -> Any:
+        return registry.build_reference(self.definition)
 
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
         """Capture optional NCU evidence in a separate worker, never promotion timing."""

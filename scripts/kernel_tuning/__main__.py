@@ -12,10 +12,15 @@ from pathlib import Path
 
 from .artifacts import REPOSITORY, RunStore, atomic_json, run_lock, runtime_identity
 from .contracts import HMZ_REVISION, ContractError, TaskPackage, read_json
+from .discovery.contracts import ModelCapture
 from .runner import evaluate
 
 
 def _execute(store: RunStore, *, resume: bool) -> dict:
+    if "replay.json" in store.task.hashes:
+        from .batch import verify_model_run
+
+        verify_model_run(store)
     if os.name != "posix":
         raise ContractError(
             "This pinned Humanize2 release requires POSIX; run tuning on the Linux target machine"
@@ -75,7 +80,10 @@ def _execute(store: RunStore, *, resume: bool) -> dict:
 
 def _selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("operators", nargs="*", help="Catalog operator names (default: all)")
-    parser.add_argument("--model", action="append", help="Select operators used by a model, e.g. pi05")
+    parser.add_argument(
+        "--catalog", action="store_true", help="Use the legacy hand-maintained operator catalog"
+    )
+    parser.add_argument("--model", action="append", help="One canonical target policy name, e.g. pi05")
     parser.add_argument(
         "--set",
         action="append",
@@ -88,15 +96,51 @@ def _selection(parser: argparse.ArgumentParser) -> None:
     shapes.add_argument(
         "--captured",
         type=Path,
-        help="Shapes from this `capture` file or directory (default: benchmarks/kernel_tuning/captures)",
+        help="Completed model capture directory (legacy JSONL only with --catalog)",
     )
     shapes.add_argument("--estimated", action="store_true", help="Use the catalog's estimated shapes")
+
+
+def _model_capture(args: argparse.Namespace) -> ModelCapture:
+    if not args.model or len(args.model) != 1:
+        raise ContractError(
+            "Model tuning requires exactly one --model; use --catalog for legacy operator selection"
+        )
+    if (
+        args.operators
+        or args.estimated
+        or getattr(args, "force", False)
+        or getattr(args, "skip_preflight", False)
+    ):
+        raise ContractError(
+            "Model tuning requires complete coverage: no operator filter, --estimated, --force, or --skip-preflight"
+        )
+    if args.captured is None:
+        raise ContractError("Model tuning requires --captured MODEL_CAPTURE; run capture --model first")
+    return ModelCapture.load(args.captured, args.model[0], require_ready=not getattr(args, "list", False))
 
 
 def _generate(args: argparse.Namespace) -> None:
     from .capture import apply_file
     from .generate import parse_overrides, render
     from .operators import select
+
+    if not args.catalog:
+        from .discovery.tasks import render_model
+
+        capture = _model_capture(args)
+        if args.list:
+            for op in capture.operators:
+                print(
+                    f"{op['status']:20} {op['name']} ({len(op['workloads'])} cases) {op.get('reason') or ''}"
+                )
+            return
+        tasks = render_model(
+            capture, args.output, overrides=parse_overrides(args.set), hardware_notes=args.hardware_notes
+        )
+        for task in tasks:
+            print(f"{task.definition['description']}: {task.root} ({len(task.workloads)} workloads)")
+        return
 
     operators, notes = apply_file(
         select(args.operators or None, args.model), args.captured, estimated=args.estimated
@@ -136,6 +180,7 @@ def _tune_all(args: argparse.Namespace) -> int:
             or args.agent
             or args.captured
             or args.estimated
+            or args.catalog
         ):
             raise ContractError("--resume continues the recorded batch; omit selection, --set, and --agent")
         root = args.resume.resolve(strict=True)
@@ -143,18 +188,22 @@ def _tune_all(args: argparse.Namespace) -> int:
         agent = args.agent or ""
         if not (args.dry_run or args.preflight_only) and "/" not in agent:
             raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
-        operators, notes = apply_file(
-            select(args.operators or None, args.model), args.captured, estimated=args.estimated
-        )
-        for note in notes:
-            print(note, flush=True)
-        root = batch.create(
-            operators,
-            args.output,
-            agent=agent,
-            overrides=parse_overrides(args.set),
-            hardware_notes=args.hardware_notes,
-        )
+        options = {
+            "agent": agent,
+            "overrides": parse_overrides(args.set),
+            "hardware_notes": args.hardware_notes,
+        }
+        if args.catalog:
+            operators, notes = apply_file(
+                select(args.operators or None, args.model), args.captured, estimated=args.estimated
+            )
+            for note in notes:
+                print(note, flush=True)
+            root = batch.create(operators, args.output, **options)
+        else:
+            root = batch.create_model(_model_capture(args), args.output, **options)
+    if args.skip_preflight and read_json(root / "batch.json").get("model"):
+        raise ContractError("Model batches cannot skip the all-baseline preflight")
     print(f"Batch: {root}", flush=True)
     if args.dry_run:
         batch.write_summary(root)
@@ -200,13 +249,13 @@ def main(argv: list[str] | None = None) -> int:
     export = commands.add_parser("export", help="Export best verified source and evidence; no execution")
     export.add_argument("run", type=Path)
     export.add_argument("destination", type=Path)
-    generate = commands.add_parser("generate", help="Write task packages for catalog operators; no execution")
+    generate = commands.add_parser("generate", help="Write every discovered model task; no execution")
     _selection(generate)
     generate.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning/tasks")
     generate.add_argument(
         "--force", action="store_true", help="Replace previously generated task directories"
     )
-    generate.add_argument("--list", action="store_true", help="List catalog operators and exit")
+    generate.add_argument("--list", action="store_true", help="List discovered operators and coverage gaps")
     tune_all = commands.add_parser("tune-all", help="Generate, preflight, and tune every selected operator")
     _selection(tune_all)
     tune_all.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec for every operator")
@@ -220,7 +269,14 @@ def main(argv: list[str] | None = None) -> int:
         "capture", help="Record production kernel shapes while a model script runs (model runtime)"
     )
     capture.add_argument("operators", nargs="*", help="Catalog operators to record (default: all)")
-    capture.add_argument("--output", type=Path, required=True, help="JSONL file of captured cases")
+    capture.add_argument("--catalog", action="store_true", help="Record legacy catalog-only JSONL")
+    capture.add_argument("--model", help="Canonical policy name constructed by the preparation script")
+    capture.add_argument(
+        "--fixture-bytes", type=int, default=64 * 1024 * 1024, help="Maximum stored input fixture bytes"
+    )
+    capture.add_argument(
+        "--output", type=Path, required=True, help="New model capture directory (JSONL for --catalog)"
+    )
     capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
     skeleton = commands.add_parser(
         "skeleton", help="Random-weight copy of a Hugging Face checkpoint for shape capture (model runtime)"
@@ -237,15 +293,31 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw)
     try:
         if args.command == "capture":
-            from .capture import run as run_capture
-            from .operators import select
+            if args.catalog:
+                from .capture import run as run_capture
+                from .operators import select
 
-            rows = run_capture(command or args.script, args.output, select(args.operators or None))
-            calls = sum(row["count"] for row in rows if "axes" in row)
-            print(f"Captured {calls} calls in {sum('axes' in row for row in rows)} cases -> {args.output}")
-            for row in rows:
-                if "skipped" in row:
-                    print(f"  skipped {row['count']} {row['operator']} calls: {row['skipped']}")
+                if args.model:
+                    raise ContractError("Legacy catalog capture does not bind a model; omit --model")
+                rows = run_capture(command or args.script, args.output, select(args.operators or None))
+                calls = sum(row["count"] for row in rows if "axes" in row)
+                print(
+                    f"Captured {calls} calls in {sum('axes' in row for row in rows)} cases -> {args.output}"
+                )
+                for row in rows:
+                    if "skipped" in row:
+                        print(f"  skipped {row['count']} {row['operator']} calls: {row['skipped']}")
+            else:
+                from .discovery.recorder import run as run_model_capture
+
+                if not args.model or args.operators:
+                    raise ContractError(
+                        "Capture requires one --model and no operator filter; use --catalog for legacy capture"
+                    )
+                result = run_model_capture(
+                    command or args.script, args.output, args.model, fixture_bytes=args.fixture_bytes
+                )
+                print(json.dumps(result, indent=2, ensure_ascii=False))
         elif args.command == "skeleton":
             from .skeleton import build
 
@@ -281,7 +353,17 @@ def main(argv: list[str] | None = None) -> int:
             agent = args.agent or task.settings.agent
             if not agent or "/" not in agent:
                 raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
+            model_batch = None
+            if "replay.json" in task.hashes:
+                from .batch import verify_model_task
+
+                model_batch = verify_model_task(task)
             store = RunStore.create(task, args.output, agent)
+            if model_batch is not None:
+                store.manifest["model_batch"] = str(model_batch)
+                item = read_json(model_batch / "batch.json")["items"][task.root.name]
+                store.manifest["environment"] = item["preflight_environment"]
+                store.save()
             print(f"Run archive: {store.root}", flush=True)
             print(json.dumps(_execute(store, resume=False), indent=2, ensure_ascii=False))
         else:

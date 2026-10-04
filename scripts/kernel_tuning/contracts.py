@@ -306,7 +306,9 @@ class TaskPackage:
             if axis["type"] == "const":
                 _positive(axis.get("value"), "constant axis", integer=True, zero=True)
         for kind in ("inputs", "outputs"):
-            if not isinstance(definition.get(kind), dict) or not definition[kind]:
+            if not isinstance(definition.get(kind), dict) or (
+                not definition[kind] and not (kind == "inputs" and "replay.json" in hashes)
+            ):
                 raise ContractError(f"Definition requires {kind}")
             for spec in definition[kind].values():
                 shape = spec.get("shape")
@@ -315,7 +317,9 @@ class TaskPackage:
                 ) or not spec.get("dtype"):
                     raise ContractError(f"Invalid {kind} tensor spec")
         bound = {axis for spec in definition["inputs"].values() for axis in spec.get("shape") or ()}
-        if unbound := {name for name, axis in axes.items() if axis["type"] == "var"} - bound:
+        if (
+            unbound := {name for name, axis in axes.items() if axis["type"] == "var"} - bound
+        ) and "replay.json" not in hashes:
             # FlashInfer infers variable axes from input shapes when sizing outputs.
             raise ContractError(f"Variable axes must appear in an input shape: {sorted(unbound)}")
         for source in (definition["reference"], (root / "baseline.py").read_text(encoding="utf-8")):
@@ -364,6 +368,12 @@ class TaskPackage:
             raise ContractError("Workloads must be nonempty and have distinct UUIDs")
         if settings.weights and set(settings.weights) != set(ids):
             raise ContractError("Explicit weights must cover exactly every workload UUID")
+        if "replay.json" in hashes:
+            from .discovery.contracts import validate_replay
+
+            validate_replay(read_json(root / "replay.json"), definition, traces, hashes)
+            if "benchmark.py" not in hashes:
+                raise ContractError("Captured layouts require the replay benchmark adapter")
         return cls(root, definition, tuple(traces), settings, hashes)
 
     def verify(self) -> None:
@@ -415,6 +425,8 @@ def validate_solution(solution: Any, task: TaskPackage) -> dict[str, Any]:
         raise ContractError("Candidate target_hardware differs from the frozen task")
     if type(spec.get("destination_passing_style")) is not bool:
         raise ContractError("Declare destination_passing_style explicitly")
+    if "replay.json" in task.hashes and spec["destination_passing_style"]:
+        raise ContractError("Discovered tasks require return-value style")
     if spec.get("binding") not in (None, "torch", "tvm-ffi"):
         raise ContractError("CUDA binding must be torch or tvm-ffi")
     entry = spec.get("entry_point", "").split("::")

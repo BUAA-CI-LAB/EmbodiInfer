@@ -275,7 +275,7 @@ are not established by CPU/fake-agent tests.
 Hand-writing a task package per operator does not scale to every core kernel.
 `scripts/kernel_tuning/operators.py` declares each core Triton operator once:
 its eager Torch reference, the production call used as the baseline, the
-model-derived workload shapes, and the numerical contract. `generate` renders a
+model-derived workload shapes, and the numerical contract. `generate --catalog` renders a
 complete task package from an entry. The baseline is the production kernel
 itself: the defining repository module and the repository modules it imports
 are copied byte-for-byte under `vendor/` (absolute `embodiinfer.` imports are
@@ -308,7 +308,7 @@ Laptop GPU (Torch 2.6, Triton 3.2; at most 0.85 of its bound) and on an RTX
 for all ten tasks on both. Re-run both on each target before trusting a
 contract there.
 
-`tune-all` generates the selected operators into a new batch directory under
+`tune-all --catalog` generates the selected operators into a new batch directory under
 `results/kernel_tuning/batches/`, measures every production baseline with the
 evaluator (preflight), and then runs each operator serially in its own
 `run`/`resume` subprocess. A failed operator does not stop the batch; an
@@ -320,9 +320,151 @@ settings (`evaluator_python`, `device`, budgets) are passed with `--set` at
 generation time, and `--hardware-notes` copies target-hardware notes into each
 task as `HARDWARE.md` for the agent.
 
-### Captured workloads
+### Model-scoped operator discovery
 
-Catalog shapes are estimates. `capture` replaces them with production traffic:
+The model workflow selects exactly one canonical policy ID before preparation.
+During the existing preparation execution, a scoped ATen observer and wrappers
+around existing backend entrypoints collect complete input/output metadata.
+Existing compound kernels remain single operators; this change introduces no
+new fusion, quantization, runtime registration, or engine API.
+
+The capture freezes the model type, supplied checkpoint/configuration descriptors, Torch version,
+numerical settings, operator overloads, tensor shapes/strides, argument trees,
+aliasing and mutation contracts, and every observed workload (no top-eight
+truncation or estimated-shape fallback). Quantized calls and their internal
+floating-point operations are excluded by invocation scope, including dynamically
+created quantized projections and first-forward packing. Metadata-only operations
+and host-side work are reported separately from device computation. Discovery
+covers the executed preparation paths, not unvisited branches.
+
+Uncompiled preparation is required; compilation is rejected rather than silently
+changing the model's attention or execution path. CUDA Graph metadata is collected
+during warmup/capture and calls are counted on replay. Bounded fixtures may be saved
+outside graph capture; cases requiring unavailable fixtures are coverage gaps.
+Unknown external operators, unrepresentable arguments/state, and unsupported
+contracts also remain explicit gaps. Every eligible workload must have a task and
+all production baselines must pass preflight before any model batch starts an
+agent. No partial-model or skip-preflight escape hatch is provided.
+
+ATen tasks replay the exact captured overload as their frozen bit-exact reference
+and production baseline. Backend tasks snapshot their existing implementation.
+The existing Humanize2 search, evaluator, paired promotion rules, archive and
+export remain in use. Layout/state-aware task adapters extend evaluation without
+weakening the default pure-operator checks. Inputs, current stream, numerical
+settings, changed-input graph replay, and declared mutations are validated.
+
+This is repository tooling under scripts/kernel_tuning and measurement under
+benchmarks/kernel_tuning. A static operator whitelist was rejected because it
+cannot discover model calls; full-model graph compilation was rejected because
+it changes operator boundaries and is outside the no-new-fusion scope. Existing
+catalog tasks remain available explicitly as a legacy workflow. Legacy captures
+cannot establish model coverage and must be recaptured for model tuning.
+
+CPU regression coverage must exercise uncatalogued operators, model identity,
+all shapes/layouts, quantized scopes (including dynamic modules), unsupported
+cases, immutable capture artifacts, and the all-baselines preflight barrier.
+GPU/checkpoint validation remains explicit in the matching model environment;
+CPU/fake-agent passes do not establish GPU correctness or performance.
+
+#### Commands and artifacts
+
+Run preparation in the selected model's own runtime. `PREPARATION.py` below is
+an existing driver that constructs the specified policy through `make_policy`
+and exercises its forward/decode path, with compilation disabled. The capture
+does not launch an extra forward or change the attention backend. Canonical
+policy IDs are those accepted by the factory, for example `pi05`, `streamvln`,
+or `qwen2.5-vl-3b-r2r-low-level`; catalog group names are not model IDs.
+
+```bash
+/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --output results/kernel_tuning/captures/pi05 -- PREPARATION.py
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --model pi05 --captured results/kernel_tuning/captures/pi05 --list
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05 --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --resume results/kernel_tuning/batches/BATCH_ID
+```
+
+`--dry-run` builds and validates all tasks without evaluation. `--preflight-only`
+evaluates all baselines without agents; if that batch is later resumed, supply
+its agent at creation time. Model preflight failures prevent every agent from
+starting. After all baselines pass, an individual search failure is recorded and
+other prepared tasks may continue. Resume rechecks capture/task/tool identities
+and reruns model preflight. The single-task `run`/`resume` paths also check the
+parent model batch. There is no model-mode `--force`, `--estimated`, operator
+filter, multiple-model selection, or `--skip-preflight` option.
+
+Capture artifacts are `manifest.json` (actual policy type, builder configuration,
+revision, Torch version, numerical settings, completeness and hashes),
+`operators.json` (overload/backend identity, signature, every workload and counts),
+`coverage.json` (ready/excluded_quantized/metadata_only/host_only/blocked counts),
+and bounded `fixtures/`. A model batch snapshots this directory under `capture/`,
+creates a task per call signature under `tasks/<operator-id>/`, and retains
+`batch.json`, preflight records, run archives, exports and summaries. Each task
+includes `replay.json` with storage/layout/mutation contracts and model identity;
+its baseline calls the exact ATen overload or snapshotted backend implementation.
+Different shapes and strides remain workloads of the same signature; overload,
+scalar/static arguments, tensor rank/dtype and output structure distinguish tasks.
+
+The default 64 MiB fixture budget is explicit (`--fixture-bytes`). Integer/index
+storage requires a captured fixture. Floating storage up to 1 MiB is captured
+when the remaining budget permits; larger floating storage is generated from
+fixed seeds. Seed 0 uses the unmodified saved fixture; other seeds perturb
+floating values. First observed fixtures represent each structural case. This
+is finite input validation, not proof for all values; domain-specific validity
+or data-dependent output shapes may require an adapter. Budget exhaustion for a
+required fixture is a coverage gap, never permission to guess indices.
+
+Replay preserves shared storage, strides and offsets. It checks output values,
+layouts, input/output and output/output aliases, declared mutations and unchanged
+input storage. Timing resets backing storage before every sample, outside timed
+events, in both eager and graph modes. The default is eager; `timing.mode=cuda_graph`
+also requires successful changed-input A/B/A replay. NCU profiling currently
+requires a dedicated replay-aware adapter. Numerical overrides cannot weaken
+the captured bit-exact production contract.
+
+Default-generator `aten.randn.default` and `aten.randn.generator` with
+`generator=None` have an eager replay contract. Capture stores the opaque CPU
+and target CUDA generator states immediately before and after the existing call,
+within the same required-fixture budget. Seed 0 replays the actual captured
+position; other validation seeds use independent default-generator states.
+Validation compares output bytes and the complete post-call generator states,
+rejecting extra draws or rewinds even when output values match. State resets
+happen before each warmup/sample, outside timing events, and evaluation restores
+the caller's Torch RNG states on success or failure. Explicit generator objects,
+other random overloads, and RNG tasks using CUDA Graph timing remain gaps.
+
+SDPA's dispatcher RNG tag is conditional: `dropout_p=0` (including its schema
+default) does not require an RNG replay contract. Discovery resolves positional,
+keyword and omitted dropout arguments without changing the invocation, backend,
+mask, scale or attention semantics. Nonzero dropout remains a coverage gap until
+its own state contract is implemented; other nondeterministic tags still apply.
+
+Replay tasks declare `definition_schema=embodiinfer-replay-v1`. Their local
+`ReplayDefinition` extends the pinned FlashInfer tensor schema with `float64`,
+retains upstream structural validation, and uses the same builders with native
+double-precision tensors. Captured fixtures, input materialization and output
+checks preserve float64 without a cast or relaxed tolerance. Ordinary FlashInfer
+definitions and their accepted dtype set are unchanged.
+
+Existing RoPE cache writes and greedy-sampling workspace mutations have explicit
+contracts; graph GQA and prefill entries remain individual existing operators.
+`GreedyWorkspace` has a typed tensor-state recipe; arbitrary Python objects still
+require an adapter. Dtypes unsupported by the replay schema remain task
+construction gaps rather than silently converted inputs.
+
+Known quantization scopes are `QuantizedLinear` (FP8/INT8/NVFP4), conversion and
+packing helpers, their backend functions, and explicit native quantization
+dispatcher operators. Normal integer indices are not a quantization signal.
+Unknown dispatcher extensions and raw Triton launches are reported as gaps;
+random operators outside the default-generator randn contract, opaque Python
+arguments, and calls without tensor outputs also require an adapter. Custom
+C++/CUDA calls that bypass both the dispatcher and
+these entrypoints need explicit instrumentation before claiming coverage.
+Capture is a single-process preparation facility; it does not certify unvisited
+branches, other worker processes, or checkpoint-level action parity. Existing
+fused kernels count as one call; no new fused operators are proposed or generated.
+
+### Captured catalog workloads
+
+Catalog shapes are estimates. `capture --catalog` replaces them with production traffic:
 it runs an unmodified model script in the model's runtime with every catalog
 kernel wrapped, converts each call to the operator's task axes, scalars, and
 fixed integer inputs, and writes one JSONL row per distinct case with its call
@@ -369,6 +511,6 @@ single-row decode calls: `swiglu` never runs on prefill chunks, and all three
 StreamVLN kernels sit at the launch floor.
 
 ```bash
-PYTHONPATH=/path/to/EmbodiInfer /path/to/model-runtime/python -m scripts.kernel_tuning capture   --output pi05.jsonl -- benchmark.py --config capture-config.yaml
-python -m scripts.kernel_tuning tune-all --model pi05 --captured pi05.jsonl --agent ...
+PYTHONPATH=/path/to/EmbodiInfer /path/to/model-runtime/python -m scripts.kernel_tuning capture --catalog --output pi05.jsonl -- benchmark.py --config capture-config.yaml
+python -m scripts.kernel_tuning tune-all --catalog --model pi05 --captured pi05.jsonl --agent 'HARNESS/MODEL:EFFORT'
 ```

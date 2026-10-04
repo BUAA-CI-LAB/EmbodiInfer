@@ -177,7 +177,7 @@ def test_cli_validates_agent_and_resume_arguments(tmp_path: Path, capsys) -> Non
     assert main(["tune-all", "rms_norm", "--output", str(output)]) == 2
     assert "explicit Humanize2 agent" in capsys.readouterr().err
     assert not output.exists()
-    assert main(["tune-all", "--model", "streamvln", "--dry-run", "--output", str(output)]) == 0
+    assert main(["tune-all", "--catalog", "--model", "streamvln", "--dry-run", "--output", str(output)]) == 0
     (root,) = output.iterdir()
     assert set(read_json(root / "batch.json")["items"]) == {"rms_norm", "add_rms_norm", "swiglu"}
     assert "| swiglu | pending |" in capsys.readouterr().out
@@ -188,7 +188,15 @@ def test_cli_validates_agent_and_resume_arguments(tmp_path: Path, capsys) -> Non
 def test_cli_generate_writes_overridden_tasks(tmp_path: Path, capsys) -> None:
     notes = tmp_path / "thor.md"
     notes.write_text("Jetson Thor: sm_110, 128 GB unified memory.\n", encoding="utf-8")
-    argv = ["generate", "rms_norm", "--output", str(tmp_path / "tasks"), "--hardware-notes", str(notes)]
+    argv = [
+        "generate",
+        "--catalog",
+        "rms_norm",
+        "--output",
+        str(tmp_path / "tasks"),
+        "--hardware-notes",
+        str(notes),
+    ]
     assert main([*argv, "--set", "evaluator_python=/opt/runtime/bin/python"]) == 0
     task = TaskPackage.load(tmp_path / "tasks/rms_norm")
     assert task.settings.evaluator_python == "/opt/runtime/bin/python"

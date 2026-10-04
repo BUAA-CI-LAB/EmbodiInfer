@@ -192,13 +192,21 @@ def test_cli_capture_and_generate_from_capture(
         "scripts.kernel_tuning.operators.select", lambda names=None, models=None: [fake_kernel]
     )
     output = tmp_path / "calls.jsonl"
-    assert main(["capture", "--output", str(output), "--", str(script)]) == 0
+    assert main(["capture", "--catalog", "--output", str(output), "--", str(script)]) == 0
     assert "Captured 1 calls in 1 cases" in capsys.readouterr().out
     monkeypatch.undo()
     rows = [{"operator": "rms_norm", "axes": {"M": 1, "H": 3584}, "scalars": {"eps": 1e-6}, "count": 7}]
     captured = tmp_path / "rms.jsonl"
     captured.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-    argv = ["generate", "rms_norm", "--output", str(tmp_path / "tasks"), "--captured", str(captured)]
+    argv = [
+        "generate",
+        "--catalog",
+        "rms_norm",
+        "--output",
+        str(tmp_path / "tasks"),
+        "--captured",
+        str(captured),
+    ]
     assert main(argv) == 0
     assert "rms_norm: 1 captured shapes covering 100% of 7 calls" in capsys.readouterr().out
     assert TaskPackage.load(tmp_path / "tasks/rms_norm").workload_ids == ("captured1-M1-H3584",)

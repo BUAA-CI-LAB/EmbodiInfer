@@ -10,9 +10,15 @@ from .contracts import TaskPackage
 
 def plan_prompt(task: TaskPackage) -> str:
     """Ask for a reviewable hypothesis and executable plan before source generation."""
+    replay = (
+        "Read task/replay.json for the frozen model, tensor layouts, aliases and mutations. Optimize this one observed call; no neighboring-operator fusion or quantization.\n"
+        if "replay.json" in task.hashes
+        else ""
+    )
     return f"""Optimize the operator in task/ for this target machine.
 Read task/README.md, task/definition.json, task/workloads.jsonl, task/baseline.py,
 task/tuning.yaml, environment.json, incumbent.json, and feedback.json before choosing one change.
+{replay}\
 Write PLAN.md with: the current bottleneck; one falsifiable optimization hypothesis;
 the source/launch configuration changes; correctness hazards; and validation steps.
 Describe the validation criteria for the controller; do not compile, run GPU code,
@@ -50,6 +56,11 @@ def implementation_prompt(task: TaskPackage) -> str:
             }
         ],
     }
+    replay = (
+        "This discovered task requires destination_passing_style=false. Preserve replay.json input/output layouts, aliases and mutations, returning mutated buffers in definition order. No new operator fusion or quantization.\n"
+        if "replay.json" in task.hashes
+        else ""
+    )
     return f"""Implement PLAN.md and write solution.json using the official FlashInfer
 Solution structure below. Include every source/helper in sources; relative POSIX
 paths and multiple files are supported. Include actual source text, not placeholders.
@@ -59,6 +70,7 @@ The entry point matches definition.inputs in order. If destination_passing_style
 is true, append all definition.outputs as output buffers; otherwise return outputs
 in definition order. For CUDA binding=torch, export the symbol with
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m). tvm-ffi binding is also supported when installed.
+{replay}\
 Preserve dtype and intermediate rounding; bit_exact includes signed zero and NaN
 bit patterns. Write the configured operator in {task.settings.language}; target
 the declared hardware. Use only the permitted input metadata for specialization.
