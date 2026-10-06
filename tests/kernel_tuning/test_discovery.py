@@ -112,6 +112,41 @@ def test_tensor_factories_without_tensor_inputs_get_tasks(tmp_path: Path) -> Non
     assert torch.equal(generated_function(task)(), torch.arange(9))
 
 
+def test_scalar_reads_are_host_work_not_coverage_gaps(tmp_path: Path) -> None:
+    from scripts.kernel_tuning.discovery.recorder import _Observer
+
+    value = torch.arange(4, dtype=torch.float32).sum()
+    session = CaptureSession("mock_flow_vla", tmp_path / "capture", device_type="cpu")
+    try:
+        with session.observe(object(), checkpoint="test-revision"):
+            # Torch 2.12 delivers Tensor.item() to the observer as aten.item; older
+            # releases decompose it first, so deliver the overload directly.
+            result = _Observer(session).__torch_dispatch__(torch.ops.aten.item.default, (), (value,))
+            assert result == 6.0
+    finally:
+        session.close(complete=True)
+    capture = ModelCapture.load(session.root, require_ready=False)
+    statuses = {op["name"]: op["status"] for op in capture.operators}
+    assert statuses["aten.item.default"] == "host_only"
+    assert "blocked" not in statuses.values()
+
+
+def test_host_to_device_copies_keep_required_input_fixtures(tmp_path: Path) -> None:
+    # "meta" stands in for the target device: host inputs, target-device output.
+    session = CaptureSession("mock_flow_vla", tmp_path / "capture", device_type="meta")
+    indices = torch.tensor([4, 1, 0], dtype=torch.int64)
+    try:
+        with session.observe(object(), checkpoint="test-revision"):
+            indices.to("meta")
+    finally:
+        session.close(complete=True)
+    capture = ModelCapture.load(session.root, require_ready=False)
+    (op,) = [op for op in capture.operators if op["status"] == "ready"]
+    (case,) = op["workloads"]
+    assert case["inputs"][0]["device"] == "cpu"
+    assert case["inputs"][0].get("fixture")
+
+
 def test_quantized_scope_includes_dynamic_unregistered_module_and_float_fallback(tmp_path: Path) -> None:
     from embodiinfer.layers.linear import INT8Config
     from embodiinfer.models import linear
@@ -303,6 +338,29 @@ def test_factory_driver_is_scoped_and_does_not_execute_an_extra_forward(tmp_path
     assert "forward" not in vars(policy)
     assert sys.argv is argv and sys.path == path
     assert capture.manifest["target"]["config"] == {"checkpoint": "test"}
+
+
+def test_decoder_integrate_entry_is_observed(tmp_path: Path, monkeypatch) -> None:
+    # Benchmarks may time the flow loop through decoder.integrate rather than produce_chunk.
+    from types import SimpleNamespace
+
+    from scripts.kernel_tuning.discovery import recorder
+
+    from embodiinfer.policies import factory
+
+    policy = SimpleNamespace(decoder=SimpleNamespace(integrate=lambda x: x.relu()))
+    monkeypatch.setitem(factory._REGISTRY, "mock_flow_vla", lambda **kwargs: policy)
+    monkeypatch.setattr(
+        recorder, "CaptureSession", lambda *args, **kwargs: CaptureSession(*args, device_type="cpu", **kwargs)
+    )
+    script = tmp_path / "prepare.py"
+    script.write_text(
+        "import torch\nfrom embodiinfer.policies.factory import make_policy\nmodel = make_policy('mock_flow_vla', checkpoint='test')\nmodel.decoder.integrate(torch.ones(3))\n",
+        encoding="utf-8",
+    )
+    recorder.run([str(script)], tmp_path / "capture", "mock_flow_vla")
+    capture = ModelCapture.load(tmp_path / "capture")
+    assert [op["name"] for op in capture.operators] == ["aten.relu.default"]
 
 
 def test_replay_adapter_checks_output_alias_and_undeclared_mutation_on_cpu(tmp_path: Path) -> None:

@@ -53,7 +53,7 @@ _VIEWS = {
     "set_",
 }
 _ALLOCATIONS = {"empty", "empty_like", "empty_strided", "new_empty", "new_empty_strided"}
-_HOST = {"_local_scalar_dense", "is_nonzero"}
+_HOST = {"item", "_local_scalar_dense", "is_nonzero"}
 _QUANTIZED_ATEN = {
     "_scaled_mm",
     "_weight_int8pack_mm",
@@ -381,6 +381,10 @@ class CaptureSession:
                     and any(t.device.type == self.device_type for t in tensor_outputs(result))
                 ):
                     status = "ready"
+                    # Host inputs were not snapshotted before the call; capture them now.
+                    if identity["mutates"]:
+                        raise ContractError("Host-to-device calls mutating inputs need a dedicated adapter")
+                    case["inputs"] = self._snapshot(digest([identity, specs]), tensors, specs)
                 if status not in {"metadata_only", "host_only", "excluded_quantized", "blocked"}:
                     outputs = tensor_outputs(result)
                     identity["returns"] = flatten(result, [])
@@ -514,7 +518,7 @@ class CaptureSession:
             self.bind(policy, kwargs)
             for holder, methods in (
                 (policy, ("encode_prefix", "denoise_step", "prepare_prefix", "forward")),
-                (policy.decoder, ("produce_chunk", "generate_tokens", "init_state")),
+                (policy.decoder, ("produce_chunk", "integrate", "generate_tokens", "init_state")),
             ):
                 for method in methods:
                     if not hasattr(holder, method):
