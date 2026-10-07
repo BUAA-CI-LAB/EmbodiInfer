@@ -125,9 +125,11 @@
 </tr>
 </table>
 
-**网络服务：** π0.5、DM0.5、StreamVLN 支持 HTTP / WirelessComm，batch size 为 1。
+**网络服务：** π0.5、DM0.5、StreamVLN 支持 HTTP / WirelessComm。
+π0.5 支持通过 `--max-batch` 开启跨会话批处理，默认值为 1；
+DM0.5 与 StreamVLN 当前逐请求执行。
 各类模型均提供 Python 入口。[能力参考](docs/zh/models.md#capabilities-and-installation)列出批处理、CUDA graph、
-RL 接口和环境要求。ActiveVLN 真实检查点的 GPU parity 仍待验证。
+RL 接口和环境要求。
 
 ### 计划支持的模型
 
@@ -135,7 +137,7 @@ RL 接口和环境要求。ActiveVLN 真实检查点的 GPU parity 仍待验证�
 - [ ] **OpenVLA** — 原始模型推理，与 OpenVLA-OFT 分开实现。
 
 实现步骤见[模型路线图](docs/zh/models.md#roadmap)，机器人和仿真器接入见
-[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun#support-at-a-glance)。
+[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/support-matrix.md)。
 
 ## 快速开始
 
@@ -175,22 +177,24 @@ uv run --no-sync python examples/pi05_inference.py \
 | RL rollout 与权重更新 | Rollout / refit 接口 | [RL 集成](docs/zh/api.md#generating-rl-rollouts) |
 | 多 GPU 执行 | 数据并行 / 张量并行 | [并行指南](docs/zh/parallelism.md) |
 
-网络启动器支持 π0.5、DM0.5 和 StreamVLN，batch size 为 1；其他策略通过 Python API 调用。
-各模型支持情况见[能力表](docs/zh/models.md#capabilities-and-installation)。
+多个客户端共享 π0.5 服务时，为 HTTP 或 WirelessComm 启动器添加
+`--max-batch 3 --max-wait-ms 5`。调度器在 5 ms 窗口内收集请求，每批最多三个。
+配置步骤见[服务指南](docs/zh/serving.md#share-one-service-across-clients)。
 
 发行包名为 `embodiinfer`，Python import 仍为 `embodiinfer`。
 旧 `vvla-*` 命令别名与 `vvla.policy.*` 通信 schema 保持兼容。
 
 ## 文档
 
-[安装](https://embodiinfer.readthedocs.io/zh-cn/latest/installation/) ·
-[快速开始](https://embodiinfer.readthedocs.io/zh-cn/latest/quickstart/) ·
-[服务](https://embodiinfer.readthedocs.io/zh-cn/latest/serving/) ·
-[并行](https://embodiinfer.readthedocs.io/en/latest/parallelism/) ·
-[架构](https://embodiinfer.readthedocs.io/en/latest/architecture/) ·
-[Python API](https://embodiinfer.readthedocs.io/en/latest/api/)
-
-中文站点覆盖全部正文页面；治理与法律页（贡献指南、行为准则、许可证）保留英文原文。
+| 内容 | 指南 |
+|---|---|
+| 安装模型环境 | [安装](docs/zh/installation.md) |
+| 运行推理 | [快速开始](docs/zh/quickstart.md) · [示例](examples/) |
+| 部署服务 | [服务](docs/zh/serving.md) |
+| 使用多张 GPU | [并行](docs/zh/parallelism.md) |
+| 集成或扩展引擎 | [架构](docs/zh/architecture.md) · [Python API](docs/zh/api.md) |
+| 了解模型能力 | [模型](docs/zh/models.md) |
+| 评估性能 | [基准](docs/zh/benchmark.md) |
 
 ## 参与贡献
 

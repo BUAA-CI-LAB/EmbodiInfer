@@ -72,12 +72,19 @@ deployment and execution runtime, and can also be used on its own.
 
 ## Choose a model and runtime
 
-The [model reference](models.md) lists checkpoints, dependency profiles, and
-available optimizations. π0.5 can batch requests from multiple clients through
-either HTTP or WirelessComm; see [shared-service setup](serving.md#share-one-service-across-clients).
-Recurrent navigation policies keep state across steps in an episode.
+The [model reference](models.md) lists checkpoints, dependency profiles,
+optimizations, and rollout capabilities. Network serving is available for:
 
-For robot and simulator deployments, pair the inference service with
+| Policy | HTTP / WirelessComm execution |
+|---|---|
+| π0.5 | Cross-session batching with `--max-batch`; default 1. |
+| DM0.5 / StreamVLN | One request at a time, with model-specific session and history handling. |
+
+Other model families use the Python API. Follow
+[shared-client serving](serving.md#share-one-service-across-clients) to configure
+a π0.5 service for multiple clients.
+
+For robot and simulator deployment, pair the inference service with
 [EmbodiRun](https://embodirun.readthedocs.io/).
 
 ## Community
