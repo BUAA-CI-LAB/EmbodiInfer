@@ -68,14 +68,15 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning --help
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check benchmarks/kernel_tuning/tasks/gated_residual
 ```
 
-To tune one model, capture its existing preparation forward in its model runtime,
-then generate and preflight every eligible observed call before starting agents
+To tune one model, capture its existing preparation forward and calibrate numerical
+contracts in its model runtime, then generate and preflight every eligible call
 (see [model discovery](docs/proposals/0008-kernel-tuning.md#model-scoped-operator-discovery)):
 
 ```bash
-/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --output results/kernel_tuning/captures/pi05 -- /absolute/preparation.py
+/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --fixture-bytes 8589934592 --output results/kernel_tuning/captures/pi05 -- /absolute/preparation.py
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --model pi05 --captured results/kernel_tuning/captures/pi05 --list
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05 --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+/absolute/runtime/python -m scripts.kernel_tuning calibrate --captured results/kernel_tuning/captures/pi05 --output results/kernel_tuning/captures/pi05-calibrated
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05-calibrated --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --resume results/kernel_tuning/batches/BATCH_ID
 ```
 
@@ -92,12 +93,18 @@ only builds tasks; `--preflight-only` measures baselines without opening agents.
 Model batches cannot use `--skip-preflight`, partial operator selection, or
 estimated shapes. A standalone `run` cannot bypass their preflight barrier.
 
-Capture may store input data under a 64 MiB limit (`--fixture-bytes`): small
-floating fixtures when space permits, and required integer/index fixtures.
-Capture directories and tasks are hashed and checked again on resume. Large
-floating inputs use seeded generation; calls needing more specific inputs must
-pass preflight or receive a dedicated replay adapter. Start with a new output
-directory when changing preparation/configuration.
+The default fixture budget is 64 MiB; the example raises the upper limit to 8 GiB
+without allocating it up front. Supported floating matmul/linear, reductions,
+softmax and attention require complete real input fixtures, including weights.
+Increase `--fixture-bytes` for the observed model; exhaustion fails explicitly.
+Other exact tasks retain optional small floating fixtures and required integer
+fixtures. Calibration compares only the production baseline and an FP64 reference
+on recorded, random and boundary inputs. It stores per-workload/profile/output
+bounds in a new hashed capture. Generation copies them to `numerics.json`; every
+element must pass, and seeds/thresholds/execution settings cannot be overridden.
+Calibration costs extra storage and target-device compute, before any agent runs.
+Use a new capture/calibration/batch when changing settings. Old runs keep their
+original contract; old captures with incomplete real inputs need recapture.
 
 Default-generator `randn` tasks save required before/after RNG fixtures, check
 both output bytes and generator advancement, and support eager timing only.

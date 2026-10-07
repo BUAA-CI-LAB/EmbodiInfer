@@ -22,6 +22,7 @@ from ..artifacts import REPOSITORY, atomic_json
 from ..contracts import ContractError, digest, tree_hashes
 from ..generate import _git_revision, vendor_sources
 from .contracts import SCHEMA
+from .numerics import policy
 from .rng import contract_for, requires_rng_adapter
 from .rng import snapshot as rng_snapshot
 from .tensors import describe_inputs, extent, flatten, storage_key, tensor_outputs, tensor_spec
@@ -178,7 +179,6 @@ class CaptureSession:
 
     def _set_numerics(self) -> None:
         self.precision = {
-            "mode": "bit_exact",
             "matmul_precision": torch.get_float32_matmul_precision(),
             "allow_tf32": torch.backends.cuda.matmul.allow_tf32,
         }
@@ -233,7 +233,7 @@ class CaptureSession:
             self.depth -= 1
 
     def _snapshot(
-        self, key: str, tensors: list[torch.Tensor], specs: list[dict[str, Any]]
+        self, key: str, tensors: list[torch.Tensor], specs: list[dict[str, Any]], *, real_inputs: bool = False
     ) -> list[dict[str, Any]]:
         if key in self._fixtures:
             return self._fixtures[key]
@@ -246,13 +246,15 @@ class CaptureSession:
             tensor = tensors[indices[0]]
             size = max(extent(specs[i]) for i in indices)
             byte_count = size * tensor.element_size()
-            required = not tensor.is_floating_point()
-            # Large ordinary floating weights are generated; retain small real cases
-            # when budget permits. Integer/index fixtures are never guessed.
+            required = real_inputs or not tensor.is_floating_point()
+            if required and byte_count > self.fixture_bytes:
+                raise ContractError(
+                    "Required input fixture exceeds the capture byte budget; increase --fixture-bytes"
+                )
+            # Calibrated arithmetic needs real weights too. Other floating tasks
+            # retain small fixtures when space permits; indices are never guessed.
             save = required or byte_count <= 1024 * 1024
-            if save and self.used_bytes + byte_count > self.fixture_bytes:
-                if required:
-                    raise ContractError("Required input fixture exceeds the capture byte budget")
+            if save and not required and self.used_bytes + byte_count > self.fixture_bytes:
                 save = False
             if save:
                 raw = (
@@ -267,6 +269,10 @@ class CaptureSession:
                 path = f"fixtures/{hashlib.sha256(raw).hexdigest()}.bin"
                 file = self.root / path
                 if not file.exists():
+                    if self.used_bytes + byte_count > self.fixture_bytes:
+                        raise ContractError(
+                            "Required real input fixture exceeds the capture byte budget; increase --fixture-bytes"
+                        )
                     file.parent.mkdir(exist_ok=True)
                     file.write_bytes(raw)
                     self.used_bytes += len(raw)
@@ -358,7 +364,9 @@ class CaptureSession:
                 if reason:
                     raise ContractError(reason)
                 if status == "ready":
-                    case["inputs"] = self._snapshot(digest([identity, specs]), tensors, specs)
+                    case["inputs"] = self._snapshot(
+                        digest([identity, specs]), tensors, specs, real_inputs=policy(identity) is not None
+                    )
                 if rng is not None:
                     identity["rng"] = rng
                     case["rng"] = {"before": self._rng_snapshot(rng["devices"])}

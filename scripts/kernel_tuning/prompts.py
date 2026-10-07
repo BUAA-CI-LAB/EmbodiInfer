@@ -15,6 +15,8 @@ def plan_prompt(task: TaskPackage) -> str:
         if "replay.json" in task.hashes
         else ""
     )
+    if "numerics.json" in task.hashes:
+        replay += "Read task/numerics.json. It freezes per-workload/profile/output bounds against FP64, not byte equality with the production baseline. All elements and all profiles must pass; tuning.yaml thresholds are reporting maxima only.\n"
     return f"""Optimize the operator in task/ for this target machine.
 Read task/README.md, task/definition.json, task/workloads.jsonl, task/baseline.py,
 task/tuning.yaml, environment.json, incumbent.json, and feedback.json before choosing one change.
@@ -71,7 +73,7 @@ is true, append all definition.outputs as output buffers; otherwise return outpu
 in definition order. For CUDA binding=torch, export the symbol with
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m). tvm-ffi binding is also supported when installed.
 {replay}\
-Preserve dtype and intermediate rounding; bit_exact includes signed zero and NaN
+Preserve dtype and the declared numerical contract; bit_exact includes intermediate rounding, signed zero and NaN
 bit patterns. Write the configured operator in {task.settings.language}; target
 the declared hardware. Use only the permitted input metadata for specialization.
 Return values must depend on the supplied tensors on every call and graph replay.

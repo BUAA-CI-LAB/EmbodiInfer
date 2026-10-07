@@ -114,6 +114,8 @@ def test_unsupported_rng_and_explicit_generators_still_block(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("style", ["omitted", "positional", "keyword"])
 def test_zero_dropout_sdpa_is_not_a_random_call(tmp_path: Path, style: str) -> None:
+    from benchmarks.kernel_tuning.calibration import calibrate
+
     q = torch.randn(1, 2, 8, 16)
     state = torch.get_rng_state().clone()
     outputs = []
@@ -136,7 +138,7 @@ def test_zero_dropout_sdpa_is_not_a_random_call(tmp_path: Path, style: str) -> N
     assert sum(c["count"] for c in capture.operators[0]["workloads"]) == 2
     assert torch.equal(state, torch.get_rng_state())
     assert torch.equal(outputs[0], outputs[1])
-    (task,) = render_model(capture, tmp_path / "tasks")
+    (task,) = render_model(calibrate(capture, tmp_path / "calibrated"), tmp_path / "tasks")
     assert "rng" not in read_json(task.root / "replay.json")
 
 
@@ -254,6 +256,7 @@ def test_cuda_rng_and_float64_baselines_pass_real_evaluator(tmp_path: Path, oper
         pytest.skip("requires CUDA")
     pytest.importorskip("flashinfer_bench")
     pytest.importorskip("triton")
+    from benchmarks.kernel_tuning.calibration import calibrate
     from benchmarks.kernel_tuning.replay_adapter import ReplayAdapter
     from scripts.kernel_tuning.contracts import validate_measurement
 
@@ -273,7 +276,7 @@ def test_cuda_rng_and_float64_baselines_pass_real_evaluator(tmp_path: Path, oper
         session.close(complete=True)
         torch.cuda.set_rng_state(state)
     tasks = render_model(
-        ModelCapture.load(session.root),
+        calibrate(ModelCapture.load(session.root), tmp_path / "calibrated"),
         tmp_path / "tasks",
         overrides={"timing.warmup": 1, "timing.iterations": 2, "timing.trials": 1},
     )

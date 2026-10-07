@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from ..artifacts import REPOSITORY, atomic_json
-from ..contracts import ContractError, TaskPackage
+from ..contracts import ContractError, TaskPackage, read_json
 from ..generate import _dump_yaml, tuning_settings, vendor_sources
 from ..operators import Operator, Workload
 from .contracts import REPLAY_SCHEMA, ModelCapture
+from .numerics import SEEDS, execution_precision, policy, task_precision, validate_contract
 
 # FlashInfer's dtypes plus the explicit local replay-schema float64 extension.
 _DTYPES = {
@@ -164,6 +165,20 @@ def _plan(
         for phase in case.get("rng", {}).values():
             for path in phase.values():
                 sources[path] = (capture.root / path).read_bytes()
+    numerical = None
+    precision = {"mode": "bit_exact", **execution_precision(capture.manifest["precision"])}
+    if policy(identity) is not None:
+        path = capture.root / "calibration.json"
+        numerical = read_json(path).get(op["id"]) if path.is_file() else None
+        if numerical is None:
+            raise ContractError(
+                "Missing numerical calibration; run calibrate --captured CAPTURE --output NEW_CAPTURE in the model environment"
+            )
+        validate_contract(
+            numerical, identity, cases, capture.manifest["precision"], capture.manifest["flags"]
+        )
+        precision = task_precision(numerical, capture.manifest["precision"])
+        sources["numerics.json"] = json.dumps(numerical, indent=2) + "\n"
     descriptor = Operator(
         name=name,
         summary=op["name"],
@@ -178,14 +193,16 @@ def _plan(
         reference=code,
         workloads=tuple(Workload(case["id"], {}, weight=case["count"]) for case in op["workloads"]),
         notes="Single observed operator; no new fusion.",
-        precision=capture.manifest["precision"],
+        precision=precision,
         timing="eager",
     )
     settings = tuning_settings(descriptor, overrides)
     if identity.get("rng") and settings["timing"]["mode"] != "eager":
         raise ContractError("RNG replay currently requires eager timing")
-    if settings["precision"] != {**capture.manifest["precision"]}:
-        raise ContractError("Model task precision cannot override its captured numerical contract")
+    if settings["precision"] != precision:
+        raise ContractError("Model task precision cannot override its frozen numerical contract")
+    if numerical is not None and settings["seeds"] != list(SEEDS):
+        raise ContractError("Calibrated validation seeds cannot be overridden")
     if 0 not in settings["seeds"]:
         raise ContractError("Model replay must include seed 0 for the unchanged captured fixtures")
     device = next(
@@ -213,6 +230,8 @@ def _plan(
     }
     if "rng" in identity:
         replay["rng"] = identity["rng"]
+    if numerical is not None:
+        replay["numerical_identity"] = identity
     sources.update(
         {
             "definition.json": json.dumps(definition, indent=2) + "\n",
@@ -233,6 +252,14 @@ def _plan(
     )
     if hardware_notes is not None:
         sources["HARDWARE.md"] = hardware_notes.read_text(encoding="utf-8")
+    if numerical is not None:
+        sources["README.md"] += (
+            "\nRead numerics.json: all floating elements are compared to the trusted FP64 "
+            "reference using frozen per-workload/profile/output bounds. tuning.yaml contains "
+            "only their reporting maxima. Recorded inputs, fresh random inputs, zeros and "
+            "cancellation inputs must all pass. Reassociation is permitted within these "
+            "bounds; changing dtype, masks, accumulation settings or the contract is not.\n"
+        )
     if "rng" in identity:
         sources["README.md"] += (
             "\nThis call consumes the default PyTorch generator. The evaluator restores the "

@@ -33,6 +33,14 @@ class ReplayAdapter(FlashInferAdapter):
         self._precision_flags = self._flags()
         self.case: dict[str, Any] = {}
         self._rng: Any = None
+        self.numerical = read_json(task.root / "numerics.json") if "numerics.json" in task.hashes else None
+        if self.numerical is not None:
+            from .calibration import environment
+
+            if environment(self.device) != self.numerical["environment"]:
+                raise ContractError(
+                    "Calibration and evaluator environments differ; recalibrate on the target"
+                )
         if self.cfg.profile:
             raise ContractError("Discovered tasks need a replay-aware NCU adapter before profile=true")
         if self.replay.get("rng") and self.cfg.timing.mode != "eager":
@@ -74,6 +82,16 @@ class ReplayAdapter(FlashInferAdapter):
         self._rng = (
             RngReplay(self.replay["rng"], self.case, self.task.root, seed) if self.replay.get("rng") else None
         )
+        if getattr(self, "numerical", None) is not None:
+            from scripts.kernel_tuning.discovery.numerics import profile_key
+
+            from .calibration import validation_inputs
+
+            profile = "recorded" if seed == 0 else "random"
+            self._sample = profile_key(profile, seed)
+            return validation_inputs(
+                self.replay["numerical_identity"], self.case, self.task.root, profile, seed
+            )
         return materialize(self.case["inputs"], self.task.root, seed)
 
     @staticmethod
@@ -130,6 +148,22 @@ class ReplayAdapter(FlashInferAdapter):
     ) -> tuple[float, float]:
         from scripts.kernel_tuning.discovery.rng import preserve
 
+        if getattr(self, "numerical", None) is not None:
+            from scripts.kernel_tuning.discovery.numerics import PROFILES, profile_key
+
+            from .calibration import validation_inputs
+
+            error = (0.0, 0.0)
+            for profile, profile_seed in PROFILES:
+                if profile_seed != seed:
+                    continue
+                self._sample = profile_key(profile, seed)
+                values = validation_inputs(
+                    self.replay["numerical_identity"], self.case, self.task.root, profile, seed
+                )
+                current = self._verify_transition(runnable, reference, values, seed)
+                error = tuple(max(a, b) for a, b in zip(error, current))
+            return error
         rng = getattr(self, "_rng", None)
         with preserve(rng.devices) if rng else nullcontext():
             return self._verify_transition(runnable, reference, inputs, seed)
@@ -162,8 +196,27 @@ class ReplayAdapter(FlashInferAdapter):
         # Check every byte of backing storage, including aliases and untouched
         # regions. Only declared mutable storage may use the task's tolerance.
         error = self._check_state(local, expected_inputs, inputs)
-        current = compare_outputs(outputs, expected, self.cfg.precision)
+        current = self._compare(outputs, expected, inputs)
         return tuple(max(a, b) for a, b in zip(error, current))
+
+    def _compare(self, actual: list[Any], expected: list[Any], inputs: list[Any]) -> tuple[float, float]:
+        if getattr(self, "numerical", None) is None:
+            return compare_outputs(actual, expected, self.cfg.precision)
+        from .calibration import compare_calibrated, high_precision
+
+        reference = high_precision(self.replay["numerical_identity"], inputs)
+        bounds = self.numerical["cases"][self.case["id"]][self._sample]
+        return compare_calibrated(actual, reference, bounds)
+
+    def _check_metadata(self) -> dict[str, Any]:
+        if self.numerical is None:
+            return {}
+        from scripts.kernel_tuning.discovery.numerics import PROFILES
+
+        return {
+            "numerical_contract": self.task.hashes["numerics.json"],
+            "validation_profiles": [list(pair) for pair in PROFILES],
+        }
 
     def _check_state(
         self, actual: list[Any], expected: list[Any], original: list[Any]
@@ -206,6 +259,8 @@ class ReplayAdapter(FlashInferAdapter):
     def _verify_graph(self, runnable: Any, reference: Any, workload: Any, seed: int) -> tuple[float, float]:
         import torch
 
+        if getattr(self, "numerical", None) is not None:
+            return self._verify_calibrated_graph(runnable, reference, workload, seed)
         original = self._inputs(workload, seed)
         changed = self._inputs(workload, (seed + 1) % 2**32)
         if not any(not torch.equal(a, b) for a, b in zip(original, changed)):
@@ -229,6 +284,43 @@ class ReplayAdapter(FlashInferAdapter):
             state_error = self._check_state(static, expected_inputs, values)
             current = compare_outputs(outputs, expected, self.cfg.precision)
             error = tuple(max(a, b, c) for a, b, c in zip(error, current, state_error))
+        return error
+
+    def _verify_calibrated_graph(
+        self,
+        runnable: Any,
+        reference: Any,
+        workload: Any,
+        seed: int,
+    ) -> tuple[float, float]:
+        import torch
+        from scripts.kernel_tuning.discovery.numerics import PROFILES, profile_key
+
+        from .calibration import validation_inputs
+
+        original = self._inputs(workload, 0)
+        static = self._clone(original)
+        graph, _, outputs = self._capture(runnable, static)
+        profiles = [("recorded", 0), *(pair for pair in PROFILES if pair[1] == seed), ("recorded", 0)]
+        error, changed = (0.0, 0.0), False
+        for profile, profile_seed in profiles:
+            values = validation_inputs(
+                self.replay["numerical_identity"], self.case, self.task.root, profile, profile_seed
+            )
+            changed |= any(not torch.equal(a, b) for a, b in zip(original, values))
+            self._sample = profile_key(profile, profile_seed)
+            expected_inputs = self._clone(values)
+            _, expected = self._call(reference, expected_inputs)
+            self._reset(static, values)
+            graph.replay()
+            torch.cuda.synchronize(self.device)
+            self._check_flags()
+            self._check_outputs(static, outputs)
+            state = self._check_state(static, expected_inputs, values)
+            current = self._compare(outputs, expected, values)
+            error = tuple(max(a, b, c) for a, b, c in zip(error, state, current))
+        if not changed:
+            raise ContractError("Calibrated graph validation requires changed inputs")
         return error
 
     def _time(self, runnable: Any, inputs: list[Any]) -> float:

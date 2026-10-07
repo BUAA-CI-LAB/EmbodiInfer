@@ -278,6 +278,11 @@ def main(argv: list[str] | None = None) -> int:
         "--output", type=Path, required=True, help="New model capture directory (JSONL for --catalog)"
     )
     capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
+    calibration = commands.add_parser(
+        "calibrate", help="Freeze baseline/FP64 numerical bounds in the model runtime before generation"
+    )
+    calibration.add_argument("--captured", type=Path, required=True)
+    calibration.add_argument("--output", type=Path, required=True, help="New calibrated capture directory")
     skeleton = commands.add_parser(
         "skeleton", help="Random-weight copy of a Hugging Face checkpoint for shape capture (model runtime)"
     )
@@ -318,6 +323,11 @@ def main(argv: list[str] | None = None) -> int:
                     command or args.script, args.output, args.model, fixture_bytes=args.fixture_bytes
                 )
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "calibrate":
+            from benchmarks.kernel_tuning.calibration import calibrate
+
+            result = calibrate(ModelCapture.load(args.captured), args.output)
+            print(json.dumps({"capture": str(result.root), "identity": result.identity}, indent=2))
         elif args.command == "skeleton":
             from .skeleton import build
 

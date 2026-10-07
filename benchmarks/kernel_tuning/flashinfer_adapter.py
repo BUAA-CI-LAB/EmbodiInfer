@@ -459,6 +459,7 @@ class FlashInferAdapter:
                             "max_abs_error": max_abs,
                             "max_rel_error": max_rel,
                             "graph_replay": self.cfg.timing.mode == "cuda_graph",
+                            **self._check_metadata(),
                         }
                     )
             rounds = []
@@ -476,6 +477,10 @@ class FlashInferAdapter:
                     measurements[trace.workload.uuid] = row
                 rounds.append(measurements)
         return {"checks": checks, "rounds": rounds}
+
+    def _check_metadata(self) -> dict[str, Any]:
+        """Additional evidence required by specialized numerical contracts."""
+        return {}
 
     def _build_reference(self, registry: Any) -> Any:
         return registry.build_reference(self.definition)

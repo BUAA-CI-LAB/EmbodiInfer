@@ -118,6 +118,59 @@ belong to the evaluator and generated solution, not the orchestration loop.
 
 ## 6. Losslessness and precision criterion
 
+### Calibrated numerical contracts for discovered operators
+
+Model discovery records execution settings separately from acceptance rules.
+Pure copies, indexing, exact elementwise operations, RNG transitions, and unknown
+semantics retain bit-exact validation. An explicit registry selects floating
+matrix multiplication, linear, reductions, softmax, and supported attention/norm
+calls for tolerance validation; dtype alone never relaxes an unknown operator.
+Existing hand-written/catalog contracts and archived runs keep their contracts.
+
+Before task generation, `calibrate --captured CAPTURE --output CALIBRATED` runs
+in the matching model environment, using only the captured production operator
+and a trusted FP64 mathematical reference. Each shape/layout/argument signature
+gets separate output bounds for real recorded inputs, seeded random inputs,
+zeros, and alternating-sign cancellation inputs. Attention masks, scale, causal
+and GQA semantics are preserved. Real-input calibration requires complete input
+fixtures; capture must fail explicitly if its fixture budget cannot hold them.
+No candidate source is accepted by the calibration API.
+
+For each floating output, let B be the production baseline, R the FP64 reference,
+and u the output dtype's epsilon. Fix rtol=u and
+atol=max(u*RMS(R), 2*max(max(abs(B-R)-u*abs(R), 0)), dtype.tiny).
+Every candidate element must satisfy abs(C-R) <= atol+rtol*abs(R). The one-epsilon
+scale floor allows rounding near zero; the factor of two budgets measured
+baseline error. These are explicit engineering policy constants, not a proof of
+an error bound for unseen inputs. Non-floating outputs, layout, aliases, mutation
+and RNG constraints remain exact. Nonfinite reference/baseline/output values
+fail calibration/validation. FP64 outputs retain exact validation: there is no
+higher-precision oracle in this implementation.
+
+The immutable calibrated capture records reference identity, policy version,
+seeds, profiles, dtype, layouts, scalar arguments, numerical flags, environment,
+observed baseline error and each derived threshold. Generated tasks copy this
+evidence into `numerics.json`; task/run hashes and the all-task preflight bind it
+before any agent starts. Evaluation uses those thresholds without recalibrating.
+Missing coverage, changed settings/seeds, edited evidence, or a different target
+environment require a new calibration/batch. Calibration failure never widens a
+threshold in response to a candidate failure.
+
+Implementation belongs to `scripts/kernel_tuning/discovery/numerics.py` (static
+policy/contract), `benchmarks/kernel_tuning/calibration.py` (trusted reference and
+measurement), discovery recorder/task generation, and the replay evaluator.
+There are no engine, policy, backend, dependency-pin or model-level action-parity
+changes. CPU tests exercise selection, calibration, per-workload bounds, attention
+semantics, precision restoration, real/random/boundary coverage, and tampering;
+CUDA/real-checkpoint validation remains a separate target-machine requirement.
+
+A single dtype-wide 1e-2 threshold was rejected because shape and accumulation
+behavior matter. Online recalibration during candidate evaluation was rejected
+because acceptance must be frozen. Full fixtures and FP64 references increase
+preparation storage/time, and unsupported numerical references stay exact until
+an explicit adapter is added. Existing incomplete captures must be recaptured;
+an old task/run is never silently migrated to a looser contract.
+
 Default correctness compares output shapes, dtypes, and exact tensor bytes against
 `definition.json`'s reference on identical seeded inputs. A task may explicitly
 declare fixed absolute/relative tolerance with a reason. The agent cannot change
@@ -376,9 +429,10 @@ policy IDs are those accepted by the factory, for example `pi05`, `streamvln`,
 or `qwen2.5-vl-3b-r2r-low-level`; catalog group names are not model IDs.
 
 ```bash
-/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --output results/kernel_tuning/captures/pi05 -- PREPARATION.py
+/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --fixture-bytes 8589934592 --output results/kernel_tuning/captures/pi05 -- PREPARATION.py
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --model pi05 --captured results/kernel_tuning/captures/pi05 --list
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05 --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+/absolute/runtime/python -m scripts.kernel_tuning calibrate --captured results/kernel_tuning/captures/pi05 --output results/kernel_tuning/captures/pi05-calibrated
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05-calibrated --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --resume results/kernel_tuning/batches/BATCH_ID
 ```
 
@@ -403,22 +457,25 @@ its baseline calls the exact ATen overload or snapshotted backend implementation
 Different shapes and strides remain workloads of the same signature; overload,
 scalar/static arguments, tensor rank/dtype and output structure distinguish tasks.
 
-The default 64 MiB fixture budget is explicit (`--fixture-bytes`). Integer/index
-storage requires a captured fixture. Floating storage up to 1 MiB is captured
-when the remaining budget permits; larger floating storage is generated from
-fixed seeds. Seed 0 uses the unmodified saved fixture; other seeds perturb
-floating values. First observed fixtures represent each structural case. This
-is finite input validation, not proof for all values; domain-specific validity
-or data-dependent output shapes may require an adapter. Budget exhaustion for a
-required fixture is a coverage gap, never permission to guess indices.
+The default 64 MiB fixture budget is explicit (`--fixture-bytes`); the example
+raises the maximum to 8 GiB. Integer/index storage and all inputs of supported
+numerically calibrated operators require real fixtures, even for large weights.
+For other exact tasks, floating storage up to 1 MiB is captured when budget
+permits and other floating storage uses seeded generation. First observed
+fixtures represent each structural case; calibration tests those real values,
+fresh random values, zeros and cancellation inputs with masks/indices preserved.
+This is finite validation, not proof for every input. Required fixture exhaustion
+is a coverage gap. `calibrate` adds `calibration.json` to a new capture; generated
+tasks carry each operator's frozen bounds as `numerics.json`. See the numerical
+policy in Section 6 for the formula, environment binding and limitations.
 
 Replay preserves shared storage, strides and offsets. It checks output values,
 layouts, input/output and output/output aliases, declared mutations and unchanged
 input storage. Timing resets backing storage before every sample, outside timed
 events, in both eager and graph modes. The default is eager; `timing.mode=cuda_graph`
 also requires successful changed-input A/B/A replay. NCU profiling currently
-requires a dedicated replay-aware adapter. Numerical overrides cannot weaken
-the captured bit-exact production contract.
+requires a dedicated replay-aware adapter. Numerical overrides cannot change
+the selected exact contract or the frozen calibrated tolerance contract.
 
 Default-generator `aten.randn.default` and `aten.randn.generator` with
 `generator=None` have an eager replay contract. Capture stores the opaque CPU

@@ -47,6 +47,8 @@ def generated_function(task: TaskPackage):
 
 
 def test_discovers_uncatalogued_ops_all_shapes_and_call_counts(tmp_path: Path) -> None:
+    from benchmarks.kernel_tuning.calibration import calibrate
+
     values = [torch.ones(n, 4) for n in range(1, 12)]
     weight = torch.ones(4, 3)
 
@@ -59,12 +61,12 @@ def test_discovers_uncatalogued_ops_all_shapes_and_call_counts(tmp_path: Path) -
     assert set(ready) == {"aten.mm.default", "aten.relu.default"}
     assert len(ready["aten.mm.default"]["workloads"]) == 11
     assert sum(case["count"] for case in ready["aten.mm.default"]["workloads"]) == 12
-    tasks = render_model(capture, tmp_path / "tasks")
+    tasks = render_model(calibrate(capture, tmp_path / "calibrated"), tmp_path / "tasks")
     assert len(tasks) == 2
     assert all(len(task.workloads) == 11 for task in tasks)
     for task in tasks:
         replay = read_json(task.root / "replay.json")
-        assert task.settings.precision.mode == "bit_exact"
+        assert task.settings.precision.mode == ("tolerance" if "mm." in replay["operator"] else "bit_exact")
         for case in replay["cases"].values():
             inputs = materialize(case["inputs"], task.root, 0)
             result = generated_function(task)(*inputs)
@@ -387,9 +389,11 @@ def test_replay_adapter_checks_output_alias_and_undeclared_mutation_on_cpu(tmp_p
 
 
 def test_missing_workload_and_unbound_output_axes_are_rejected(tmp_path: Path) -> None:
+    from benchmarks.kernel_tuning.calibration import calibrate
+
     value = torch.ones(4, 2)
     capture = capture_calls(tmp_path, lambda: value.sum(1))
-    (task,) = render_model(capture, tmp_path / "tasks")
+    (task,) = render_model(calibrate(capture, tmp_path / "calibrated"), tmp_path / "tasks")
     replay = read_json(task.root / "replay.json")
     replay["cases"] = {}
     atomic_json(task.root / "replay.json", replay)

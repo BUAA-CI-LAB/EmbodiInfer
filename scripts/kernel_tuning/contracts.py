@@ -374,6 +374,27 @@ class TaskPackage:
             validate_replay(read_json(root / "replay.json"), definition, traces, hashes)
             if "benchmark.py" not in hashes:
                 raise ContractError("Captured layouts require the replay benchmark adapter")
+            replay = read_json(root / "replay.json")
+            if "numerical_identity" in replay or "numerics.json" in hashes:
+                from .discovery.numerics import SEEDS, task_precision, validate_contract
+
+                if "numerics.json" not in hashes or "numerical_identity" not in replay:
+                    raise ContractError("Missing calibrated numerical contract or operator identity")
+                numerical = read_json(root / "numerics.json")
+                validate_contract(
+                    numerical,
+                    replay["numerical_identity"],
+                    replay["cases"],
+                    asdict(settings.precision),
+                    replay["flags"],
+                )
+                if (
+                    asdict(settings.precision) != task_precision(numerical, asdict(settings.precision))
+                    or settings.seeds != SEEDS
+                ):
+                    raise ContractError("Frozen calibration precision/seeds changed")
+        elif "numerics.json" in hashes:
+            raise ContractError("Numerical calibration requires a model replay task")
         return cls(root, definition, tuple(traces), settings, hashes)
 
     def verify(self) -> None:
@@ -469,6 +490,13 @@ def _validate_measurement(task: TaskPackage, report: dict[str, Any]) -> None:
         seen.add(key)
         if check.get("seeds") != list(cfg.seeds) or check.get("precision") != asdict(cfg.precision):
             raise ContractError("Correctness evidence used a different precision/seed contract")
+        if "numerics.json" in task.hashes:
+            from .discovery.numerics import PROFILES
+
+            if check.get("numerical_contract") != task.hashes["numerics.json"] or check.get(
+                "validation_profiles"
+            ) != [list(pair) for pair in PROFILES]:
+                raise ContractError("Missing frozen calibration/profile correctness evidence")
         if cfg.timing.mode == "cuda_graph" and check.get("graph_replay") is not True:
             raise ContractError("Missing changed-input graph replay check")
         for field_name in ("max_abs_error", "max_rel_error"):
