@@ -8,6 +8,7 @@ import importlib
 import inspect
 import runpy
 import sys
+import threading
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,13 +18,14 @@ from typing import Any
 
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
+from torch.utils._pytree import tree_leaves
 
 from ..artifacts import REPOSITORY, atomic_json
 from ..contracts import ContractError, digest, tree_hashes
 from ..generate import _git_revision, vendor_sources
 from .contracts import SCHEMA
 from .numerics import policy
-from .rng import contract_for, requires_rng_adapter
+from .rng import contract_for, requires_rng_adapter, undefined_outputs
 from .rng import snapshot as rng_snapshot
 from .tensors import describe_inputs, extent, flatten, storage_key, tensor_outputs, tensor_spec
 
@@ -55,6 +57,18 @@ _VIEWS = {
 }
 _ALLOCATIONS = {"empty", "empty_like", "empty_strided", "new_empty", "new_empty_strided"}
 _HOST = {"item", "_local_scalar_dense", "is_nonzero"}
+# Weight loading, casting and device placement are not inference arithmetic.
+_COPIES = {"_to_copy", "copy_", "clone", "contiguous", "lift_fresh", "_copy_from", "_copy_from_and_resize"}
+# Production inference enters through the model-agnostic engine contract. Every
+# operator running below one of these calls, on any thread, belongs to the model.
+_ENTRIES = (
+    ("embodiinfer.engine.core", "EngineCore", ("__init__", "execute", "execute_pipelined", "_pipeline_step")),
+    (
+        "embodiinfer.engine.rollout.generation_backend",
+        "GenerationBackend",
+        ("generate", "generate_with_logprob", "sample_group", "best_of_n"),
+    ),
+)
 _QUANTIZED_ATEN = {
     "_scaled_mm",
     "_weight_int8pack_mm",
@@ -112,7 +126,10 @@ class _Observer(TorchDispatchMode):
     def __torch_dispatch__(self, func: Any, types: Any, args: tuple = (), kwargs: dict | None = None) -> Any:
         session = self.session
         kwargs = kwargs or {}
-        if not session.depth or session.suppressed:
+        if session.suppressed:
+            return func(*args, **kwargs)
+        if not session.depth:
+            session.outside(func, args, kwargs)
             return func(*args, **kwargs)
         name = str(func)
         short = name.split(".")[1] if name.startswith("aten.") else name
@@ -129,8 +146,11 @@ class _Observer(TorchDispatchMode):
                 value = args[index] if index < len(args) else kwargs.get(argument.name)
                 writes.append(value)
         quantized = name.split(".")[0] in {"quantized", "quantized_decomposed"} or short in _QUANTIZED_ATEN
+        origin = {"kind": "aten", "name": name, "schema": str(func._schema)}
+        if undefined := undefined_outputs(func, args, kwargs):
+            origin["undefined_outputs"] = undefined
         return session.call(
-            {"kind": "aten", "name": name, "schema": str(func._schema)},
+            origin,
             func,
             args,
             kwargs,
@@ -167,7 +187,11 @@ class CaptureSession:
         self.fixture_bytes, self.used_bytes, self.device_type = fixture_bytes, 0, device_type
         self.target: dict[str, Any] = {}
         self.instance: Any = None
-        self.depth, self.suppressed = 0, 0
+        # Dispatch modes are thread-local, so inference scope is tracked per thread.
+        self._local = threading.local()
+        self.entries = 0
+        self.bypassed: Counter = Counter()
+        self._weights: tuple[int, frozenset[int]] = (0, frozenset())
         self.operators: dict[str, dict[str, Any]] = {}
         self.errors: list[str] = []
         self.replacements: list[tuple[Any, str, Any, bool]] = []
@@ -195,6 +219,85 @@ class CaptureSession:
         if self._numerics_bound and previous != (self.precision, self.flags):
             self.errors.append("Numerical settings changed during model preparation")
         self._numerics_bound = True
+
+    @property
+    def depth(self) -> int:
+        return getattr(self._local, "depth", 0)
+
+    @depth.setter
+    def depth(self, value: int) -> None:
+        self._local.depth = value
+
+    @property
+    def suppressed(self) -> int:
+        return getattr(self._local, "suppressed", 0)
+
+    @suppressed.setter
+    def suppressed(self, value: int) -> None:
+        self._local.suppressed = value
+
+    @contextmanager
+    def inference(self) -> Iterator[None]:
+        """Observe every operator below one inference call on the current thread."""
+        observer = None
+        if not getattr(self._local, "observing", False):
+            observer = _Observer(self)
+            observer.__enter__()
+            self._local.observing = True
+        if not self.depth:
+            self.entries += 1
+        self.depth += 1
+        try:
+            yield
+        finally:
+            self.depth -= 1
+            if observer is not None:
+                self._local.observing = False
+                observer.__exit__(None, None, None)
+
+    @contextmanager
+    def watch(self) -> Iterator[None]:
+        """Watch the driver thread outside inference to reject bypassed model arithmetic."""
+        self._local.observing = True
+        try:
+            with _Observer(self):
+                yield
+        finally:
+            self._local.observing = False
+
+    def _entry(self, function: Any) -> Any:
+        @functools.wraps(function)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with self.inference():
+                return function(*args, **kwargs)
+
+        return wrapper
+
+    def _weight_storages(self) -> frozenset[int]:
+        tensors = [*self.instance.parameters(), *self.instance.buffers()]
+        if not tensors:
+            return frozenset()
+        probe = tensors[0].untyped_storage().data_ptr()
+        # Moving or casting the model replaces storages; refresh only then.
+        if probe != self._weights[0]:
+            self._weights = (probe, frozenset(t.untyped_storage().data_ptr() for t in tensors) - {0})
+        return self._weights[1]
+
+    def outside(self, func: Any, args: tuple, kwargs: dict) -> None:
+        """Record model-weight arithmetic that bypassed every inference entry."""
+        if not isinstance(self.instance, torch.nn.Module):
+            return
+        name = str(func)
+        short = name.split(".")[1] if name.startswith("aten.") else name
+        if short in _VIEWS | _ALLOCATIONS | _HOST | _COPIES:
+            return
+        with self.silence():
+            weights = self._weight_storages()
+            if any(
+                isinstance(t, torch.Tensor) and t.untyped_storage().data_ptr() in weights
+                for t in tree_leaves((args, kwargs))
+            ):
+                self.bypassed[name] += 1
 
     @contextmanager
     def silence(self) -> Iterator[None]:
@@ -225,12 +328,8 @@ class CaptureSession:
     def observe(self, instance: Any, **config: Any) -> Iterator[None]:
         """Observe the existing preparation call without running it a second time."""
         self.bind(instance, config)
-        self.depth += 1
-        try:
-            with _Observer(self):
-                yield
-        finally:
-            self.depth -= 1
+        with self.inference():
+            yield
 
     def _snapshot(
         self, key: str, tensors: list[torch.Tensor], specs: list[dict[str, Any]], *, real_inputs: bool = False
@@ -342,6 +441,7 @@ class CaptureSession:
             identity = dict(origin)
             case: dict[str, Any] = {"inputs": [], "outputs": []}
             status = classification or "ready"
+            explicit = reason
             try:
                 recipe = flatten((args, kwargs), tensors)
                 if any(t.is_quantized for t in tensors):
@@ -375,11 +475,24 @@ class CaptureSession:
                     ("excluded_quantized" if classification == "excluded_quantized" else "blocked"),
                     str(exc),
                 )
+                if explicit is None and classification in {"metadata_only", "host_only"}:
+                    status = classification  # Not a task, so no replay recipe is needed.
             try:
                 result = function(*args, **kwargs)
             except Exception as exc:
                 self.errors.append(f"{origin['name']} failed during preparation: {type(exc).__name__}: {exc}")
                 raise
+            if (
+                status == "blocked"
+                and explicit is None
+                and rng is None
+                and not any(
+                    isinstance(t, torch.Tensor) and t.device.type == self.device_type
+                    for t in tree_leaves((args, kwargs, result))
+                )
+            ):
+                # Host preprocessing with an unrepresentable argument is not a device task.
+                status = "host_only"
             try:
                 if rng is not None and status != "blocked":
                     case["rng"]["after"] = self._rng_snapshot(rng["devices"])
@@ -524,26 +637,29 @@ class CaptureSession:
                 raise ContractError("Disable torch.compile explicitly before model discovery")
             policy = original_factory(name, **kwargs)
             self.bind(policy, kwargs)
-            for holder, methods in (
-                (policy, ("encode_prefix", "denoise_step", "prepare_prefix", "forward")),
-                (policy.decoder, ("produce_chunk", "integrate", "generate_tokens", "init_state")),
-            ):
-                for method in methods:
-                    if not hasattr(holder, method):
-                        continue
-                    original = getattr(holder, method)
+            # Request preprocessing and serving adapters belong to end-to-end inference.
+            if callable(getattr(policy, "collate", None)):
+                self._replace(policy, "collate", self._entry(policy.collate))
+            build = getattr(policy, "build_serving_adapter", None)
+            if callable(build):
 
-                    def execute(*args: Any, _fn: Any = original, **kw: Any) -> Any:
-                        self.depth += 1
-                        try:
-                            return _fn(*args, **kw)
-                        finally:
-                            self.depth -= 1
+                @functools.wraps(build)
+                def serving(*args: Any, **kw: Any) -> Any:
+                    with self.inference():
+                        adapter = build(*args, **kw)
+                    for method in ("infer", "infer_batch"):
+                        if callable(getattr(adapter, method, None)):
+                            self._replace(adapter, method, self._entry(getattr(adapter, method)))
+                    return adapter
 
-                    self._replace(holder, method, execute)
+                self._replace(policy, "build_serving_adapter", serving)
             return policy
 
         self._replace_function(original_factory, construct)
+        for module, owner, methods in _ENTRIES:
+            holder = getattr(importlib.import_module(module), owner)
+            for method in methods:
+                self._replace(holder, method, self._entry(getattr(holder, method)))
 
         def compile_guard(*args: Any, **kwargs: Any) -> Any:
             raise ContractError("torch.compile is unsupported during model preparation; disable compilation")
@@ -608,6 +724,16 @@ class CaptureSession:
         self.replacements.clear()
         if not self.target:
             self.errors.append("No target policy was bound through make_policy or observe")
+        elif not self.entries:
+            self.errors.append(
+                "No end-to-end inference ran; drive the model through EngineCore, "
+                "GenerationBackend or its serving adapter"
+            )
+        for name, count in sorted(self.bypassed.items()):
+            self.errors.append(
+                f"{name} read model weights outside an inference entry ({count} calls); "
+                "drive the model through EngineCore, GenerationBackend or its serving adapter"
+            )
         operators = list(self.operators.values())
         atomic_json(self.root / "operators.json", operators)
         coverage = dict(Counter(op["status"] for op in operators))
@@ -643,7 +769,7 @@ def run(
     complete = False
     try:
         session.install()
-        with _Observer(session):
+        with session.watch():
             if command[0] == "-m":
                 sys.argv = command[1:]
                 runpy.run_module(command[1], run_name="__main__", alter_sys=True)

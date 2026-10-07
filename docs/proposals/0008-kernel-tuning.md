@@ -381,6 +381,18 @@ around existing backend entrypoints collect complete input/output metadata.
 Existing compound kernels remain single operators; this change introduces no
 new fusion, quantization, runtime registration, or engine API.
 
+The observed scope is end-to-end inference, not a list of policy methods. It
+opens at the model-agnostic entries every deployment path uses: `EngineCore`
+construction and execution, the `GenerationBackend` rollout calls, the policy's
+`collate`, and its serving adapter's construction and `infer`/`infer_batch`.
+Everything below an entry is recorded, including decoder-specific recurrent
+decoding, RL sampling, request preprocessing and action postprocessing. Scope is
+tracked per thread and the observer is installed on whichever thread enters, so
+the async engine's executor and batched-serving workers are covered. Model
+weights read by arithmetic outside every entry (a driver calling policy
+internals directly) and a run without any entry are capture errors, so a
+bypassed path cannot silently produce a smaller operator set.
+
 The capture freezes the model type, supplied checkpoint/configuration descriptors, Torch version,
 numerical settings, operator overloads, tensor shapes/strides, argument trees,
 aliasing and mutation contracts, and every observed workload (no top-eight
@@ -421,15 +433,22 @@ CPU/fake-agent passes do not establish GPU correctness or performance.
 
 #### Commands and artifacts
 
-Run preparation in the selected model's own runtime. `PREPARATION.py` below is
-an existing driver that constructs the specified policy through `make_policy`
-and exercises its forward/decode path, with compilation disabled. The capture
-does not launch an extra forward or change the attention backend. Canonical
-policy IDs are those accepted by the factory, for example `pi05`, `streamvln`,
-or `qwen2.5-vl-3b-r2r-low-level`; catalog group names are not model IDs.
+Run preparation in the selected model's own runtime. The bundled driver
+`scripts.kernel_tuning.discovery.drive` constructs the policy and engine with the
+serving transports' arguments and replays recorded inputs: serving requests go
+through the policy's adapter as HTTP requests would, engine observations through
+`collate` and `EngineCore.execute`, with one session per recurrent episode.
+`benchmarks/kernel_tuning/discovery_inputs.py` exports such inputs from the pi05,
+Qwen navigation and StreamVLN benchmark data; any script that drives one of the
+entries above may be used instead. Compilation must be disabled explicitly (for
+example `--no-cuda-graph` for StreamVLN, whose graph mode compiles its prefill).
+The capture does not launch an extra forward or change the attention backend.
+Canonical policy IDs are those accepted by the factory, for example `pi05`,
+`streamvln`, or `qwen2.5-vl-3b-r2r-low-level`; catalog group names are not model IDs.
 
 ```bash
-/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --fixture-bytes 8589934592 --output results/kernel_tuning/captures/pi05 -- PREPARATION.py
+/absolute/runtime/python -m benchmarks.kernel_tuning.discovery_inputs pi05 --config PI05_BENCHMARK.yaml --output pi05-inputs.pt --serving-config pi05-serving.json
+/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --fixture-bytes 8589934592 --output results/kernel_tuning/captures/pi05 -- -m scripts.kernel_tuning.discovery.drive --policy pi05 --checkpoint CHECKPOINT --adapter-config pi05-serving.json --inputs pi05-inputs.pt
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --model pi05 --captured results/kernel_tuning/captures/pi05 --list
 /absolute/runtime/python -m scripts.kernel_tuning calibrate --captured results/kernel_tuning/captures/pi05 --output results/kernel_tuning/captures/pi05-calibrated
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05-calibrated --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
@@ -493,6 +512,11 @@ default) does not require an RNG replay contract. Discovery resolves positional,
 keyword and omitted dropout arguments without changing the invocation, backend,
 mask, scale or attention semantics. Nonzero dropout remains a coverage gap until
 its own state contract is implemented; other nondeterministic tags still apply.
+The same rule covers the backend overloads (flash, efficient, cuDNN, CPU) that
+model code reaches under `no_grad`. Without dropout their `philox_seed` and
+`philox_offset` outputs are left uninitialized, so replay records them as
+`undefined_outputs` and checks every other output exactly; no other operator may
+declare undefined outputs.
 
 Replay tasks declare `definition_schema=embodiinfer-replay-v1`. Their local
 `ReplayDefinition` extends the pinned FlashInfer tensor schema with `float64`,

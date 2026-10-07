@@ -13,19 +13,38 @@ from ..contracts import ContractError
 from .contracts import RNG_OVERLOADS
 
 
+def _zero_dropout_attention(function: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
+    # The composite call decomposes to a backend overload (flash, efficient,
+    # cuDNN, CPU) before Python dispatch; none draws random state without dropout.
+    name = str(function)
+    if name != "aten.scaled_dot_product_attention.default" and not name.startswith(
+        "aten._scaled_dot_product_"
+    ):
+        return False
+    for index, argument in enumerate(function._schema.arguments):
+        if argument.name == "dropout_p":
+            dropout = kwargs.get(argument.name, args[index] if index < len(args) else argument.default_value)
+            return type(dropout) in (int, float) and dropout == 0
+    return False
+
+
 def requires_rng_adapter(function: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
     """Treat seeded tags as conditional for SDPA with explicitly zero/default dropout."""
     tags = {tag for tag in getattr(function, "tags", ()) if "nondeterministic" in str(tag)}
-    if str(function) == "aten.scaled_dot_product_attention.default":
-        for index, argument in enumerate(function._schema.arguments):
-            if argument.name == "dropout_p":
-                dropout = kwargs.get(
-                    argument.name, args[index] if index < len(args) else argument.default_value
-                )
-                if type(dropout) in (int, float) and dropout == 0:
-                    tags.discard(torch.Tag.nondeterministic_seeded)
-                break
+    if _zero_dropout_attention(function, args, kwargs):
+        tags.discard(torch.Tag.nondeterministic_seeded)
     return bool(tags)
+
+
+def undefined_outputs(function: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> list[int]:
+    """Outputs whose bytes are unspecified: dropout RNG state left uninitialized without dropout."""
+    if not _zero_dropout_attention(function, args, kwargs):
+        return []
+    return [
+        i
+        for i, value in enumerate(function._schema.returns)
+        if value.name in {"philox_seed", "philox_offset"}
+    ]
 
 
 def contract_for(name: str, kwargs: dict[str, Any]) -> dict[str, Any] | None:

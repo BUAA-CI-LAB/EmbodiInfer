@@ -142,6 +142,39 @@ def test_zero_dropout_sdpa_is_not_a_random_call(tmp_path: Path, style: str) -> N
     assert "rng" not in read_json(task.root / "replay.json")
 
 
+def test_zero_dropout_sdpa_backend_overload_is_not_a_random_call(tmp_path: Path) -> None:
+    # Under the engine's no_grad, the functional API reaches the observer as a backend overload.
+    q = torch.randn(1, 2, 8, 16)
+    with torch.no_grad():
+        capture = record(tmp_path, lambda: torch.nn.functional.scaled_dot_product_attention(q, q, q))
+    assert [op["name"] for op in capture.operators] == [
+        "aten._scaled_dot_product_flash_attention_for_cpu.default"
+    ]
+    capture.require_ready()
+
+
+def test_unused_attention_dropout_state_is_not_compared(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from benchmarks.kernel_tuning.replay_adapter import ReplayAdapter
+    from scripts.kernel_tuning.discovery.rng import undefined_outputs
+
+    op = torch.ops.aten._scaled_dot_product_efficient_attention.default
+    q = torch.empty(1, 2, 8, 16)
+    # CUDA leaves philox seed/offset uninitialized when dropout is zero.
+    assert undefined_outputs(op, (q, q, q, None, False), {}) == [2, 3]
+    assert undefined_outputs(op, (q, q, q, None, False, 0.1), {}) == []
+    assert undefined_outputs(torch.ops.aten.mm.default, (q, q), {}) == []
+
+    adapter = ReplayAdapter.__new__(ReplayAdapter)
+    adapter.cfg = SimpleNamespace(precision=SimpleNamespace(mode="bit_exact"))
+    adapter.replay = {"undefined_outputs": [1]}
+    value = torch.ones(3)
+    assert adapter._compare([value, torch.tensor(16)], [value, torch.tensor(0)], []) == (0.0, 0.0)
+    with pytest.raises(ContractError, match="bit-exact"):
+        adapter._compare([value + 1, torch.tensor(0)], [value, torch.tensor(0)], [])
+
+
 @pytest.mark.parametrize("style", ["positional", "keyword"])
 def test_nonzero_dropout_sdpa_remains_a_coverage_gap(tmp_path: Path, style: str) -> None:
     q = torch.randn(1, 2, 8, 16)

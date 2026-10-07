@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -147,6 +148,21 @@ def test_host_to_device_copies_keep_required_input_fixtures(tmp_path: Path) -> N
     (case,) = op["workloads"]
     assert case["inputs"][0]["device"] == "cpu"
     assert case["inputs"][0].get("fixture")
+
+
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_unrepresentable_host_preprocessing_is_not_a_device_gap(tmp_path: Path, device: str) -> None:
+    # "meta" stands in for the target device; serving adapters check requests on the host.
+    session = CaptureSession("mock_flow_vla", tmp_path / "capture", device_type="meta")
+    try:
+        with session.observe(object(), checkpoint="test-revision"):
+            torch.ones(2, device=device).ne(float("inf"))  # torch.isfinite's decomposition
+    finally:
+        session.close(complete=True)
+    capture = ModelCapture.load(session.root, require_ready=False)
+    (op,) = [op for op in capture.operators if op["name"] == "aten.ne.Scalar"]
+    # A device call with the same argument still needs a replay recipe.
+    assert op["status"] == ("host_only" if device == "cpu" else "blocked")
 
 
 def test_quantized_scope_includes_dynamic_unregistered_module_and_float_fallback(tmp_path: Path) -> None:
@@ -302,67 +318,159 @@ def test_model_cli_rejects_partial_selection_and_legacy_capture(tmp_path: Path, 
     assert not (tmp_path / "runs").exists()
 
 
-def test_factory_driver_is_scoped_and_does_not_execute_an_extra_forward(tmp_path: Path, monkeypatch) -> None:
-    import sys
-    from types import SimpleNamespace
+_ENGINE_DRIVER = """
+from concurrent.futures import ThreadPoolExecutor
 
+import torch
+
+from embodiinfer.engine import EngineConfig, EngineCore, GenerationBackend
+from embodiinfer.policies.factory import make_policy
+from embodiinfer.types import Observation
+
+torch.manual_seed(0)
+policy = make_policy("mock_flow_vla", preset="tiny")
+cfg = policy.config
+observation = Observation(
+    images=torch.rand(cfg.num_cameras, 3, cfg.image_size, cfg.image_size),
+    state=torch.rand(cfg.state_dim),
+    instruction_tokens=torch.randint(0, cfg.vocab_size, (cfg.max_lang_len,)),
+)
+x = torch.ones(3)
+x.digamma()  # driver arithmetic outside the model is not a model operator
+core = EngineCore(policy, EngineConfig(device="cpu", use_cuda_graph=False, num_steps=2))
+MODE
+"""
+_ENGINE_MODES = {
+    # The async engine and batched serving execute the engine on a worker thread.
+    "thread": "with ThreadPoolExecutor(1) as pool:\n"
+    "    pool.submit(core.execute, policy.collate([observation], ['r0'])).result()\n",
+    # The RL rollout path samples through decoder methods the engine never calls.
+    "rollout": "GenerationBackend(core).generate_with_logprob([observation], num_steps=2)\n",
+    # Benchmark-style drivers that call policy internals bypass the engine.
+    "bypass": "batch = policy.collate([observation], ['r0']).to('cpu', torch.float32)\n"
+    "policy.encode_prefix(batch)\n",
+}
+
+
+def _engine_capture(tmp_path: Path, monkeypatch, mode: str) -> ModelCapture:
     from scripts.kernel_tuning.discovery import recorder
 
-    from embodiinfer.policies import factory
-
-    class FakePolicy(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.decoder = SimpleNamespace()
-            self.calls = 0
-
-        def forward(self, inputs):
-            self.calls += 1
-            return inputs.relu()
-
-    policy = FakePolicy()
-    monkeypatch.setitem(factory._REGISTRY, "mock_flow_vla", lambda **kwargs: policy)
     # The public CLI always targets CUDA; this test substitutes the observer's
-    # device classification while exercising the real driver and factory hooks.
+    # device classification while exercising the real driver and engine hooks.
     monkeypatch.setattr(
         recorder, "CaptureSession", lambda *args, **kwargs: CaptureSession(*args, device_type="cpu", **kwargs)
     )
-    script = tmp_path / "prepare.py"
-    script.write_text(
-        "import torch\nfrom embodiinfer.policies.factory import make_policy\nx = torch.ones(3)\nx.sin()  # outside the selected policy\nmodel = make_policy('mock_flow_vla', checkpoint='test')\nmodel(x)\n",
-        encoding="utf-8",
+    script = tmp_path / f"{mode}.py"
+    script.write_text(_ENGINE_DRIVER.replace("MODE", _ENGINE_MODES[mode]), encoding="utf-8")
+    with contextlib.suppress(ContractError):  # Gaps are asserted from the published capture.
+        recorder.run([str(script)], tmp_path / mode, "mock_flow_vla")
+    return ModelCapture.load(tmp_path / mode, require_ready=False)
+
+
+def _reference_operators(mode: str) -> set[str]:
+    """Every dispatcher operator of the same inference, collected without the recorder."""
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    from embodiinfer.engine import EngineConfig, EngineCore, GenerationBackend
+    from embodiinfer.policies.factory import make_policy
+    from embodiinfer.types import Observation
+
+    names: set[str] = set()
+
+    class Collect(TorchDispatchMode):
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            names.add(str(func))
+            return func(*args, **(kwargs or {}))
+
+    torch.manual_seed(0)
+    policy = make_policy("mock_flow_vla", preset="tiny")
+    cfg = policy.config
+    observation = Observation(
+        images=torch.rand(cfg.num_cameras, 3, cfg.image_size, cfg.image_size),
+        state=torch.rand(cfg.state_dim),
+        instruction_tokens=torch.randint(0, cfg.vocab_size, (cfg.max_lang_len,)),
     )
-    argv, path = sys.argv, sys.path[:]
-    recorder.run([str(script)], tmp_path / "capture", "mock_flow_vla")
-    capture = ModelCapture.load(tmp_path / "capture")
-    assert [op["name"] for op in capture.operators] == ["aten.relu.default"]
-    assert policy.calls == 1
-    assert "forward" not in vars(policy)
-    assert sys.argv is argv and sys.path == path
-    assert capture.manifest["target"]["config"] == {"checkpoint": "test"}
+    with Collect():
+        core = EngineCore(policy, EngineConfig(device="cpu", use_cuda_graph=False, num_steps=2))
+        if mode == "thread":
+            core.execute(policy.collate([observation], ["r0"]))
+        else:
+            GenerationBackend(core).generate_with_logprob([observation], num_steps=2)
+    return names
 
 
-def test_decoder_integrate_entry_is_observed(tmp_path: Path, monkeypatch) -> None:
-    # Benchmarks may time the flow loop through decoder.integrate rather than produce_chunk.
-    from types import SimpleNamespace
+@pytest.mark.parametrize("mode", ["thread", "rollout"])
+def test_engine_inference_is_captured_end_to_end(tmp_path: Path, monkeypatch, mode: str) -> None:
+    capture = _engine_capture(tmp_path, monkeypatch, mode)
+    capture.require_ready()
+    assert capture.manifest["target"]["config"] == {"preset": "tiny"}
+    captured = {op["name"] for op in capture.operators}
+    # No policy method list: the whole inference matches an independent collector.
+    assert captured == _reference_operators(mode)
+    assert "aten.digamma.default" not in captured
 
+
+def test_drive_replays_recorded_observations_through_the_engine(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    from scripts.kernel_tuning.discovery import recorder
+    from scripts.kernel_tuning.discovery.drive import save_inputs
+
+    from embodiinfer.policies.mock import preset_config
+    from embodiinfer.types import Observation
+
+    cfg = preset_config("tiny")
+
+    def observation() -> Observation:
+        return Observation(
+            images=torch.rand(cfg.num_cameras, 3, cfg.image_size, cfg.image_size),
+            state=torch.rand(cfg.state_dim),
+            instruction_tokens=torch.randint(0, cfg.vocab_size, (cfg.max_lang_len,)),
+        )
+
+    save_inputs(tmp_path / "inputs.pt", "observations", [[observation(), observation()], [observation()]])
+    (tmp_path / "serving.json").write_text(
+        json.dumps({"policy_kwargs": {"preset": "tiny"}}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        recorder, "CaptureSession", lambda *args, **kwargs: CaptureSession(*args, device_type="cpu", **kwargs)
+    )
+    command = ["-m", "scripts.kernel_tuning.discovery.drive", "--policy", "mock_flow_vla", "--device", "cpu"]
+    command += ["--adapter-config", str(tmp_path / "serving.json"), "--inputs", str(tmp_path / "inputs.pt")]
+    recorder.run(command, tmp_path / "capture", "mock_flow_vla")
+    capture = ModelCapture.load(tmp_path / "capture", "mock_flow_vla")
+    assert capture.manifest["target"]["config"] == {"preset": "tiny"}
+    addmm = next(op for op in capture.operators if op["name"] == "aten.addmm.default")
+    # Three requests, each with a prefix and the default denoise loop, were observed.
+    assert sum(case["count"] for case in addmm["workloads"]) > 3
+
+
+def test_model_arithmetic_outside_the_engine_is_a_coverage_gap(tmp_path: Path, monkeypatch) -> None:
+    capture = _engine_capture(tmp_path, monkeypatch, "bypass")
+    errors = capture.manifest["errors"]
+    assert any("read model weights outside an inference entry" in error for error in errors)
+    with pytest.raises(ContractError, match="outside an inference entry"):
+        capture.require_ready()
+
+
+def test_capture_without_inference_is_rejected(tmp_path: Path, monkeypatch) -> None:
     from scripts.kernel_tuning.discovery import recorder
 
     from embodiinfer.policies import factory
 
-    policy = SimpleNamespace(decoder=SimpleNamespace(integrate=lambda x: x.relu()))
-    monkeypatch.setitem(factory._REGISTRY, "mock_flow_vla", lambda **kwargs: policy)
+    monkeypatch.setitem(factory._REGISTRY, "mock_flow_vla", lambda **kwargs: torch.nn.Linear(2, 2))
     monkeypatch.setattr(
         recorder, "CaptureSession", lambda *args, **kwargs: CaptureSession(*args, device_type="cpu", **kwargs)
     )
     script = tmp_path / "prepare.py"
     script.write_text(
-        "import torch\nfrom embodiinfer.policies.factory import make_policy\nmodel = make_policy('mock_flow_vla', checkpoint='test')\nmodel.decoder.integrate(torch.ones(3))\n",
+        "from embodiinfer.policies.factory import make_policy\nmake_policy('mock_flow_vla')\n",
         encoding="utf-8",
     )
-    recorder.run([str(script)], tmp_path / "capture", "mock_flow_vla")
-    capture = ModelCapture.load(tmp_path / "capture")
-    assert [op["name"] for op in capture.operators] == ["aten.relu.default"]
+    with pytest.raises(ContractError):
+        recorder.run([str(script)], tmp_path / "capture", "mock_flow_vla")
+    manifest = read_json(tmp_path / "capture" / "manifest.json")
+    assert any("No end-to-end inference ran" in error for error in manifest["errors"])
 
 
 def test_replay_adapter_checks_output_alias_and_undeclared_mutation_on_cpu(tmp_path: Path) -> None:

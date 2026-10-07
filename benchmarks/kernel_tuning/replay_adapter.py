@@ -200,6 +200,10 @@ class ReplayAdapter(FlashInferAdapter):
         return tuple(max(a, b) for a, b in zip(error, current))
 
     def _compare(self, actual: list[Any], expected: list[Any], inputs: list[Any]) -> tuple[float, float]:
+        # Unspecified bytes (unused dropout RNG state) carry no result to validate.
+        undefined = set(self.replay.get("undefined_outputs", ()))
+        actual = [value for i, value in enumerate(actual) if i not in undefined]
+        expected = [value for i, value in enumerate(expected) if i not in undefined]
         if getattr(self, "numerical", None) is None:
             return compare_outputs(actual, expected, self.cfg.precision)
         from .calibration import compare_calibrated, high_precision

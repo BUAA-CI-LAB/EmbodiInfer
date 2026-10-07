@@ -69,6 +69,15 @@ def validate_replay(
         type(index) is not int or not 0 <= index < len(definition["inputs"]) for index in replay["mutates"]
     ):
         raise ContractError("Invalid declared input mutations")
+    undefined = replay.get("undefined_outputs", [])
+    if (
+        not isinstance(undefined, list)
+        or (undefined and not str(replay.get("operator")).startswith("aten._scaled_dot_product_"))
+        or len(set(undefined)) != len(undefined)
+        or len(undefined) >= len(definition["outputs"])
+        or any(type(index) is not int or not 0 <= index < len(definition["outputs"]) for index in undefined)
+    ):
+        raise ContractError("Only unused attention dropout state may be excluded from output checks")
     for trace in traces:
         work = trace["workload"]
         case = replay["cases"][work["uuid"]]

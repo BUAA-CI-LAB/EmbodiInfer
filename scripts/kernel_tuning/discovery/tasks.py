@@ -230,6 +230,8 @@ def _plan(
     }
     if "rng" in identity:
         replay["rng"] = identity["rng"]
+    if "undefined_outputs" in identity:
+        replay["undefined_outputs"] = identity["undefined_outputs"]
     if numerical is not None:
         replay["numerical_identity"] = identity
     sources.update(
