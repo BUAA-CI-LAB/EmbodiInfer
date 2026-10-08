@@ -138,10 +138,11 @@ Explore [navigation and world-action benchmarks](docs/en/benchmark.md),
 
 **Network serving:** π0.5, DM0.5, and StreamVLN use HTTP / WirelessComm.
 π0.5 supports cross-session batching with `--max-batch`; the default is 1.
-DM0.5 and StreamVLN currently execute one request at a time. All model families
-have Python entry points.
+DM0.5 and StreamVLN currently execute one request at a time and require
+`--max-batch 1`. All model families have Python entry points.
 The [capability reference](docs/en/models.md#capabilities-and-installation) covers
 batching, CUDA graphs, RL interfaces, and installation profiles.
+ActiveVLN's real-checkpoint GPU parity is pending.
 
 ### Planned models
 
@@ -196,8 +197,9 @@ mapping to a checkpoint.
 | Multi-GPU execution | Data parallelism / tensor parallelism | [Parallelism](docs/en/parallelism.md) |
 
 To share a π0.5 service across clients, add `--max-batch 3 --max-wait-ms 5`
-to the HTTP or WirelessComm launcher. The scheduler collects up to three
-requests per batch within a 5 ms window. See the
+to the HTTP or WirelessComm launcher. Requests from independent sessions share
+batches of up to three; a partially filled batch runs when the 5 ms collection
+window expires. This window excludes queueing and inference time. See the
 [serving guide](docs/en/serving.md#share-one-service-across-clients) for setup.
 
 The distribution is named `embodiinfer`; Python imports remain under `embodiinfer`.

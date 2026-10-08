@@ -78,7 +78,7 @@ optimizations, and rollout capabilities. Network serving is available for:
 | Policy | HTTP / WirelessComm execution |
 |---|---|
 | π0.5 | Cross-session batching with `--max-batch`; default 1. |
-| DM0.5 / StreamVLN | One request at a time, with model-specific session and history handling. |
+| DM0.5 / StreamVLN | Single-request execution (`--max-batch 1`), with model-specific session and history handling. |
 
 Other model families use the Python API. Follow
 [shared-client serving](serving.md#share-one-service-across-clients) to configure

@@ -127,9 +127,9 @@
 
 **网络服务：** π0.5、DM0.5、StreamVLN 支持 HTTP / WirelessComm。
 π0.5 支持通过 `--max-batch` 开启跨会话批处理，默认值为 1；
-DM0.5 与 StreamVLN 当前逐请求执行。
+DM0.5 与 StreamVLN 当前逐请求执行，须保持 `--max-batch 1`。
 各类模型均提供 Python 入口。[能力参考](docs/zh/models.md#capabilities-and-installation)列出批处理、CUDA graph、
-RL 接口和环境要求。
+RL 接口和环境要求。ActiveVLN 真实检查点的 GPU parity 仍待验证。
 
 ### 计划支持的模型
 
@@ -178,8 +178,9 @@ uv run --no-sync python examples/pi05_inference.py \
 | 多 GPU 执行 | 数据并行 / 张量并行 | [并行指南](docs/zh/parallelism.md) |
 
 多个客户端共享 π0.5 服务时，为 HTTP 或 WirelessComm 启动器添加
-`--max-batch 3 --max-wait-ms 5`。调度器在 5 ms 窗口内收集请求，每批最多三个。
-配置步骤见[服务指南](docs/zh/serving.md#share-one-service-across-clients)。
+`--max-batch 3 --max-wait-ms 5`。独立会话的请求可组成最多三个请求的批次；
+5 ms 收集窗口结束时，未满批次也会执行。该窗口不包括排队和推理时间。
+配置步骤见[服务指南](docs/zh/serving.md#多客户端批处理-share-one-service-across-clients)。
 
 发行包名为 `embodiinfer`，Python import 仍为 `embodiinfer`。
 旧 `vvla-*` 命令别名与 `vvla.policy.*` 通信 schema 保持兼容。
