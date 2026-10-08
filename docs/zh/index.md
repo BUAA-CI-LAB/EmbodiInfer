@@ -74,7 +74,7 @@ EmbodiInfer 可以运行视觉—语言—动作策略、世界动作模型和�
 | 策略 | HTTP / WirelessComm 执行 |
 |---|---|
 | π0.5 | 通过 `--max-batch` 开启跨会话批处理，默认 1。 |
-| DM0.5 / StreamVLN | 逐请求执行，按模型管理会话与历史。 |
+| DM0.5 / StreamVLN | 保持 `--max-batch 1`，逐请求执行，按模型管理会话与历史。 |
 
 其他模型通过 Python API 调用。多个客户端共享 π0.5 服务的配置步骤见
 [多客户端服务](serving.md#share-one-service-across-clients)。
