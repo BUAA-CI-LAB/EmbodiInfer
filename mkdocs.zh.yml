@@ -61,6 +61,7 @@ nav:
       - 部署推理服务: serving.md
       - 多 GPU 并行推理: parallelism.md
   - 性能测试: benchmark.md
+  - V1 范围与后续工作: v1-roadmap.md
   - 引擎设计:
       - 推理引擎架构: architecture.md
   - 参考:

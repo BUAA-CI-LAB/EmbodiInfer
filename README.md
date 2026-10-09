@@ -136,11 +136,12 @@ Explore [navigation and world-action benchmarks](docs/en/benchmark.md),
 </tr>
 </table>
 
-**Network serving:** π0.5, DM0.5, and StreamVLN through HTTP / WirelessComm,
-at batch size 1. All model families have Python entry points.
+**Network serving:** π0.5, DM0.5, and StreamVLN use HTTP / WirelessComm.
+π0.5 supports cross-session batching with `--max-batch`; the default is 1.
+DM0.5 and StreamVLN currently execute one request at a time. All model families
+have Python entry points.
 The [capability reference](docs/en/models.md#capabilities-and-installation) covers
 batching, CUDA graphs, RL interfaces, and installation profiles.
-ActiveVLN's real-checkpoint GPU parity is pending.
 
 ### Planned models
 
@@ -149,7 +150,7 @@ ActiveVLN's real-checkpoint GPU parity is pending.
 
 See the [model roadmap](docs/en/models.md#roadmap) for the implementation steps.
 Robot and simulator integrations live in
-[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun#support-at-a-glance).
+[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/en/support-matrix.md).
 
 ## Quick start
 
@@ -194,9 +195,10 @@ mapping to a checkpoint.
 | RL rollout and weight updates | Rollout / refit interfaces | [RL integration](docs/en/api.md#generating-rl-rollouts) |
 | Multi-GPU execution | Data parallelism / tensor parallelism | [Parallelism](docs/en/parallelism.md) |
 
-The network launchers support π0.5, DM0.5, and StreamVLN at batch size 1.
-Other policies use the Python API. See the
-[capability table](docs/en/models.md#capabilities-and-installation) for policy-specific support.
+To share a π0.5 service across clients, add `--max-batch 3 --max-wait-ms 5`
+to the HTTP or WirelessComm launcher. The scheduler collects up to three
+requests per batch within a 5 ms window. See the
+[serving guide](docs/en/serving.md#share-one-service-across-clients) for setup.
 
 The distribution is named `embodiinfer`; Python imports remain under `embodiinfer`.
 Existing `vvla-*` command aliases and `vvla.policy.*` wire schemas remain supported.
