@@ -141,7 +141,17 @@ class CosmosDiffusionDecoder(ActionDecoder):
         shape = (batch_size, c.latent_ch, c.state_t, c.latent_hw, c.latent_hw)
         return torch.randn(shape, device=device, dtype=torch.float32, generator=generator) * c.sigma_max
 
-    def produce_chunk(self, state, prefix: CosmosPrefix, num_steps: int, bucket: int, graphs) -> torch.Tensor:
+    def produce_chunk(
+        self,
+        state,
+        prefix: CosmosPrefix,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance=None,
+    ) -> torch.Tensor:
+        self.reject_rtc_guidance(guidance)
         graph = None
         if graphs is not None:
             graph = graphs.get(bucket, num_steps)  # CosmosDenoiseGraph (per-step DiT), engine-owned

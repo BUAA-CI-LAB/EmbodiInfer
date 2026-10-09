@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
+from ..async_inference.serving import apply_request_async_state
 from .contracts import (
+    SESSION_SCHEMA_ALIASES,
     ModelAction,
     RawPolicyRequest,
     ServeError,
@@ -72,7 +74,7 @@ class PolicyService:
         return self.adapter.action_space
 
     def open_session(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        if request.get("schema") != "vvla.policy.session.v1":
+        if request.get("schema") not in SESSION_SCHEMA_ALIASES:
             raise ServeError(400, "unsupported_schema", "unsupported session schema")
         robot_id = _identifier(request.get("robot_id"), "robot_id")
         action_space = _identifier(request.get("action_space"), "action_space")
@@ -127,6 +129,12 @@ class PolicyService:
                 raise ServeError(409, "out_of_order_step", "step_id must be monotonic")
             start = perf_counter() * 1000.0
             try:
+                # Apply VLASH future-state conditioning before the adapter builds
+                # its observation. It is pure arithmetic on the request's own
+                # state mapping, so it lives here rather than in every adapter,
+                # and every policy in the catalog inherits it. Malformed hints
+                # surface as ``invalid_observation`` below.
+                request = apply_request_async_state(request)
                 result = self.adapter.infer(request)
             except ServeError:
                 raise

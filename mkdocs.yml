@@ -51,6 +51,7 @@ nav:
       - Serving: serving.md
       - Parallelism: parallelism.md
   - Performance: benchmark.md
+  - V1 scope and follow-up: v1-roadmap.md
   - Design:
       - Architecture: architecture.md
   - Reference:

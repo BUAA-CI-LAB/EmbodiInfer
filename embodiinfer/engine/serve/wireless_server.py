@@ -10,14 +10,13 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from .batching import BatchedServingAdapter
-from .contracts import ServeError, parse_structured_step
+from .contracts import RPC_SCHEMA, RPC_SCHEMA_ALIASES, ServeError, parse_structured_step
 from .factory import add_policy_arguments, build_serving_adapter
 from .service import PolicyService
 
 if TYPE_CHECKING:
     from wireless_comm import Comm, Peer
 
-RPC_SCHEMA = "vvla.policy.rpc.v1"
 REQUEST_TAG = 0x56564C41
 RESPONSE_TAG = 0x56564C42
 
@@ -227,7 +226,7 @@ class WirelessPolicyServer:
     ) -> tuple[str, str]:
         if not isinstance(metadata, Mapping):
             raise ServeError(400, "invalid_rpc", "RPC metadata is required")
-        if metadata.get("schema") != RPC_SCHEMA or metadata.get("kind") != "request":
+        if metadata.get("schema") not in RPC_SCHEMA_ALIASES or metadata.get("kind") != "request":
             raise ServeError(400, "invalid_rpc", "unsupported RPC envelope")
         rpc_id = metadata.get("rpc_id")
         method = metadata.get("method")

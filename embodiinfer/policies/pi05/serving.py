@@ -5,13 +5,15 @@ from __future__ import annotations
 import io
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
 
+from embodiinfer.engine.async_inference.contracts import ASYNC_SCHEMA, AsyncInferencePlan
+from embodiinfer.engine.async_inference.serving import batch_rtc_guidance, plan_from_request
 from embodiinfer.engine.core import EngineCore
 from embodiinfer.engine.serve.contracts import (
     ModelAction,
@@ -167,6 +169,14 @@ class Pi05ServingAdapter(ServingAdapter):
         self._width = int(self._policy_cfg.image_resolution[0])
         self._height = int(self._policy_cfg.image_resolution[1])
         self._lock = threading.Lock()
+        # RTC holds a chunk to the *unexecuted prefix of the previously issued
+        # chunk*, and that prefix must live in model space (normalized, padded to
+        # max_action_dim) because it is compared against the flow state inside the
+        # denoiser — the same reason the reference keeps a separate
+        # ``original_queue`` beside the post-processed ``queue``. The client only
+        # ever sees post-processed actions, so the server is the only participant
+        # that can hold this. One entry per live session; ``reset`` drops it.
+        self._last_model_chunk: dict[str, torch.Tensor] = {}
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -184,6 +194,12 @@ class Pi05ServingAdapter(ServingAdapter):
             "image_resolution": [self._width, self._height],
             "execution_mode": "serialized_b1",
             "max_batch_size": 1,
+            "async_inference": {
+                "schema": ASYNC_SCHEMA,
+                "rtc": self._core.policy.decoder.supports_rtc_guidance,
+                "vlash": True,
+                "committed_prefix_source": "session_cache",
+            },
         }
 
     def infer(self, request: RawPolicyRequest) -> ModelResult:
@@ -198,11 +214,16 @@ class Pi05ServingAdapter(ServingAdapter):
 
         Invalid observations fail only their own row. Each result is restored
         against that request's state, including relative-action checkpoints.
+
+        Requests may carry an ``async`` metadata block. VLASH is already applied
+        by the caller (it needs no model); RTC is resolved here, because the
+        committed prefix lives in model space and only this adapter holds it.
         """
         outcomes: list[ModelResult | Exception] = [RuntimeError("unresolved batch row") for _ in requests]
         with self._lock:
             prepared = []
             rows = []
+            plans: list[AsyncInferencePlan | None] = []
             for index, request in enumerate(requests):
                 try:
                     state_vec = self._state_vector(request.state)
@@ -213,20 +234,84 @@ class Pi05ServingAdapter(ServingAdapter):
                         raise ValueError("pi05 processor must prepare one row per request")
                     batch.request_ids = [request.request_id]
                     prepared.append(batch)
-                    rows.append((index, state_vec))
+                    rows.append((index, state_vec, request.session_id))
+                    plans.append(self._resolve_rtc_plan(plan_from_request(request), request.session_id))
                 except (TypeError, ValueError) as error:
                     outcomes[index] = error
             if not prepared:
                 return outcomes
-            chunks = self._core.execute(Pi05Batch.concatenate(prepared))
+            # The synchronous path calls the engine exactly as before: no RTC
+            # keyword, no chunk-shape lookups, no conditioning tensors.
+            batched = Pi05Batch.concatenate(prepared)
+            guidance = (
+                batch_rtc_guidance(
+                    plans,
+                    action_horizon=int(self._policy_cfg.chunk_size),
+                    action_dim=int(self._policy_cfg.max_action_dim),
+                )
+                if any(plan is not None and plan.rtc is not None for plan in plans)
+                else None
+            )
+            chunks = (
+                self._core.execute(batched)
+                if guidance is None
+                else self._core.execute(batched, rtc_guidance=guidance)
+            )
             if len(chunks) != len(rows):
                 raise RuntimeError("pi05 model returned an incorrect number of action chunks")
-            for (index, state_vec), chunk in zip(rows, chunks, strict=True):
+            for (index, state_vec, session_id), chunk in zip(rows, chunks, strict=True):
                 try:
+                    # Cache only the rows the caller will actually receive and
+                    # execute: `return_steps` may be shorter than the model's
+                    # chunk, and a committed prefix must never contain actions
+                    # that were never handed to the robot.
+                    returned = max(1, min(int(self._config.return_steps), int(chunk.actions.shape[0])))
+                    cached = chunk.actions[:returned]
+                    if cached.numel() and torch.isfinite(cached).all():
+                        self._last_model_chunk[session_id] = cached.detach().to("cpu").clone()
                     outcomes[index] = self._result(chunk, state_vec)
                 except (TypeError, ValueError, RuntimeError) as error:
                     outcomes[index] = error
         return outcomes
+
+    def _resolve_rtc_plan(
+        self, plan: AsyncInferencePlan | None, session_id: str
+    ) -> AsyncInferencePlan | None:
+        """Fill in the committed prefix from the last chunk issued to this session.
+
+        A request asks for RTC by supplying ``inference_delay`` — how many control
+        steps of the previously issued chunk have been consumed while this
+        inference was in flight. The prefix that survives is that chunk from
+        ``delay`` onwards, which is exactly the reference's
+        ``ActionQueue.get_left_over`` after ``delay`` consumptions.
+
+        The cache holds model-space actions, which is what the denoiser compares
+        against, and only as many rows as the caller was actually given. The
+        returned chunk is right-padded to the flow horizon by
+        :func:`~embodiinfer.engine.async_inference.rtc.build_rtc_guidance`, which
+        is harmless because every schedule weights zero beyond the prefix length.
+
+        A caller may instead supply ``prev_chunk_left_over`` explicitly. That is
+        the escape hatch for a client that legitimately holds model-space actions
+        (a co-located trainer, or a test pinning a known prefix), and it takes
+        precedence so the wire can express a prefix the cache does not know.
+
+        Absence is not an error: on the first inference of an episode there is no
+        committed prefix, and conditioning is then a no-op — which is also the
+        reference's behaviour (``prev_chunk_left_over is None`` returns the
+        unguided velocity).
+        """
+        if plan is None or plan.rtc is None or plan.rtc.prev_chunk_left_over is not None:
+            return plan
+        cached = self._last_model_chunk.get(session_id)
+        if cached is None:
+            return plan
+        delay = plan.rtc.inference_delay
+        if delay >= int(cached.shape[0]):
+            return plan
+        remaining = cached[delay:]
+        grid = tuple(tuple(float(value) for value in row) for row in remaining.tolist())
+        return replace(plan, rtc=replace(plan.rtc, prev_chunk_left_over=grid))
 
     def _result(self, chunk: ActionChunk, state_vec: torch.Tensor) -> ModelResult:
         rows = max(1, min(int(self._config.return_steps), int(chunk.actions.shape[0])))
@@ -258,8 +343,10 @@ class Pi05ServingAdapter(ServingAdapter):
         )
 
     def reset(self, session_id: str) -> None:
-        # pi0.5 policy itself is stateless across sessions in deploy mode
-        _ = session_id
+        # pi0.5 policy itself is stateless across sessions in deploy mode, but the
+        # RTC committed-prefix cache is per episode: a new episode must not be
+        # held to the previous episode's chunk.
+        self._last_model_chunk.pop(session_id, None)
 
     def _state_vector(self, state: Mapping[str, Any]) -> torch.Tensor:
         """Read literal feature keys first, retaining legacy nested-path support."""

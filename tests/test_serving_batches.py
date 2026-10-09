@@ -164,6 +164,9 @@ def pi_adapter():
     adapter._lock = threading.Lock()
     adapter._config = Pi05ServingConfig(("state",), ("image",), 2)
     adapter._processor = Processor()
+    # Per-session committed-prefix cache for RTC; empty here because these tests
+    # exercise batching and row isolation, not asynchronous conditioning.
+    adapter._last_model_chunk = {}
     adapter._state_vector = lambda state: torch.tensor(state["state"], dtype=torch.float32)
     adapter._image_tensor_stack = lambda images: (torch.zeros(1, 3, 2, 2), ("image",))
     batches = []
