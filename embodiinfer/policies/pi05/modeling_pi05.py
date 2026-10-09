@@ -50,10 +50,12 @@ from ..base import FlowVLAPolicy, VLAPolicy
 from ..config import VLAPolicyConfig
 from ..factory import register_policy
 from .embeddings import attention_mask_4d, make_attention_mask, rope_tables, time_embedding
+from .optimization_config import Pi05OptimizationConfig
 from .processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
     from ...engine.core import EngineCore
+    from .optimization import Pi05Optimizations
 
 _INSTALL = "pi0.5 requires lerobot: run `uv sync --frozen --no-dev --group pi05`"
 _COMPILED_IMAGE_ENCODERS: dict[int, Any] = {}
@@ -437,10 +439,28 @@ class Pi05Policy(FlowVLAPolicy):
         denoise_attention: str = "sdpa",
         prefix_attention: str = "sdpa",
         checkpoint_config: Mapping[str, Any] | None = None,
+        optimizations: Pi05OptimizationConfig | None = None,
         tensor_parallel_size: int = 1,
         tensor_parallel_group=None,
     ):
         super().__init__(config)
+        if optimizations is not None:
+            if not isinstance(optimizations, Pi05OptimizationConfig):
+                raise TypeError("optimizations must be a Pi05OptimizationConfig")
+            if (
+                not native_inference
+                or compile_backend != "none"
+                or quantization is not None
+                or tensor_parallel_size != 1
+            ):
+                raise ValueError(
+                    "Fused Pi05 operators require native_inference=True, no Inductor/global quantization, and TP=1"
+                )
+            if denoise_attention != "sdpa" or prefix_attention != "sdpa":
+                raise ValueError("Select migrated attention through optimizations.attention")
+        self._optimization_config = optimizations
+        self._fused_ops = None
+        self._optimization_recipe_stale = False
         if compile_backend not in {"none", "inductor"}:
             raise ValueError(f"pi05 compile_backend must be 'none' or 'inductor'; got {compile_backend!r}")
         self.compile_backend = compile_backend
@@ -581,10 +601,30 @@ class Pi05Policy(FlowVLAPolicy):
         if self._native_attention is None and "triton" in (self.denoise_attention, self.prefix_attention):
             self._native_attention = get_split_kv_attention_backend("triton_split_kv")
 
+    def _get_optimizations(self) -> Pi05Optimizations | None:
+        """Prepare instance-local CUDA operators lazily after engine placement."""
+        config = getattr(self, "_optimization_config", None)
+        if config is None or not self._native_enabled():
+            return None
+        if self._optimization_recipe_stale:
+            raise RuntimeError(
+                "Mixed precision calibration is stale after refit; load a newly calibrated recipe"
+            )
+        if self._fused_ops is None:
+            from .optimization import Pi05Optimizations
+
+            with torch.cuda.device(self._m.action_in_proj.weight.device):
+                self._fused_ops = Pi05Optimizations(self, config)
+        return self._fused_ops
+
     def _clear_inference_caches(self) -> None:
         runtime = getattr(self, "_runtime", None)
         if runtime is not None:
             runtime.clear()
+        operators = getattr(self, "_fused_ops", None)
+        if operators is not None:
+            operators.clear()
+            self._fused_ops = None
         for key in tuple(_COMPILED_PREFIX_ENCODERS):
             if key[0] == id(self):
                 del _COMPILED_PREFIX_ENCODERS[key]
@@ -604,6 +644,9 @@ class Pi05Policy(FlowVLAPolicy):
         """Rebuild packed weights, modulation schedules and graphs after a refit."""
         super().on_refit(version)
         self._clear_inference_caches()
+        config = getattr(self, "_optimization_config", None)
+        if config is not None and config.mixed_precision:
+            self._optimization_recipe_stale = True
 
     def _apply(self, fn, recurse: bool = True):
         self._clear_inference_caches()
@@ -651,7 +694,18 @@ class Pi05Policy(FlowVLAPolicy):
 
     # ---- one Gemma decoder stack (our forward over the loaded weights) -------
     def _attn_sublayer(
-        self, attn, h, cos, sin, mask, prefix_kv, collected, native_prefix=False, native_expert=False
+        self,
+        attn,
+        h,
+        cos,
+        sin,
+        mask,
+        prefix_kv,
+        collected,
+        native_prefix=False,
+        native_expert=False,
+        *,
+        operators=None,
     ):
         B, S = h.shape[0], h.shape[1]
         hd = attn.head_dim
@@ -682,8 +736,19 @@ class Pi05Policy(FlowVLAPolicy):
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         if prefix_kv is not None:  # denoise pass: attend [prefix ++ suffix]
             pk, pv = prefix_kv
-            k = torch.cat([pk, k], dim=2)
-            v = torch.cat([pv, v], dim=2)
+            if operators is not None:
+                k, v = operators.combine_kv(attn, k, v, prefix_kv)
+            else:
+                k = torch.cat([pk, k], dim=2)
+                v = torch.cat([pv, v], dim=2)
+        if operators is not None and operators.attention is not None:
+            # Pi05 constructs only zero/large-negative padding masks. Keep this
+            # conversion local rather than interpreting arbitrary additive biases
+            # inside the reusable query-major attention backend.
+            if mask is not None and mask.dtype != torch.bool:
+                mask = mask == 0
+            out = operators.attention.attend(q, k, v, attn_mask=mask, scaling=attn.scaling)
+            return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         if native_prefix:
             # Prefix preparation supplies a shared key mask; masked query outputs are unused.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
@@ -706,6 +771,7 @@ class Pi05Policy(FlowVLAPolicy):
         collect=False,
         modulations=None,
         native_prefix=False,
+        operators=None,
     ):
         # Run the tower in its parameters' dtype. Under a selectively-cast
         # backbone (e.g. openpi's bf16-with-fp32-norms regime) the embeddings /
@@ -724,6 +790,11 @@ class Pi05Policy(FlowVLAPolicy):
             if self.native_embeddings
             else tower.rotary_emb(hidden, position_ids)
         )
+        if operators is not None:
+            with torch.cuda.device(hidden.device):
+                return operators.tower_forward(
+                    tower, hidden, cos, sin, mask, adarms_cond, prefix_kv, collect, modulations, native_prefix
+                )
         collected: list | None = [] if collect else None
         fused = modulations is not None and hidden.dtype in (torch.bfloat16, torch.float16)
         for i, layer in enumerate(tower.layers):
@@ -803,6 +874,13 @@ class Pi05Policy(FlowVLAPolicy):
         self, batch: Pi05Batch, return_hidden: bool = False, *, all_valid: bool | None = None
     ) -> Pi05Prefix:
         m = self._m
+        operators = (
+            self._get_optimizations()
+            if not return_hidden and getattr(self, "_optimization_config", None) is not None
+            else None
+        )
+        if operators is not None:
+            operators.validate_request(batch.batch_size)
         # Batching camera views changes the vision GEMM shape and its rounding.
         # The eager reference therefore keeps model.embed_prefix's per-view
         # execution; the compact batched path is reserved for fused backends.
@@ -874,6 +952,7 @@ class Pi05Policy(FlowVLAPolicy):
                 adarms_cond=None,
                 collect=True,
                 native_prefix=native_prefix,
+                operators=operators,
             )
         self._cached_prefix_meta = (prefix_pad_masks.shape[1], prefix_pad_masks.dtype, kv[0][0].dtype)
         return Pi05Prefix(
@@ -978,6 +1057,7 @@ class Pi05Policy(FlowVLAPolicy):
             adarms_cond=adarms_cond,
             prefix_kv=prefix.kv,
             modulations=modulations,
+            operators=self._get_optimizations() if modulations is not None else None,
         )
         # LeRobot casts the suffix to fp32 before the action projection; match the
         # projection weight dtype instead so a bf16 execution stays consistent
@@ -1112,6 +1192,7 @@ def _build_pi05(
     prefix_attention: str = "sdpa",
     low_cpu_mem_usage: bool = False,
     checkpoint_config: Mapping[str, Any] | None = None,
+    optimizations: Pi05OptimizationConfig | None = None,
     quantization: str | Mapping[str, Any] | QuantizationConfig | None = None,
     **overrides,
 ) -> VLAPolicy:
@@ -1134,6 +1215,7 @@ def _build_pi05(
         prefix_attention=prefix_attention,
         low_cpu_mem_usage=low_cpu_mem_usage,
         checkpoint_config=checkpoint_config,
+        optimizations=optimizations,
         quantization=quantization,
         tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_group=tensor_parallel_group,

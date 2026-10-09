@@ -96,16 +96,22 @@ class EmbodiInfer:
         from embodiinfer.engine.config import EngineConfig
         from embodiinfer.engine.core import EngineCore
         from embodiinfer.policies import make_policy
+        from embodiinfer.policies.pi05 import Pi05OptimizationConfig
         from embodiinfer.policies.pi05.processor_pi05 import make_processor
 
         self.config = config
         self.warmed_native_layouts = set()
-        self.dtype = getattr(torch, config["dtype"])
+        self.dtype = torch.float32 if config["dtype"] == "auto" else getattr(torch, config["dtype"])
         self.policy = make_policy(
             "pi05",
             checkpoint=config["checkpoint"],
             attention=config["attention"],
             compile_backend=config["compile_backend"],
+            optimizations=(
+                Pi05OptimizationConfig.from_json(config["optimizations"])
+                if config.get("optimizations") is not None
+                else None
+            ),
             load_device="cuda:0",
             **{
                 k: config[k]
@@ -114,7 +120,7 @@ class EmbodiInfer:
             },
         )
         # FP32 calibration keeps exactly the BF16-rounded weights and inputs.
-        if self.dtype == torch.float32:
+        if self.dtype == torch.float32 and config["dtype"] != "auto":
             self.policy.to(dtype=torch.bfloat16)
         size = config["batch_size"]
         self.core = EngineCore(
@@ -440,6 +446,13 @@ def main() -> None:
     )
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
+    if config.get("optimizations") is not None:
+        if config["engine"] != "embodiinfer" or config["dtype"] != "auto":
+            raise ValueError("Migrated operators require engine: embodiinfer and dtype: auto")
+        recipe = Path(config["optimizations"]).expanduser()
+        recipe = recipe if recipe.is_absolute() else args.config.resolve().parent / recipe
+        config["optimizations"] = str(recipe.resolve(strict=True))
+        config["optimization_settings"] = json.loads(recipe.read_text())
     if args.mode == "calibrate" and (config["engine"], config["dtype"]) != ("embodiinfer", "float32"):
         raise ValueError("calibration uses VVLA FP32 arithmetic on BF16-rounded weights/inputs")
     if config["batch_size"] != 1:
@@ -460,9 +473,9 @@ def main() -> None:
         gate = measurement_gate(config, profile, args.allow_numerical_mismatch)
     processor = Processor(Path(config["checkpoint"]))
     started = time.perf_counter()
-    engine = {"embodiinfer": EmbodiInfer, "vlacpp": VlaCpp, "phyai": PhyAI, "embodied": Embodied}[config["engine"]](
-        config, processor
-    )
+    engine = {"embodiinfer": EmbodiInfer, "vlacpp": VlaCpp, "phyai": PhyAI, "embodied": Embodied}[
+        config["engine"]
+    ](config, processor)
     load_seconds = time.perf_counter() - started
     reference_dir = Path(config["reference_dir"])
     if args.mode == "reference":
@@ -475,7 +488,7 @@ def main() -> None:
             prepared = processor.prepare(sample, raw)
             if isinstance(engine, EmbodiInfer):
                 engine.validate_processor(sample, raw, prepared)
-            engine.predict([prepared], noise_for(index, 1, getattr(torch, config["dtype"])))
+            engine.predict([prepared], noise_for(index, 1, engine.dtype))
         before = engine.runtime()
         for index in indices:
             sample = samples[index]
@@ -483,7 +496,7 @@ def main() -> None:
             torch.cuda.synchronize()
             started = time.perf_counter_ns()
             prepared = processor.prepare(sample, raw)
-            noise = noise_for(index, 1, getattr(torch, config["dtype"]))
+            noise = noise_for(index, 1, engine.dtype)
             physical, timing = engine.predict([prepared], noise)
             torch.cuda.synchronize()
             e2e_ms = (time.perf_counter_ns() - started) / 1e6

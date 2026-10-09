@@ -187,7 +187,7 @@ embodiinfer/policies          VLAPolicy + VLAPolicyConfig + ActionDecoder/RLDeco
 embodiinfer/models           engine-agnostic nets by family — video_dit / video_vae /
                        text_encoders / schedulers (diffusion + flow math)
 embodiinfer/layers            operator contracts + registry + backend routing
-embodiinfer/backend           concrete Torch/Triton implementations, capability probes,
+embodiinfer/backend           concrete CUDA/Torch/Triton implementations, capability probes,
                        warmup, graph-safe execution
 embodiinfer/engine            EngineConfig · EngineCore · transactional SessionStore ·
                        AsyncEngine · graph
@@ -214,9 +214,32 @@ OpenVLA-OFT's Llama, and so on — is not promoted there and stays in its
 | policy | `embodiinfer/policies/<name>/` | checkpoint loading, the forward, collate/pad, `flow_schedule` | model-specific logic stays here; implements the base contracts |
 | engine | `embodiinfer/engine/` | scheduling, execution, CUDA graphs | depends only on the public policy contracts (`VLAPolicy`, `PrefixState`, `flow_schedule`, `encode_prefix`, `denoise_step`, `supports_cuda_graph`, `cuda_graph_kind`, `allocate_static_prefix`, `copy_prefix_into`) |
 | operator routing | `embodiinfer/layers/` | attention and other Protocols, registry, backend selection | no concrete operator implementations; callers depend on protocols and registered names |
-| compute backend | `embodiinfer/backend/` | Torch/Triton implementations, capability probes, warmup | must not depend on models, policies, engine, or environment semantics |
+| compute backend | `embodiinfer/backend/` | CUDA/Torch/Triton implementations, capability probes, warmup | must not depend on models, policies, engine, or environment semantics |
 | rollout | `embodiinfer/engine/rollout/` | RL rollout surface, log-probability, weight sync | depends on the engine, never on a concrete policy |
 | serve | `embodiinfer/engine/serve/` | model-neutral inference API and frontends | communication and engine calls only; simulator and robot protocols belong to the deployment runtime |
+
+### Prepared operator interfaces
+
+`layers/normalization.py`, `activation.py` and `quantization.py` define reusable
+RMSNorm, residual/norm/encoding, GELU/product/encoding, paired projection and
+calibrated projection contracts. Each has a lazy `BackendRegistry`, using
+`OperatorRequest` and `OperatorCapabilities` to check device, dtype, layout,
+encoding and CUDA Graph support before construction. Arithmetic declarations
+identify rounding contracts; they do not establish full-model output parity.
+New implementations can be registered without changing a policy's forward.
+
+`backend/cuda/` owns native wrappers, the compiler cache and `csrc/`;
+`backend/triton/` owns Triton kernels and their measured launch profiles;
+`backend/torch/` owns native GEMM adapters and operator reference implementations.
+`OperatorBackends` selects implementations by name. Model-specific precision maps,
+activation semantics, calibration identity and fusion placement remain policy-owned.
+Existing attention and global quantized-linear routes retain their public APIs.
+
+Plan outputs are ephemeral until that plan is invoked again. Prepare backend,
+weights and shapes before capture; each graph needs its own workspace lifetime.
+Synchronize and destroy the owning graph before releasing its plan scope. Derived
+packs/plans are invalidated after refit or placement changes. Composite backends
+validate their dependencies rather than silently changing an implementation.
 
 ## Deployment interface
 

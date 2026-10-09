@@ -13,7 +13,9 @@ Contract (``attend``):
                 backend handles the repeat, so callers pass K/V at their native
                 head count and need not materialize the expansion themselves.
     attn_mask : additive float mask broadcastable to ``[B, 1, seq_q, seq_k]``, or
-                ``None``
+                ``None``. Specialized backends document and reject unsupported
+                masks: query-major takes Boolean validity masks, folded Flash
+                takes ``None`` only.
     scaling   : softmax scale; ``None`` -> ``head_dim ** -0.5`` (SDPA default)
     returns   : ``[B, num_heads, seq_q, head_dim]`` (the caller transposes /
                 reshapes as it sees fit)
@@ -174,4 +176,13 @@ register_lazy_attention(
     "triton_split_kv",
     "embodiinfer.backend.triton.split_kv_attention",
     "TritonSplitKVAttention",
+)
+register_lazy_attention(
+    "query_major", "embodiinfer.backend.torch.query_major_attention", "QueryMajorAttention"
+)
+register_lazy_attention(
+    "query_major_cuda", "embodiinfer.backend.torch.query_major_attention", "QueryMajorCudaAttention"
+)
+register_lazy_attention(
+    "folded_flash", "embodiinfer.backend.torch.query_major_attention", "FoldedFlashAttention"
 )

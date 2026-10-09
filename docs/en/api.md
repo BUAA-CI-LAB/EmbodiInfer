@@ -104,6 +104,55 @@ inputs and decoder state. Explicit dtypes still cast uniformly; CPU remains FP32
 See the [AGX comparison](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md#agx-orin-mixed-precision-2026-09-17)
 for measured latency, output parity and the CPU-offload memory tradeoff.
 
+## Pi05 fused operator configuration
+
+```python
+from embodiinfer import EngineConfig, make_policy
+from embodiinfer.engine import EngineCore
+from embodiinfer.policies.pi05 import Pi05OptimizationConfig
+
+policy = make_policy(
+    "pi05",
+    checkpoint="/models/pi05",
+    native_inference=True,
+    prefix_cuda_graph=True,
+    optimizations=Pi05OptimizationConfig(),
+)
+engine = EngineCore(
+    policy,
+    EngineConfig(device="cuda", dtype="auto", capture_full_loop=True),
+)
+```
+
+This enables strict normalization/residual fusion and K/V workspace reuse with
+the existing attention and MLP implementation. Select alternative attention,
+paired GEMMs or calibrated per-layer precision through the configuration; see
+[supported profiles and precision contracts](models.md#opt-in-fused-operators).
+`Pi05OptimizationConfig.from_json(path)` loads a standalone recipe;
+`config.to_json(path)` exports one. JSON must explicitly identify the
+`gelu_pytorch_tanh` activation contract. The existing demo accepts
+`--optimizations /path/to/recipe.json`; use `--envs 1` for B1 profiles.
+Full-checkpoint parity and task quality remain deployment gates, including for
+the strict operator route; component parity alone does not establish them.
+
+Select or extend an implementation through the shared operator layer:
+
+```python
+from embodiinfer.layers import OperatorBackends, normalization_backends
+
+# MyRMSNorm implements NormalizationBackend and declares OperatorCapabilities.
+normalization_backends.register("my_rmsnorm", MyRMSNorm)
+config = Pi05OptimizationConfig(
+    operators=OperatorBackends(normalization="my_rmsnorm", norm_quant=None),
+)
+```
+
+The registries also expose `register_lazy(name, module, class_name)` and
+`available()`. Direct reuse by another model uses
+`normalization_backends.get(name, OperatorRequest(device, dtype))`, then creates
+fixed-layout plans. The nested JSON `operators` mapping has the same field names
+as `OperatorBackends`. See [prepared operator lifetimes](architecture.md#prepared-operator-interfaces).
+
 ## Generating RL rollouts
 
 The rollout surface is available only for policies whose decoder implements

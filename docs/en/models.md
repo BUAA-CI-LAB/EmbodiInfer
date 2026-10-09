@@ -108,6 +108,43 @@ Fused backends retain the batched and fused routes. This distinction matters for
 rollout/actor log-probability comparisons on selectively cast checkpoints: changing
 GEMM shapes can change rounding even with the same attention formula.
 
+#### Opt-in fused operators
+
+`Pi05OptimizationConfig` selects the operators migrated from ccinfer. The default
+configuration enables RMSNorm/residual fusion with Torch's FP32 mean and reusable
+prefix/suffix K/V storage. Passing no configuration retains the existing route.
+Set `norm_fusion=False` to test K/V storage alone using the existing normalization.
+
+The migrated Triton paired BF16 gate/up GEMMs (`fused_mlp=True`) require an explicit
+`hardware="thor"` or `"spark"` profile. These profiles require the matching SM110/SM121 device,
+standard 18-layer towers, B1, a checkpoint with horizon 10, and 10 denoise steps.
+They are ccinfer launch choices; no migrated full-model latency is claimed.
+`attention="query_major"` removes group-major Q/probability copies;
+`"folded_flash"` compacts the B1 prefix and folds small MQA queries for Flash SDPA.
+Both attention variants and paired GEMMs change accumulation and require a
+same-noise full-action comparison before deployment.
+
+An `action_layers` recipe can choose BF16, FP8 or NVFP4 independently for gate/up
+and down in each action layer. This uses fixed calibrated activation scales,
+shared gate/up encoding, residual/RMSNorm/encoding fusion, and a fused GELU × up ×
+encoding epilogue. Keep attention and action/time projections in their original
+precision. NVFP4 requires Blackwell; mixed GEMMs require the PyTorch 2.13 API.
+
+Recipes identify `activation="gelu_pytorch_tanh"` and the SHA256 of a local
+`model.safetensors`. EmbodiInfer preserves its existing tanh GELU and RoPE;
+ccinfer's exact-GELU calibration files cannot be reused. No calibrated deployment
+recipe is included. Refit clears derived weights/workspaces/graphs and rejects
+stale mixed precision calibration. These plans require native inference, TP=1,
+`compile_backend="none"`, no global quantization, and `EngineConfig(dtype="auto")`
+to preserve FP32 norm/action/time parameters. CUDA Graphs remain supported.
+The nested `operators: OperatorBackends` configuration selects registered norm,
+quantization, GELU epilogue, paired projection and projection implementations.
+Torch reference implementations are available; choose `norm_quant=None` when
+using reference norm/quantization because the CUDA composite needs CUDA dependencies.
+The Torch paired projection reference does not require a Thor/Spark launch profile.
+See [the API example](api.md#pi05-fused-operator-configuration) and
+[toolkit requirements](installation.md#pi05-fused-cuda-operators).
+
 ### DM0.5
 
 Provide a DM0.5 checkpoint and its `norm_stats.json`; see

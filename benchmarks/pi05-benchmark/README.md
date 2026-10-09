@@ -1,5 +1,66 @@
 # PI0.5 Benchmark
 
+## ccinfer 算子迁移的验证入口
+
+新实现通过 `Pi05OptimizationConfig` 显式启用。现有结果表对应原先的配置，
+不能作为迁移后延迟。先使用保持原 attention/MLP 的 BF16 配置：
+
+```json
+{
+  "activation": "gelu_pytorch_tanh",
+  "norm_fusion": true,
+  "kv_workspace": true
+}
+```
+
+保存为独立 JSON，在一份新的 benchmark YAML 中设置：
+
+```yaml
+dtype: auto
+compile_backend: none
+native_inference: true
+prefix_cuda_graph: true
+cuda_graph: true
+optimizations: ./fused.json
+```
+
+`benchmark.py` 和 `compare.py` 接受 `optimizations`，并记录配方内容；前者相对
+YAML 解析配方路径，后者也将配方内容计入 profile 摘要。报告额外记录 CUDA 源码
+摘要。不要覆盖现有结果。`compare.py` 保留原 50-action 协议，测量前仍需要
+十观测动作检查；它不适用于仅支持 horizon=10 的 Thor/Spark paired-GEMM 配置。
+
+按相同 LeRobot 权重、预处理、随机种子和全部去噪步，使用 recorded 对比入口：
+
+```bash
+CUDA_HOME=/path/to/cuda .venv/bin/python compare_recorded.py \
+  --checkpoint /models/pi05 --tokenizer /models/tokenizer \
+  --samples /data/recorded/sample.json --out runs/fused-parity \
+  --warmup 3 --modes lerobot vvla_sdpa_graph vvla_fused_graph \
+  --optimizations /path/to/fused.json
+```
+
+脚本保存完整归一化/物理动作和逐请求误差，不会自动宣称通过。依次检查
+K/V-only（`norm_fusion: false`）、严格融合、alternative attention 和 paired GEMM；
+保持权重、dtype、输入/noise、horizon 和去噪步一致。Thor/Spark paired-GEMM profile
+限制为匹配 GPU、标准模型尺寸、B1、checkpoint horizon=10、10-step。
+
+FP8/NVFP4 为逐 action 层的校准配置，要求本地 checkpoint SHA256 和
+`gelu_pytorch_tanh` 语义。ccinfer/RLinf 的 exact GELU 配方不能复用；当前没有
+随代码提供已通过真实权重/任务质量验证的新配方。NVFP4 需要 Blackwell，
+mixed GEMM 需要 Torch 2.13 的 `scaled_mm` API；新路径支持 CUDA Graph，暂不组合
+Inductor、全局量化或 TP。配置与安装要求见
+[模型文档](../../docs/en/models.md#opt-in-fused-operators)。
+
+算子通过 `layers` 的契约与注册表选择，CUDA/Triton/Torch 实现在各自 backend；
+通用 Projection 已移出 Pi05。JSON 可增加 `operators` 映射，例如
+`{"normalization": "torch", "quantization": "torch", "gelu_mul": "torch", "norm_quant": null}`
+选择参考路径。CUDA residual/norm/quant 融合需要 CUDA norm 与 quantizer 配套，
+参考组合使用 `norm_quant: null` 进行分开执行。硬件 tile/tail 参数归 Triton backend。
+
+本地验证包括 4090 上的严格算子逐位检查、FP8 完整 10-step graph、更新输入、
+graph eviction/capture failure、refit 失效及参数身份保持。它们使用小型模型，
+不作为 LeRobot 全模型延迟或任务质量结果。NVFP4 正向检查需在 Blackwell 执行。
+
 ## 实验方法
 
 模型：LeRobot `pi05_libero_finetuned_v044` 检查点，使用其 tokenizer、状态归一化及动作反归一化。数据：[LIBERO-datasets](https://huggingface.co/datasets/yifengzhu-hf/LIBERO-datasets) 的 `libero_10/*.hdf5`：任务文件名字典序取 10 个，每任务按 numeric demo ID 取前 10 段，每段包含首尾均匀取 16 帧，共 **1,600 帧**。

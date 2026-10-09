@@ -153,6 +153,11 @@ def load_config(default: Path, *, model_choices: tuple[str, ...] = ()) -> tuple[
         if key in config:
             output = Path(config[key]).expanduser()
             config[key] = str(output if output.is_absolute() else path.parent / output)
+    if config.get("optimizations") is not None:
+        recipe = Path(config["optimizations"]).expanduser()
+        recipe = recipe if recipe.is_absolute() else path.parent / recipe
+        config["optimizations"] = str(recipe.resolve(strict=True))
+        config["optimization_settings"] = json.loads(recipe.read_text())
     config["validate_data_only"] = args.validate_data
     if model_choices:
         config["selected_model"] = args.model
@@ -293,6 +298,10 @@ def provenance(device: torch.device) -> dict[str, Any]:
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         revision = None
+    cuda_sources = hashlib.sha256()
+    for path in sorted(runtime.rglob("*.cu")):
+        cuda_sources.update(str(path.relative_to(runtime)).encode())
+        cuda_sources.update(path.read_bytes())
     commands = {
         "driver_version": ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
         "power_mode": ["nvpmodel", "-q"],
@@ -314,6 +323,7 @@ def provenance(device: torch.device) -> dict[str, Any]:
         "packages": versions,
         "source_revision": revision,
         "source_python_sha256": digest.hexdigest(),
+        "source_cuda_sha256": cuda_sources.hexdigest(),
         "dependency_check": json.loads(check_path.read_text()) if check_path.is_file() else None,
         **hardware,
     }
@@ -481,14 +491,22 @@ def build(
     from embodiinfer.engine.config import EngineConfig
     from embodiinfer.engine.core import EngineCore
     from embodiinfer.policies import make_policy
+    from embodiinfer.policies.pi05 import Pi05OptimizationConfig
     from embodiinfer.policies.pi05.processor_pi05 import make_processor
 
     tokenizer_details = validate_tokenizer(config["checkpoint"])
+    if config.get("optimizations") is not None and config["dtype"] != "auto":
+        raise ValueError("Migrated Pi05 operators require dtype: auto to preserve FP32 precision islands")
     policy = make_policy(
         "pi05",
         checkpoint=config["checkpoint"],
         attention="sdpa",
         compile_backend=config["compile_backend"],
+        optimizations=(
+            Pi05OptimizationConfig.from_json(config["optimizations"])
+            if config.get("optimizations") is not None
+            else None
+        ),
         **{
             k: config[k]
             for k in ("native_inference", "prefix_cuda_graph", "denoise_attention", "prefix_attention")

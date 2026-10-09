@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 
 import torch
 
@@ -43,18 +44,33 @@ def main() -> None:
     ap.add_argument("--gpus", type=int, default=1, help="replicas across cuda:0..N-1 (data parallel)")
     ap.add_argument("--lang-len", type=int, default=48)
     ap.add_argument("--attn", default="sdpa", choices=["eager", "sdpa"])
+    ap.add_argument("--optimizations", type=Path, help="Opt-in Pi05 fused operator configuration JSON")
     args = ap.parse_args()
 
     if not torch.cuda.is_available():
         raise SystemExit("pi0.5 inference needs a CUDA device")
     if torch.cuda.device_count() < args.gpus:
         raise SystemExit(f"requested {args.gpus} GPUs but only {torch.cuda.device_count()} available")
+    policy_options = {}
+    if args.optimizations is not None:
+        from embodiinfer.policies.pi05 import Pi05OptimizationConfig
+
+        if args.attn != "sdpa":
+            ap.error("fused inference requires --attn sdpa")
+        policy_options = dict(
+            optimizations=Pi05OptimizationConfig.from_json(args.optimizations),
+            native_inference=True,
+            prefix_cuda_graph=True,
+        )
 
     obs = make_obs(args.envs, args.lang_len)
 
     if args.gpus == 1:
-        policy = make_policy("pi05", checkpoint=args.ckpt, attention=args.attn)
-        core = EngineCore(policy, EngineConfig(device="cuda", max_batch_size=args.envs))
+        policy = make_policy("pi05", checkpoint=args.ckpt, attention=args.attn, **policy_options)
+        core = EngineCore(
+            policy,
+            EngineConfig(device="cuda", max_batch_size=args.envs, capture_full_loop=bool(policy_options)),
+        )
         print(f"[pi05] device={core.device} dtype={core.dtype} attn={args.attn}")
         ids = [f"env{i}" for i in range(args.envs)]
 
@@ -63,8 +79,15 @@ def main() -> None:
     else:
         cores = []
         for i in range(args.gpus):
-            policy = make_policy("pi05", checkpoint=args.ckpt, attention=args.attn)
-            cores.append(EngineCore(policy, EngineConfig(device=f"cuda:{i}", max_batch_size=args.envs)))
+            policy = make_policy("pi05", checkpoint=args.ckpt, attention=args.attn, **policy_options)
+            cores.append(
+                EngineCore(
+                    policy,
+                    EngineConfig(
+                        device=f"cuda:{i}", max_batch_size=args.envs, capture_full_loop=bool(policy_options)
+                    ),
+                )
+            )
         engine = DataParallelEngine(cores)
         print(f"[pi05] {engine.num_replicas} replicas, {args.envs} obs sharded across them")
 
