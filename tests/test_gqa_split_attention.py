@@ -1,9 +1,15 @@
 """GPU contracts of the grouped-query split-KV attention kernel."""
 
+import itertools
+
 import pytest
 import torch
 
-from embodiinfer.backend.triton.gqa_split_attention import gqa_split_kv_attention
+from embodiinfer.backend.triton.gqa_split_attention import (
+    PACKED_BLOCK_M,
+    gqa_split_kv_attention,
+    packed_query_blocks,
+)
 from embodiinfer.backend.triton.split_attention import split_kv_attention
 
 HEADS, KV_HEADS, WIDTH, CAPACITY = 16, 2, 128, 4096
@@ -78,3 +84,39 @@ def test_query_lengths_skip_padding_without_changing_live_rows(batch, length, ke
     for row, count in enumerate(lengths.tolist()):
         assert torch.equal(skipped[row, :, :count], full[row, :, :count])
         assert not skipped[row, :, count:].any()
+
+
+def test_packed_program_table_lists_each_rows_query_blocks():
+    per_block = PACKED_BLOCK_M // 8
+    blocks = packed_query_blocks([per_block + 1, 0, per_block], 8, capacity=6)
+    assert blocks == [0, 1, 2 * 65536, -1, -1, -1]
+    with pytest.raises(ValueError, match="more programs"):
+        packed_query_blocks([per_block + 1, 0, per_block], 8, capacity=2)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    ("batch", "length", "key_bucket"), [(4, 300, 2048), (3, 150, 1024), (5, 70, 512), (2, 373, 4096)]
+)
+@torch.inference_mode()
+def test_packed_queries_match_padded_live_rows_bitwise(batch, length, key_bucket):
+    query, key, value, position, layout, lengths = _inputs(batch, length, key_bucket, False, seed=length + 2)
+    lengths[-1] = 0
+    padded = gqa_split_kv_attention(query, key, value, position, key_bucket, query_lengths=lengths, **layout)
+    sizes = lengths.tolist()
+    starts = [0, *itertools.accumulate(sizes)][:-1]
+    tokens = sum(sizes) + 5
+    packed_query = query.new_zeros(1, HEADS, tokens, WIDTH)
+    for row, (start, size) in enumerate(zip(starts, sizes, strict=True)):
+        packed_query[0, :, start : start + size] = query[row, :, :size]
+    capacity = -(-tokens // (PACKED_BLOCK_M // (HEADS // KV_HEADS))) + batch
+    packing = (
+        torch.tensor(packed_query_blocks(sizes, HEADS // KV_HEADS, capacity)).cuda(),
+        torch.tensor(starts).cuda(),
+        torch.tensor([length]).cuda(),
+    )
+    packed = gqa_split_kv_attention(
+        packed_query, key, value, position, key_bucket, query_lengths=lengths, packed=packing, **layout
+    )
+    for row, (start, size) in enumerate(zip(starts, sizes, strict=True)):
+        assert torch.equal(packed[0, :, start : start + size], padded[row, :, :size])

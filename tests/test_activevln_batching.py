@@ -512,3 +512,64 @@ def test_single_partition_context_graph_alias_preserves_exact_forward_and_kv(bat
         runtime.use_cuda_graph = True
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         torch.testing.assert_close(actual_kv, runtime.storage, rtol=0, atol=0)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("batch,sizes", [(2, [173, 90]), (4, [150, 66, 120])])
+@torch.inference_mode()
+def test_packed_prefill_graph_matches_padded_rows_and_kv(batch, sizes):
+    from test_activevln import _Attention, _Text
+
+    policy = _policy()
+    policy.qwen.model = _Text(256)
+    for layer in policy._text.layers:
+        layer.self_attn = _Attention(256, heads=16, kv_heads=2)
+    policy.qwen.lm_head = torch.nn.Linear(256, 32, bias=False)
+    policy.qwen.config.text_config = SimpleNamespace(
+        num_key_value_heads=2, rope_scaling={"mrope_section": [2, 3, 3]}, rope_theta=1_000_000.0
+    )
+    policy.max_context = 1024
+    policy.to(device="cuda", dtype=torch.bfloat16)
+    runtime = policy.create_batched_runtime(
+        batch_size=batch,
+        workspace_tokens=1024,
+        kv_pool_tokens=batch * 1024,
+        cuda_graph=True,
+        fused_ops=True,
+        split_attention=True,
+        query_bucket_size=1,
+        attention_kernel="gqa",
+        skip_padded_queries=True,
+        packed_prefill=True,
+        packed_prefill_bucket=32,
+    )
+    query = max(sizes)
+    runtime._capture_packed_contexts(query, [512, 1024])
+    assert len(runtime.packed_graphs) == 2 * -(-batch * query // 32)
+    for past in ([37, 400, 9, 0][:batch], [5, 61, 0, 0][:batch]):
+        runtime._plan_rows(past, query, len(sizes))
+        runtime.storage.normal_()
+        original = runtime.storage.clone()
+        rows = [torch.randn(size, 256, device="cuda", dtype=torch.bfloat16) for size in sizes]
+        spans = [torch.arange(size, device="cuda") + offset for size, offset in zip(sizes, past)]
+        hidden = torch.zeros(batch, query, 256, device="cuda", dtype=torch.bfloat16)
+        positions = torch.zeros(3, batch, query, device="cuda", dtype=torch.long)
+        for row, (values, span) in enumerate(zip(rows, spans)):
+            hidden[row, : len(span)] = values
+            positions[:, row, : len(span)] = span
+        runtime.use_cuda_graph = False
+        written = sizes + [0] * (batch - len(sizes))
+        expected = runtime._forward(hidden, positions, past, write_lengths=written)
+        expected = expected[torch.arange(len(sizes)), [size - 1 for size in sizes]]
+        expected_kv = runtime.storage.clone()
+        runtime.storage.copy_(original)
+        runtime.use_cuda_graph = True
+        entry = runtime._packed_graph(sizes, query, past)
+        packed_positions = torch.cat(spans)[None].expand(3, -1)
+        actual = runtime._packed_forward(entry, torch.cat(rows), packed_positions, past, sizes, query)
+        spare = runtime._spare_start
+        torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
+        torch.testing.assert_close(
+            runtime.storage[..., :spare, :], expected_kv[..., :spare, :], rtol=2e-2, atol=2e-2
+        )
+        assert runtime.counters["prefill_packed"] >= 1

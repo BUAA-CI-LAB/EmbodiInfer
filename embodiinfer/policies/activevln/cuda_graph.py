@@ -377,7 +377,11 @@ class ActiveVLNGraphRuntime:
         cache_position: torch.Tensor,
         key_bucket: int,
         ancestors: torch.Tensor | None = None,
+        packed: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
+        """``packed`` = (blocks, starts, extent, slots) marks ``hidden`` as one row of
+        back-to-back turns for pooled GQA attention: the first three are the
+        kernel's packed query layout and ``slots`` each token's pooled KV index."""
         from .modeling_activevln import _mlp, _rmsnorm, apply_mrope, mrope_cos_sin
 
         policy = self.policy
@@ -450,7 +454,10 @@ class ActiveVLNGraphRuntime:
             v = project(attention.v_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
             q, k = rotary(q, k)
             key_cache, value_cache = self.storage[index].unbind(0)
-            if batch == 1 and not getattr(self, "ragged_batch", False):
+            if packed is not None:
+                key_cache.index_copy_(2, packed[3], k)
+                value_cache.index_copy_(2, packed[3], v)
+            elif batch == 1 and not getattr(self, "ragged_batch", False):
                 key_cache.index_copy_(2, indices[0], k)
                 value_cache.index_copy_(2, indices[0], v)
             elif hidden.is_cuda:
@@ -483,8 +490,10 @@ class ActiveVLNGraphRuntime:
                         gqa_split_kv_attention as split_kv_attention,
                     )
 
-                    if getattr(self, "skip_padded_queries", False):
+                    if getattr(self, "skip_padded_queries", False) or packed is not None:
                         extra["query_lengths"] = write_lengths
+                    if packed is not None:
+                        extra["packed"] = packed[:3]
                 else:
                     from ...backend.triton.split_attention import split_kv_attention
 

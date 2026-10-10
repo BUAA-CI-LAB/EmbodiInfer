@@ -9,6 +9,8 @@ bucket. Results differ from the per-head kernel only in reduction order.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 
 from .split_attention import _validate_layout_vectors
@@ -59,6 +61,9 @@ if triton is not None:
         Maxima,
         Sums,
         Output,
+        Blocks,
+        QueryStarts,
+        QueryExtent,
         sqb,
         sqh,
         sqm,
@@ -83,36 +88,55 @@ if triton is not None:
         ROW_POSITIONS: tl.constexpr,
         ROW_LENGTHS: tl.constexpr,
         PARTS: tl.constexpr,
+        PACKED: tl.constexpr,
         BM: tl.constexpr,
         BN: tl.constexpr,
     ):
         G: tl.constexpr = HQ // HK
-        packed = tl.program_id(0) * BM + tl.arange(0, BM)
-        group = tl.program_id(1)
         split = tl.program_id(2)
-        batch = group // HK
-        kvhead = group % HK
+        if PACKED:
+            # Each program takes one (row, query block) entry; -1 entries are idle.
+            entry = tl.load(Blocks + tl.program_id(0))
+            batch = tl.maximum(entry, 0) // 65536
+            first = (tl.maximum(entry, 0) % 65536) * BM
+            kvhead = tl.program_id(1)
+            nq = tl.load(QueryExtent)
+            token = tl.load(QueryStarts + batch)
+        else:
+            first = tl.program_id(0) * BM
+            group = tl.program_id(1)
+            batch = group // HK
+            kvhead = group % HK
+            nq = NQ
+        packed = first + tl.arange(0, BM)
         query = packed // G
         head = kvhead * G + packed % G
-        stored = query < NQ
+        stored = query < nq
         # Padded queries are written as zeros; live rows keep the exact
         # partition and reduction order of the unpadded launch.
-        rows = tl.load(Lengths + batch) if ROW_LENGTHS else NQ
+        rows = tl.load(Lengths + batch) if ROW_LENGTHS else nq
+        if PACKED:
+            rows = tl.where(entry >= 0, rows, 0)
         live = query < rows
         dim = tl.arange(0, D)
         past = tl.load(Position + (batch if ROW_POSITIONS else 0))
         cache_row = 0 if POOLED else batch
         cache_base = tl.load(Starts + batch) if POOLED else 0
         cache_capacity = tl.load(Capacities + batch) if POOLED else KB
-        extent = tl.minimum(cache_capacity, tl.minimum(KB, past + NQ))
+        extent = tl.minimum(cache_capacity, tl.minimum(KB, past + nq))
         chunk = tl.cdiv(tl.cdiv(extent, NS), BN) * BN
         begin = split * chunk
         end = tl.minimum(begin + chunk, extent)
         if ROW_LENGTHS:
-            end = tl.where(tl.program_id(0) * BM // G < rows, end, begin)
-        q = tl.load(
-            Q + batch * sqb + head[:, None] * sqh + query[:, None] * sqm + dim[None, :], live[:, None], 0
-        )
+            end = tl.where(first // G < rows, end, begin)
+        if PACKED:
+            q = tl.load(
+                Q + (token + query[:, None]) * sqm + head[:, None] * sqh + dim[None, :], live[:, None], 0
+            )
+        else:
+            q = tl.load(
+                Q + batch * sqb + head[:, None] * sqh + query[:, None] * sqm + dim[None, :], live[:, None], 0
+            )
         maximum = tl.full((BM,), -float("inf"), tl.float32)
         total = tl.zeros((BM,), tl.float32)
         acc = tl.zeros((BM, D), tl.float32)
@@ -152,16 +176,28 @@ if triton is not None:
             result = acc / total[:, None]
             if ROW_LENGTHS:
                 result = tl.where(live[:, None], result, 0.0)
-            tl.store(
-                Output + batch * sob + head[:, None] * soh + query[:, None] * som + dim[None, :],
-                result.to(Output.dtype.element_ty),
-                stored[:, None],
-            )
+            if PACKED:
+                tl.store(
+                    Output + (token + query[:, None]) * som + head[:, None] * soh + dim[None, :],
+                    result.to(Output.dtype.element_ty),
+                    live[:, None],
+                )
+            else:
+                tl.store(
+                    Output + batch * sob + head[:, None] * soh + query[:, None] * som + dim[None, :],
+                    result.to(Output.dtype.element_ty),
+                    stored[:, None],
+                )
         else:
             if ROW_LENGTHS:
                 maximum = tl.where(live, maximum, 0.0)
                 total = tl.where(live, total, 1.0)
-            base = ((batch * HQ + head) * NS + split) * NQ + query
+            if PACKED:
+                # A row's last block must not spill into the next row's tokens.
+                base = ((token + query) * HQ + head) * NS + split
+                stored = live
+            else:
+                base = ((batch * HQ + head) * NS + split) * NQ + query
             tl.store(Partial + base[:, None] * D + dim[None, :], acc, stored[:, None])
             tl.store(Maxima + base, maximum, stored)
             tl.store(Sums + base, total, stored)
@@ -180,11 +216,12 @@ if triton is not None:
         NS: tl.constexpr,
         D: tl.constexpr,
         BS: tl.constexpr,
+        PACKED: tl.constexpr,
     ):
         row, bh = tl.program_id(0), tl.program_id(1)
         split = tl.arange(0, BS)
         dim = tl.arange(0, D)
-        base = (bh * NS + split) * NQ + row
+        base = (row * HQ + bh) * NS + split if PACKED else (bh * NS + split) * NQ + row
         maximum = tl.load(Maxima + base, split < NS, -float("inf"))
         total = tl.load(Sums + base, split < NS, 0.0)
         global_max = tl.max(maximum, 0)
@@ -192,10 +229,13 @@ if triton is not None:
         weights = tl.where(split < NS, weights, 0.0)
         numerator = tl.load(Partial + base[:, None] * D + dim[None, :], split[:, None] < NS, 0.0)
         result = tl.sum(numerator * weights[:, None], 0) / tl.sum(total * weights, 0)
-        tl.store(
-            Output + (bh // HQ) * sob + (bh % HQ) * soh + row * som + dim,
-            result.to(Output.dtype.element_ty),
-        )
+        if PACKED:
+            tl.store(Output + row * som + bh * soh + dim, result.to(Output.dtype.element_ty))
+        else:
+            tl.store(
+                Output + (bh // HQ) * sob + (bh % HQ) * soh + row * som + dim,
+                result.to(Output.dtype.element_ty),
+            )
 
 
 def gqa_launch_config(rows: int, key_bucket: int) -> tuple[int, int, int, int, int]:
@@ -213,6 +253,26 @@ def gqa_launch_config(rows: int, key_bucket: int) -> tuple[int, int, int, int, i
     return block_m, block_n, warps, stages, max(1, min(splits, key_bucket // 512))
 
 
+# Packed launches reuse the plan of padded launches with at least this many rows.
+PACKED_MIN_ROWS = 513
+PACKED_BLOCK_M = gqa_launch_config(PACKED_MIN_ROWS, 512)[0]
+
+
+def packed_query_blocks(lengths: Sequence[int], group: int, capacity: int) -> list[int]:
+    """Program table of a packed launch.
+
+    One entry, row * 65536 + block, per block of ``PACKED_BLOCK_M // group``
+    queries of each row, then -1 (idle) up to ``capacity`` entries.
+    """
+    per_block = PACKED_BLOCK_M // group
+    blocks = [
+        row * 65536 + block for row, size in enumerate(lengths) for block in range(-(-size // per_block))
+    ]
+    if len(blocks) > capacity:
+        raise ValueError("packed queries need more programs than the table holds")
+    return blocks + [-1] * (capacity - len(blocks))
+
+
 def gqa_split_kv_attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -225,6 +285,7 @@ def gqa_split_kv_attention(
     cache_starts: torch.Tensor | None = None,
     cache_capacities: torch.Tensor | None = None,
     query_lengths: torch.Tensor | None = None,
+    packed: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
     splits: int | None = None,
     block_m: int | None = None,
     block_n: int | None = None,
@@ -237,6 +298,14 @@ def gqa_split_kv_attention(
     head merge need no copy. With ``query_lengths`` (one count per row),
     queries at or past a row's count return zeros and skip work in whole
     blocks; every other output is bitwise unchanged.
+
+    ``packed`` = (blocks, starts, extent) lays the rows' queries back to back
+    in one [1, heads, tokens, width] query: ``blocks`` is the program table of
+    ``packed_query_blocks``, ``starts`` each row's first token and ``extent``
+    one device integer, the padded query length. With pooled KV and
+    ``query_lengths``, every live query then equals the padded launch of that
+    length bit for bit, provided length x group >= ``PACKED_MIN_ROWS``; other
+    tokens are unspecified.
     """
     if triton is None:
         raise RuntimeError("split KV attention requires Triton")
@@ -246,6 +315,21 @@ def gqa_split_kv_attention(
         raise ValueError("split KV attention is inference-only")
     batch, heads, length, width = query.shape
     pooled = cache_starts is not None
+    if packed is not None:
+        blocks, starts, extent = packed
+        if (
+            batch != 1
+            or not pooled
+            or query_lengths is None
+            or ancestors is not None
+            or blocks.ndim != 1
+            or blocks.dtype != torch.long
+            or extent.numel() != 1
+            or starts.shape != query_lengths.shape
+            or any(t.device != query.device or not t.is_contiguous() for t in packed)
+        ):
+            raise ValueError("packed queries need one pooled causal batch with per-row lengths")
+        batch = starts.shape[0]
     _validate_layout_vectors(batch, query.device, cache_starts, cache_capacities, None)
     if probability_parts not in (1, 2, 3) or width < 16 or width & (width - 1):
         raise ValueError("unsupported probability decomposition or head width")
@@ -254,7 +338,8 @@ def gqa_split_kv_attention(
         or key.shape[0] != (1 if pooled else batch)
         or key.shape[-1] != width
         or heads % key.shape[1]
-        or not length <= key_bucket <= key.shape[-2]
+        or key_bucket > key.shape[-2]
+        or (packed is None and length > key_bucket)
         or any(t.device != query.device or t.dtype != query.dtype for t in (key, value))
         or any(t.stride(-1) != 1 for t in (query, key, value))
     ):
@@ -282,21 +367,29 @@ def gqa_split_kv_attention(
         raise ValueError("query_lengths must be one contiguous device integer per batch row")
     kv_heads = key.shape[1]
     rows = length * (heads // kv_heads)
-    plan = gqa_launch_config(rows, key_bucket)
+    plan = gqa_launch_config(rows if packed is None else PACKED_MIN_ROWS, key_bucket)
     block_m = block_m or plan[0]
     block_n = block_n or plan[1]
     num_warps = num_warps or plan[2]
     num_stages = num_stages or plan[3]
     splits = splits or plan[4]
-    row_blocks = triton.cdiv(rows, block_m)
-    output = torch.empty((batch, length, heads, width), device=query.device, dtype=query.dtype)
+    if packed is not None and block_m != PACKED_BLOCK_M:
+        raise ValueError("packed program tables assume PACKED_BLOCK_M rows per program")
+    if packed is None:
+        grid = (triton.cdiv(rows, block_m), batch * kv_heads, splits)
+        output = torch.empty((batch, length, heads, width), device=query.device, dtype=query.dtype)
+        partial_shape = (batch * heads, splits, length, width)
+    else:
+        grid = (packed[0].numel(), kv_heads, splits)
+        output = torch.empty((1, length, heads, width), device=query.device, dtype=query.dtype)
+        partial_shape = (length, heads, splits, width)
     if splits > 1:
-        partial = query.new_empty((batch * heads, splits, length, width), dtype=torch.float32)
+        partial = query.new_empty(partial_shape, dtype=torch.float32)
         maxima = torch.empty(partial.shape[:-1], device=query.device, dtype=torch.float32)
         sums = torch.empty_like(maxima)
     else:
         partial = maxima = sums = output
-    _gqa_partials[(row_blocks, batch * kv_heads, splits)](
+    _gqa_partials[grid](
         query,
         key,
         value,
@@ -309,6 +402,7 @@ def gqa_split_kv_attention(
         maxima,
         sums,
         output,
+        *((position,) * 3 if packed is None else packed),
         *query.stride()[:3],
         *key.stride()[:3],
         *value.stride()[:3],
@@ -327,13 +421,14 @@ def gqa_split_kv_attention(
         position.numel() != 1,
         query_lengths is not None,
         probability_parts,
+        packed is not None,
         block_m,
         block_n,
         num_warps=num_warps,
         num_stages=num_stages,
     )
     if splits > 1:
-        _gqa_merge[(length, batch * heads)](
+        _gqa_merge[(length, heads if packed is not None else batch * heads)](
             partial,
             maxima,
             sums,
@@ -346,6 +441,7 @@ def gqa_split_kv_attention(
             splits,
             width,
             triton.next_power_of_2(splits),
+            packed is not None,
             num_warps=4,
         )
     return output.transpose(1, 2)
