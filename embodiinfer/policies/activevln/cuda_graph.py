@@ -413,6 +413,7 @@ class ActiveVLNGraphRuntime:
         def project(module: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
             return module(x)
 
+        project_qkv = None
         if ancestors is not None and self.tree_fp32_projection:
             from ...backend.torch.linear import linear_fp32_output
 
@@ -422,6 +423,24 @@ class ActiveVLNGraphRuntime:
             def mlp(module: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
                 gate, up = project(module.gate_proj, x), project(module.up_proj, x)
                 activated = rounded_swiglu(gate, up) if self.fused_ops else module.act_fn(gate) * up
+                return project(module.down_proj, activated)
+
+        elif getattr(self, "decode_linear", False):
+            from ...backend.triton.decode_linear import decode_linear, decode_qkv, decode_swiglu
+
+            def project(module: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
+                return decode_linear(x, module.weight, module.bias)
+
+            def project_qkv(attention: torch.nn.Module, x: torch.Tensor) -> list[torch.Tensor]:
+                projections = (attention.q_proj, attention.k_proj, attention.v_proj)
+                weights = [projection.weight for projection in projections]
+                return decode_qkv(x, weights, [projection.bias for projection in projections])
+
+            def mlp(module: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
+                if self.fused_ops:
+                    activated = decode_swiglu(x, module.gate_proj.weight, module.up_proj.weight)
+                else:
+                    activated = module.act_fn(project(module.gate_proj, x)) * project(module.up_proj, x)
                 return project(module.down_proj, activated)
 
         batch, query_length = hidden.shape[:2]
@@ -449,9 +468,15 @@ class ActiveVLNGraphRuntime:
             residual = hidden
             h = norm(layer.input_layernorm, hidden)
             attention = layer.self_attn
-            q = project(attention.q_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
-            k = project(attention.k_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
-            v = project(attention.v_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
+            if project_qkv is None:
+                q = project(attention.q_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
+                k = project(attention.k_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
+                v = project(attention.v_proj, h).view(batch, query_length, -1, head_dim).transpose(1, 2)
+            else:
+                q, k, v = (
+                    part.view(batch, query_length, -1, head_dim).transpose(1, 2)
+                    for part in project_qkv(attention, h)
+                )
             q, k = rotary(q, k)
             key_cache, value_cache = self.storage[index].unbind(0)
             if packed is not None:
