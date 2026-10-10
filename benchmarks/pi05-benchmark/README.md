@@ -2,8 +2,8 @@
 
 ## ccinfer 算子迁移的验证入口
 
-新实现通过 `Pi05OptimizationConfig` 显式启用。现有结果表对应原先的配置，
-不能作为迁移后延迟。先使用保持原 attention/MLP 的 BF16 配置：
+新实现通过 `Pi05OptimizationConfig` 显式启用。本次迁移结果见下文三平台验证；
+其后的历史实验使用各自独立口径。候选算子验证可使用保持原 attention/MLP 的 BF16 配置：
 
 ```json
 {
@@ -42,11 +42,13 @@ CUDA_HOME=/path/to/cuda .venv/bin/python compare_recorded.py \
 脚本保存完整归一化/物理动作和逐请求误差，不会自动宣称通过。依次检查
 K/V-only（`norm_fusion: false`）、严格融合、alternative attention 和 paired GEMM；
 保持权重、dtype、输入/noise、horizon 和去噪步一致。Thor/Spark paired-GEMM profile
-限制为匹配 GPU、标准模型尺寸、B1、checkpoint horizon=10、10-step。
+限制为匹配 GPU、标准模型尺寸、B1、推理 horizon=10、10-step。
 
-FP8/NVFP4 为逐 action 层的校准配置，要求本地 checkpoint SHA256 和
-`gelu_pytorch_tanh` 语义。ccinfer/RLinf 的 exact GELU 配方不能复用；当前没有
-随代码提供已通过真实权重/任务质量验证的新配方。NVFP4 需要 Blackwell，
+FP8/NVFP4 可分别配置 `prefix_layers` 和 `action_layers`，每层独立选择 gate/up
+与 down 的精度；空配置保持该 tower 为 BF16。要求本地 checkpoint SHA256 和
+匹配的 activation/numerics 语义。默认 LeRobot 使用 `gelu_pytorch_tanh`，不能直接
+复用 ccinfer 的 exact GELU scale。完整 RLinf profile 和冻结配方见下一节。
+NVFP4 需要 Blackwell，
 mixed GEMM 需要 Torch 2.13 的 `scaled_mm` API；新路径支持 CUDA Graph，暂不组合
 Inductor、全局量化或 TP。配置与安装要求见
 [模型文档](../../docs/en/models.md#opt-in-fused-operators)。
@@ -56,10 +58,328 @@ Inductor、全局量化或 TP。配置与安装要求见
 `{"normalization": "torch", "quantization": "torch", "gelu_mul": "torch", "norm_quant": null}`
 选择参考路径。CUDA residual/norm/quant 融合需要 CUDA norm 与 quantizer 配套，
 参考组合使用 `norm_quant: null` 进行分开执行。硬件 tile/tail 参数归 Triton backend。
+Torch quantizer 仅支持 FP8；NVFP4 的分开执行对照使用 Torch normalization/GELU、
+CUDA quantizer 与原生 GEMM，不能将其描述为纯 Torch NVFP4 实现。
 
 本地验证包括 4090 上的严格算子逐位检查、FP8 完整 10-step graph、更新输入、
 graph eviction/capture failure、refit 失效及参数身份保持。它们使用小型模型，
 不作为 LeRobot 全模型延迟或任务质量结果。NVFP4 正向检查需在 Blackwell 执行。
+
+### PR 加速比的基线
+
+本次迁移的性能基线是加入 ccinfer 优化之前的 EmbodiInfer BF16，保留其原有
+Inductor、Triton attention、prefix/full-loop CUDA Graph 和缓存优化。使用 PR 前
+提交 `05d603714dd3dcb48c5210810847395da13272aa` 的独立源码目录及独立进程；
+基线不导入新增的 ops、`Pi05OptimizationConfig` 或修改后的 policy/runtime。
+沿用原 checkpoint 的 BF16 transformer 与 FP32 视觉/projector/norm/action/time
+精度区域，不额外改变基线 dtype。
+
+下文的 `migrated_rlinf_bf16` / “完整优化 BF16 runtime” 是候选配置。FP8/NVFP4
+相对它的加速只表示量化的额外收益；整个 PR 的加速比应计算为上述原 EmbodiInfer
+延迟除以候选延迟。RLinf profile 改变了视觉精度、GELU 和 time/RoPE 数值配置，性能对照需
+同时报告动作差异，不能自动视为无损优化。
+
+`compare_pre_migration.py` 对独立 checkout 进行计时，检查实际 package 导入路径，
+拒绝包含迁移实现的 baseline 目录，保存完整动作、实际配方、源码/权重/input 摘要
+和每次分段计时。B1/H10/完整十步，六条核验观测逐条预热三次，roundrobin 两轮
+各 30 次；`highest` 和允许 TF32 的 `high` 分别运行。两种角色使用同一 Python
+环境，示例中的 recipe 是随仓库提供的硬件对应配方：
+
+```bash
+python benchmarks/pi05-benchmark/compare_pre_migration.py \
+  --role baseline --source /reference/embodiinfer-before-pr \
+  --baseline-revision 05d603714dd3dcb48c5210810847395da13272aa \
+  --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
+  --matmul-precision highest --out runs/original-bf16-highest
+
+python benchmarks/pi05-benchmark/compare_pre_migration.py \
+  --role candidate --source /workspace/EmbodiInfer \
+  --recipe configs/pi05/rlinf_libero_thor_nvfp4_prefix_fp8_action.json \
+  --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
+  --matmul-precision highest --out runs/migrated-highest
+```
+
+### 原 EmbodiInfer BF16 与完整迁移的补测（2026-10-10）
+
+按上述独立源码/进程协议完成 Thor/Spark 补测，以下均为六观测、60 次请求的同步
+wall P50。加速比统一为 **原 EmbodiInfer BF16 wall P50 / 候选 wall P50**。
+原有 Inductor、Triton attention 和两个 CUDA Graph 在 baseline 中均开启；运行时
+检查所有 EmbodiInfer 模块来自冻结的 PR 前源码，未导入新增 optimization 模块。
+“原数值配置 BF16 ops”保留 LeRobot 原 dtype/GELU/time/RoPE；其余候选使用完整
+迁移的 RLinf profile。两组的 CUDA Graph 缓存计数在测量前后均不变，六观测输出
+均为有限值且重复逐位一致；这不是候选与原 baseline 逐位一致的声明。
+
+FP32 GEMM precision = `high`，baseline 保留原有的 TF32 选项：
+
+| 配置 | Thor ms | 相对原 BF16 | Spark ms | 相对原 BF16 |
+|---|---:|---:|---:|---:|
+| 原 EmbodiInfer BF16 / Inductor | 102.787 | 1.000× | 109.329 | 1.000× |
+| 原数值配置 BF16 ops | 93.468 | 1.100× | 109.098 | 1.002× |
+| 完整迁移 BF16 | 70.189 | 1.464× | 81.308 | 1.345× |
+| 完整迁移 / FP8 action | 63.494 | 1.619× | 75.744 | 1.443× |
+| 完整迁移 / NVFP4 prefix | 64.593 | 1.591× | 71.021 | 1.539× |
+| 完整迁移 / NVFP4 prefix + FP8 action | 58.054 | 1.771× | 65.758 | 1.663× |
+
+FP32 GEMM precision = `highest`，不与上一组交叉计算加速比：
+
+| 配置 | Thor ms | 相对原 BF16 | Spark ms | 相对原 BF16 |
+|---|---:|---:|---:|---:|
+| 原 EmbodiInfer BF16 / Inductor | 189.137 | 1.000× | 129.545 | 1.000× |
+| 原数值配置 BF16 ops | 178.819 | 1.058× | 129.791 | 0.998× |
+| 完整迁移 BF16 | 69.787 | 2.710× | 83.391 | 1.553× |
+| 完整迁移 / FP8 action | 63.056 | 2.999× | 75.342 | 1.719× |
+| 完整迁移 / NVFP4 prefix | 64.715 | 2.923× | 69.109 | 1.874× |
+| 完整迁移 / NVFP4 prefix + FP8 action | 58.025 | 3.260× | 65.038 | 1.992× |
+
+完整迁移的收益包含 BF16 视觉路径、camera batching、prefix/context 优化和数值
+profile 变化，不能全部归因于新增 kernel。分段计时中，`highest` 的 Thor BF16
+prefix 均值从 153.19 降至 35.79 ms，diffusion 从 35.95 降至 34.03 ms；Spark
+分别为 90.08 → 44.41 ms、39.28 → 38.61 ms。这只能定位到 prefix 阶段，尚未
+进一步分离其中视觉精度、布局和算子的贡献。
+
+相对同设备/precision 的原 BF16，六观测中完整迁移 BF16 的 full32 动作相对 L2
+最大值为 0.197–0.254%，组合低精度为 1.966–2.192%；LIBERO7 对应为
+0.177–0.240% / 1.944–2.170%。这些是归一化动作差异，没有任务成功率结论。
+原始动作、每次计时、实际导入文件清单、两份源码归档、launch 脚本及 SHA256
+清单保存在本地忽略目录 `runs/pr5-original-baseline-20261010/`，运行
+`collect_summary.py` 可重新计算全部对照。两轮在同一进程内连续测量，未据此
+估计独立运行的置信区间，也不将几个百分点的差异解释为稳定加速。
+
+## 完整 ccinfer 推理路径的直接对照（2026-10-10）
+
+此前仅迁入 kernel 与部分接线，且默认 LeRobot 使用 tanh GELU、FP32 视觉塔及
+不同 time/RoPE 精度；下文旧实验不能证明完整复现 ccinfer。现在新增显式
+`numerics="rlinf"` profile，补齐 BF16 视觉 encoder/projector、exact GELU、FP32
+time/RoPE、BF16 query prescaling、separate Q/K/V、BF16 down 矩阵布局、action
+arithmetic / prefix lookup GEGLU，以及 active-camera batching、prefix compaction、
+末层仅生成 K/V、action context 复用。既有 LeRobot 默认语义保持不变。
+
+Thor 与 Spark 使用相同 RLinf 权重和十条观测 fixture（SHA256 见下一节），
+B1、horizon=10、完整 10-step、FP32 matmul precision=`highest`。六条核验观测为
+1/2/4/5/7/8。FP8 使用 ccinfer 冻结的 8 组 BF16 保护选择及原 scale；NVFP4 prefix
+使用原 `calibration-v3.json` 的冻结范围，不重新校准或调整门限。参考直接加载
+冻结 ccinfer package；NVFP4 使用其原 MLP/NormQuant adapter 选择 prefix 精度，
+未替换参考 kernel。对应的独立部署 JSON 位于 `configs/pi05/rlinf_libero_*`。
+
+**两台设备的四种配置均逐位一致：** 每层有效 prefix K/V、每个 diffusion step
+的完整 32 维 velocity、最终动作、graph/eager，以及同一观测改用相反 noise 后的
+graph 回放均通过。原始 `all_byte_equal` 为 true。这里比较每种精度与 ccinfer 的
+对应配置，**不表示 FP8/NVFP4 与 BF16 等价，也不是新的 LIBERO 成功率实验**。
+
+准备好的 GPU 输入到完整动作，预热 3 次，首条核验观测测量 30 次；不包含 CPU
+预处理、H2D、加载、编译/capture 或机器人 I/O。数值检查覆盖六条观测，计时是
+固定形状请求。ccinfer 使用单个完整请求图；EmbodiInfer 使用 prefix 和完整 diffusion
+两个图。以下是同步 wall P50，P95 也保存在原始报告中；不将这组单轮计时用于
+证明两框架之间几个百分点的性能差异。
+
+| 配置 | Thor ccinfer ms | Thor 迁移后 ms | Spark ccinfer ms | Spark 迁移后 ms |
+|---|---:|---:|---:|---:|
+| 完整优化 BF16 runtime | 70.043 | 69.675 | 82.193 | 83.513 |
+| BF16 prefix / 受保护 FP8 action | 63.020 | 63.265 | 74.471 | 75.978 |
+| NVFP4 prefix / BF16 action | 64.740 | 64.656 | 70.010 | 69.628 |
+| NVFP4 prefix / 受保护 FP8 action | 58.090 | 58.022 | 64.395 | 63.899 |
+
+**以下仅为量化的额外加速，参照是同一设备、同一 RLinf profile 的迁移后 BF16，
+不是整个 PR 相对原 EmbodiInfer 的加速。**
+该基线已经启用 BF16 视觉 encoder/projector、融合算子、attention 优化、context
+复用及 CUDA Graph；表中的低精度只用于指定的 prefix/action 投影，视觉塔仍为 BF16。
+加速比为 `BF16 wall P50 / 配置 wall P50`，延迟降幅为 `1 - 配置 wall P50 / BF16 wall P50`：
+
+| 配置 | Thor 加速比 | Thor 延迟降幅 | Spark 加速比 | Spark 延迟降幅 |
+|---|---:|---:|---:|---:|
+| BF16 prefix / 受保护 FP8 action | 1.10× | 9.2% | 1.10× | 9.0% |
+| NVFP4 prefix / BF16 action | 1.08× | 7.2% | 1.20× | 16.6% |
+| NVFP4 prefix / 受保护 FP8 action | 1.20× | 16.7% | 1.31× | 23.5% |
+
+与同精度 ccinfer 相比，迁移后延迟差约在 ±2% 内；本轮证明性能基本保留，不能据此
+宣称迁移本身带来显著加速。下文 Thor 178.68 ms / Spark 132.20 ms 是首轮迁移的
+`paired_flash` 候选，已启用新增 norm/MLP/attention ops；原有 `existing_inductor`
+对照是 189.02 / 131.11 ms，`optimization: null`。这四个旧数值均为六观测的 GPU
+elapsed 均值，本表是首条观测的同步 wall P50；数值 profile 也不同，不能直接相除
+宣称无损 kernel 加速。整个 PR 的基线及独立 checkout 对照方法见上一节。
+
+环境沿用下文 Thor/Spark 的 Python 3.12、Torch 2.13、Triton 3.7.1、TF 5.3 和
+LeRobot 0.5.1。最终算子/CUDA Graph 回归两台各为 87 passed、1 个按架构跳过；
+本机相关 CPU 回归 71 passed、47 个按硬件/依赖跳过。额外全套检查为 505 passed、
+101 skipped、4 个环境失败：本机缺少三个已安装 CLI 脚本及 Transformers。
+Orin 不支持本次原生 FP8/NVFP4 profile，保留原 BF16 路径。
+
+复现时使用独立空闲设备、匹配依赖和原冻结 ccinfer checkout：
+
+```bash
+PYTHONPATH=. CUDA_HOME=/usr/local/cuda python benchmarks/pi05-benchmark/compare_ccinfer.py \
+  --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
+  --ccinfer-source /reference/ccinfer --recipe /reference/ccinfer/configs/pi05/libero_thor_fp8.json \
+  --prefix-calibration /reference/calibration-v3.json \
+  --modes bf16 fp8 prefix_nvfp4 combined --warmup 3 --iterations 30 \
+  --out runs/new-complete-comparison
+```
+
+Spark 使用对应原配方。脚本保存输入/权重/双方源码摘要、配方、逐层/逐步误差、
+完整 tensor、graph 检查和每次计时；任一逐位核验失败时返回非零。部署代码没有
+ccinfer 依赖。完整证据在本地忽略目录 `runs/pr5-complete-migration-20261010/`。
+后续章节为不同数值语义/源码阶段的历史实验，保留原结论和条件。
+
+## 三平台迁移验证（2026-10-10）
+
+验证源码基于 `8555ef48ee2901f2e70193e2c441916629612510`，另加 query-major
+的旧版 BMM API capability 检查。三台机器使用同一份真实 RLinf-Pi05-LIBERO-SFT
+权重，812 个 tensor 严格映射到 LeRobot adapter；权重 SHA256 为
+`4616e4c1966a5fb063b442ea5d69857f45e873222d839b794634d87d252ab9e7`。
+这不是历史实验中的 LeRobot-SFT 权重。执行语义保持当前 adapter 的 tanh GELU、
+原 RoPE 与原生 dtype，**不验证 RLinf/JAX 对齐或任务成功率**。
+
+统一 B1、完整 10 个去噪步，两个真实 224×224 相机和一个 masked 空相机。
+从 LIBERO-10 每任务首段首帧取得十条真实观测；0/3/6/9 用于量化校准，其余六条
+用于核验。输入 fixture SHA256 为
+`264f9cc39cc9500c815095215ff3905a1ebf2973670795a1caad7d5285e60a2c`。
+图像数值先按 BF16 舍入，再以 FP32 存入共享 fixture；三台设备读取同一份数据。
+噪声由 NumPy `default_rng(1000 + observation_index)` 生成，三设备一致。
+每条核验观测预热两次，随后 roundrobin 计时 30 次；CUDA Event 覆盖视觉/前缀
+和全部 diffusion，**不含 CPU 预处理、输入传输、动作后处理、加载、编译或预热**。
+这些结果不是机器人请求端到端延迟，也不与下文 1,600 帧实验混用。
+
+模型保留 BF16 文本/action transformer，以及 FP32 视觉塔、projector、norm、
+action/time 投影等原生精度区域。`highest` / `high` 是 Torch FP32 GEMM precision；
+后者允许 TF32，包含该组的 FP32-tensor 参考。两组分别比较，未统一将视觉塔转成 BF16。
+Thor/Spark 为 Python 3.12、Torch 2.13.0（分别 cu132/cu130）、Triton 3.7.1、
+Transformers 5.3.0、LeRobot 0.5.1。Thor/Orin 均为 MAXN mode 0，未修改时钟/功耗设置。
+Orin 的完整模型使用已有 Python 3.12、Torch 2.6.0/cu128、Triton 3.2.0 容器及
+相同模型依赖；**Torch 低于 LeRobot 声明的最低版本，因此属于旧环境兼容实测，
+不是受支持环境认证**。主机 Torch 2.8/cu126 另行验证算子，未混入模型延迟。
+
+### 性能对照
+
+以下延迟为 GPU elapsed 均值。`existing_inductor` 未启用迁移配方；“新路径”已经
+使用迁入的 ops，不能用它充当原 EmbodiInfer BF16 基线。
+
+FP32 GEMM precision = `highest`
+
+| 设备 | Horizon | 原 Inductor ms | 新路径 ms | 延迟降低 |
+|---|---:|---:|---:|---:|
+| AGX Thor | 10 | 189.02 | 178.68 | +5.47% |
+| AGX Thor | 50 | 205.59 | 202.05 | +1.72% |
+| DGX Spark | 10 | 131.11 | 132.20 | -0.83% |
+| DGX Spark | 50 | 135.19 | 143.65 | -6.26% |
+| AGX Orin | 10 | 525.08 | 532.62 | -1.44% |
+| AGX Orin | 50 | 558.82 | 540.74 | +3.23% |
+
+FP32 GEMM precision = `high`（允许 TF32）
+
+| 设备 | Horizon | 原 Inductor ms | 新路径 ms | 延迟降低 |
+|---|---:|---:|---:|---:|
+| AGX Thor | 10 | 103.08 | 93.25 | +9.53% |
+| AGX Thor | 50 | 119.81 | 116.43 | +2.82% |
+| DGX Spark | 10 | 109.39 | 110.48 | -1.00% |
+| DGX Spark | 50 | 113.16 | 121.66 | -7.51% |
+| AGX Orin | 10 | 363.41 | 373.38 | -2.74% |
+| AGX Orin | 50 | 399.62 | 381.51 | +4.53% |
+
+`existing_inductor` 是原有 Inductor + 原 Triton attention + prefix/full-loop
+CUDA Graph；新路径也开启 graphs，但不组合 Inductor。新路径在 H10 的 Thor/Spark
+使用 `paired_flash`，其余使用 `folded_flash`。H10 是显式改变推理 horizon，
+不是把默认 H50 的动作截断；checkpoint 名义 horizon 仍为 50。
+单组 30 次测量不能证明跨进程稳定收益，约几个百分点的差异需进一步复测。
+Spark 上原有 Inductor 更优，不能把相对 native SDPA 的收益宣称为超越原有最佳路径。
+
+### 正确性与限制
+
+在查看优化候选输出前，按每条观测的 native BF16 与同 precision 的 FP32-tensor
+参考差异冻结门限：max-abs / RMSE 各取两倍，下限 `1e-4` / `1e-5`。保存全部
+32 维归一化动作，数值门限检查 LIBERO 的前七维。K/V-only 在三台设备的全部
+32 维输出均逐位一致；所列 BF16 路径通过六条门限检查，重复输出逐位一致，
+计时前后图缓存数量保持不变。融合 norm/MLP 与 alternative attention 的完整模型
+输出存在浮点差异，不能称为逐位无损，也不能据此推断任务成功率。
+
+Orin 本地 FP32 模型遇到大块 CUDA 分配失败；后续运行复用对应 Thor run 的
+FP32 参考，逐项核对权重/input hash、horizon、B、steps、noise 和 matmul precision。
+已有 H10 的 Orin/Thor FP32 参考在全部 32 维最大差异为 `1.49e-6`；更换参考未改变
+Orin 的 BF16 baseline 输出。原始失败日志保留，未将失败尝试计入性能表。
+
+统一 action-MLP FP8 在 Thor/Spark 分别仅通过 2/6、1/6 条核验，最大误差
+0.02301/0.02279；NVFP4 均为 0/6，最大误差 0.04663/0.04528。校准固定使用四条
+独立观测和 10% headroom，未按候选结果调整门限。**这些配方不推荐部署**。
+该实验量化全部 action MLP，与 ccinfer 保护八组敏感投影的 FP8 配置、以及
+NVFP4 prefix / BF16 action 实验范围不同，不能据此判断迁移后无法运行低精度。
+Orin 不具备本实现要求的 FP8/NVFP4 原生 GEMM 能力。硬件 profile 未覆盖 Orin 的
+paired GEMM，query-major 在其 Torch 2.6 模型环境中因 BMM API 缺失明确不可用。
+
+首轮 attention/operator 回归：Thor/Spark 各 73 passed、1 skipped；Orin 主机
+70 passed、4 skipped；Orin 模型容器 68 passed、6 skipped。可选能力按实际硬件/API
+跳过，包含 NVFP4、scaled_mm 和旧版 query-major；不是把未执行的能力记为通过。
+
+### 低精度范围补测
+
+初次迁移遗漏了 prefix 精度配置；现已补齐 `prefix_layers`，并与 `action_layers`
+独立选择。原有全局 `quantization` 在这些实验中为 `None`，且 policy 会在加载前
+拒绝它与 `optimizations` 同时开启；没有观察到旧量化参与执行，因此没有删除它。
+源码对照中，迁入的 FP8 缩放、NVFP4 编码与 native GEMM 格式保持 ccinfer 实现。
+
+补测固定 B1/H10/完整十步、`highest`、相同权重/input/noise 和原冻结门限。
+FP8 复用 ccinfer Thor/Spark 各自冻结的八组 BF16 保护选择（28/36 组 FP8），
+全部激活范围按当前 adapter 的四条独立观测重新校准；不复用旧 scale，
+也不按六条核验结果调整保护选择。NVFP4 只量化 prefix MLP，action 保持 BF16。
+当前 adapter 执行全部 18 层 prefix MLP；ccinfer 省略最后一层不影响输出的 MLP，
+因此其历史计时仍不是本补测的直接 baseline。
+
+| 配置 | Thor 通过数 | Thor 最大动作差 | Spark 通过数 | Spark 最大动作差 |
+|---|---:|---:|---:|---:|
+| 受保护 action FP8 | 5/6 | 0.008395 | 5/6 | 0.012037 |
+| prefix NVFP4 / action BF16 | 0/6 | 0.083918 | 0/6 | 0.062972 |
+
+二者均可执行完整 CUDA Graph，重复动作逐元素一致，计时期间图缓存稳定。
+CUDA 融合与分开执行对照的完整 32 维动作在两台设备上均逐位一致；FP8 使用
+Torch norm/GELU/encoder 对照，NVFP4 使用 Torch norm/GELU 与同一 CUDA encoder/GEMM。
+后者只能排除 pointwise 融合带来的额外误差，不能视为独立 NVFP4 编码器验证。
+本轮 native BF16 动作与同设备首轮 baseline 也逐位一致。
+
+**能够运行低精度、通过算子迁移回归、通过数值门限是不同结论。** 补测配方仍未
+全部通过门限，未作为默认或部署推荐。ccinfer 历史 NVFP4 实验本身有约 1.5–2.0%
+的连续动作相对 L2 P95，并发生闭环成功状态变化；其“可运行”不表示 BF16 等价。
+此外，两份模型的 GELU 和视觉精度不同，旧配方的校准/评测规模也不同。
+本次补测没有重跑闭环任务质量实验。
+
+补齐后的回归在 Thor/Spark 各为 80 passed、1 skipped，包含 prefix/action
+FP8/NVFP4 图回放、NVFP4 分开执行对照、组合 prefix NVFP4/action FP8，以及 refit 失效。
+原始报告、冻结格式选择、重新校准配方和环境记录保存在
+`runs/pr5-lowp-audit-20261010/`。Spark 首次选择 Torch 4-bit encoder 的显式失败
+单独保留；有效 NVFP4 分开执行对照来自 `lowp-prefix-reference-v1`，未覆盖失败报告。
+
+### 复跑与报告
+
+在仓库根目录及匹配的隔离环境执行，先准备兼容的 checkpoint JSON、完整 tokenizer
+和真实权重。不要改用缩小词表或随机输入：
+
+```bash
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export CUDA_HOME=/path/to/cuda
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+python benchmarks/pi05-benchmark/validate_optimizations.py \
+  --checkpoint /models/pi05 --dataset /data/libero/libero_10 \
+  --inputs /data/pi05-recorded.pt --export
+python benchmarks/pi05-benchmark/validate_optimizations.py \
+  --checkpoint /models/pi05 --inputs /data/pi05-recorded.pt \
+  --out /reports/pi05-h50-high --horizon 50 --matmul-precision high \
+  --warmup 2 --iterations 30 --modes native strict folded_flash existing_inductor
+```
+
+分别以 `--matmul-precision highest` 和 `high` 运行。H10 使用 `--horizon 10`，
+在对应 Thor/Spark 上可增加 `paired` / `paired_flash`；`fp8` / `nvfp4` 会用独立
+校准观测生成本次配方并保留失败结果。小内存设备可指定
+`--fp32-reference /reports/matching-thor-run`，脚本会验证兼容性并记录外部参考 hash。
+设置 CUDA_HOME，并为 Inductor 提供匹配 Python 开发头文件；Spark 本次通过独立
+CPATH 提供头文件，未修改原环境。
+
+补测可追加 `--precision-map /recipes/guarded-action-fp8.json` 或
+`--precision-map /recipes/prefix-nvfp4.json`。文件内 `action_layers` / `prefix_layers`
+各为 18 条只含 `gate_up` / `down` 格式选择的列表；脚本拒绝传入旧激活范围，
+使用独立校准观测重新采集，并另存 checkpoint-bound `*-recipe.json`。
+文件名作为模式名，多个映射可在同一进程中比较；对照算子可通过 `operators` 指定。
+
+原始 JSON、完整动作、逐样本门限、分段/墙钟时间、环境 spec/ledger 与 SHA256
+清单位于 `runs/pr5-multigpu-20261010/`；该目录按 benchmark 约定被 Git 忽略。
+`summary.json` 明确选用成功的复测轮次，`report.md` 为汇总；先前的依赖/分配器失败
+另行保留，不回填成成功结果。保留基准 commit 源码快照、兼容性补丁和实际执行的 benchmark 摘要；新报告还记录源码树 hash。
 
 ## 实验方法
 

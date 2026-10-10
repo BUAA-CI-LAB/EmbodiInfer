@@ -49,7 +49,13 @@ from ...types import Observation
 from ..base import FlowVLAPolicy, VLAPolicy
 from ..config import VLAPolicyConfig
 from ..factory import register_policy
-from .embeddings import attention_mask_4d, make_attention_mask, rope_tables, time_embedding
+from .embeddings import (
+    attention_mask_4d,
+    make_attention_mask,
+    rlinf_time_embedding,
+    rope_tables,
+    time_embedding,
+)
 from .optimization_config import Pi05OptimizationConfig
 from .processor_pi05 import Pi05Batch
 
@@ -305,6 +311,7 @@ def _mlp(
     use_triton: bool = False,
     *,
     fuse_projections: bool = True,
+    approximate: str = "tanh",
 ) -> torch.Tensor:
     if fuse_projections:
         gate, up = _fused_linear_pair(x, mlp.gate_proj, mlp.up_proj)
@@ -313,13 +320,16 @@ def _mlp(
         # LeRobot's eager path, this preserves its rounding on selectively cast
         # (e.g. bf16) checkpoints.
         gate, up = mlp.gate_proj(x), mlp.up_proj(x)
-    if use_triton:
+    if use_triton and approximate == "tanh":
         from ...backend.triton.activation import gated_gelu
 
         activated = gated_gelu(gate, up)
     else:
-        fn = _inference_helper(_gated_gelu_impl, use_inductor)
-        activated = fn(gate, up)
+        if approximate == "none":
+            activated = F.gelu(gate) * up
+        else:
+            fn = _inference_helper(_gated_gelu_impl, use_inductor)
+            activated = fn(gate, up)
     return mlp.down_proj(activated)
 
 
@@ -458,6 +468,8 @@ class Pi05Policy(FlowVLAPolicy):
                 )
             if denoise_attention != "sdpa" or prefix_attention != "sdpa":
                 raise ValueError("Select migrated attention through optimizations.attention")
+            if optimizations.numerics == "rlinf" and not native_embeddings:
+                raise ValueError("RLinf numerics require native_embeddings=True")
         self._optimization_config = optimizations
         self._fused_ops = None
         self._optimization_recipe_stale = False
@@ -491,6 +503,8 @@ class Pi05Policy(FlowVLAPolicy):
         self._native_attention = None
         self._make_att_2d_masks = make_attention_mask if native_embeddings else make_att_2d_masks
         self._sinusoidal = time_embedding if native_embeddings else create_sinusoidal_pos_embedding
+        if optimizations is not None and optimizations.numerics == "rlinf":
+            self._sinusoidal = rlinf_time_embedding
         # cached static suffix att-mask ([1, 0, ..., 0], input-independent) so the
         # denoise step avoids lerobot's ``torch.tensor(pylist)`` (a host->device op
         # that CUDA-graph capture forbids); see ``_embed_suffix``.
@@ -549,6 +563,9 @@ class Pi05Policy(FlowVLAPolicy):
 
     def _embed_image(self, image: torch.Tensor) -> torch.Tensor:
         """VVLA SigLIP forward over loaded weights, without HF model forwards."""
+        operators = self._get_optimizations()
+        if operators is not None and operators.config.numerics == "rlinf":
+            return operators.embed_image(image)
         pg = self._m.paligemma_with_expert.paligemma.model
         vision = pg.vision_tower.vision_model
         emb = vision.embeddings
@@ -576,8 +593,11 @@ class Pi05Policy(FlowVLAPolicy):
 
     def _embed_prefix(self, batch: Pi05Batch):
         embs, pads = [], []
-        for image, mask in zip(batch.images, batch.img_masks, strict=True):
-            h = self._embed_image(image)
+        config = getattr(self, "_optimization_config", None)
+        batched = config is not None and config.batch_cameras and self._native_enabled()
+        encoded = self._embed_image(torch.cat(batch.images)).split(batch.batch_size) if batched else None
+        for index, (image, mask) in enumerate(zip(batch.images, batch.img_masks, strict=True)):
+            h = encoded[index] if encoded is not None else self._embed_image(image)
             embs.append(h)
             pads.append(mask[:, None].expand(h.shape[:2]))
         embedding = self._prefix_tower.embed_tokens
@@ -604,7 +624,11 @@ class Pi05Policy(FlowVLAPolicy):
     def _get_optimizations(self) -> Pi05Optimizations | None:
         """Prepare instance-local CUDA operators lazily after engine placement."""
         config = getattr(self, "_optimization_config", None)
-        if config is None or not self._native_enabled():
+        if config is None:
+            return None
+        if not self._native_enabled():
+            if config.numerics == "rlinf":
+                raise RuntimeError("RLinf numerics require CUDA native inference in eval/no-grad mode")
             return None
         if self._optimization_recipe_stale:
             raise RuntimeError(
@@ -712,14 +736,17 @@ class Pi05Policy(FlowVLAPolicy):
         # Keep the eager reference's individual GEMMs.  Fusing Q/K/V changes
         # the reduction shape and therefore the rounding of the eager parity
         # path for low-precision checkpoints.
-        if self.attention == "eager":
+        rlinf = operators is not None and operators.config.numerics == "rlinf"
+        if self.attention == "eager" or rlinf:
             q, k, v = attn.q_proj(h), attn.k_proj(h), attn.v_proj(h)
         else:
             q, k, v = _fused_qkv(attn, h)
         q = q.view(B, S, -1, hd).transpose(1, 2)  # [B, n_head, S, hd]
         k = k.view(B, S, -1, hd).transpose(1, 2)  # [B, n_kv, S, hd]
         v = v.view(B, S, -1, hd).transpose(1, 2)
-        if native_expert and q.dtype in (torch.bfloat16, torch.float16):
+        if rlinf:
+            q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
+        elif native_expert and q.dtype in (torch.bfloat16, torch.float16):
             from ...backend.triton.rotary import rotate_qk
 
             q, k = rotate_qk(q, k, cos, sin)
@@ -747,8 +774,12 @@ class Pi05Policy(FlowVLAPolicy):
             # inside the reusable query-major attention backend.
             if mask is not None and mask.dtype != torch.bool:
                 mask = mask == 0
-            out = operators.attention.attend(q, k, v, attn_mask=mask, scaling=attn.scaling)
+            if rlinf:
+                q = q * hd**-0.5
+            out = operators.attention.attend(q, k, v, attn_mask=mask, scaling=1.0 if rlinf else attn.scaling)
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
+        if rlinf:
+            return attn.o_proj(operators.reference_attention(q, k, v, mask).transpose(1, 2).reshape(B, S, -1))
         if native_prefix:
             # Prefix preparation supplies a shared key mask; masked query outputs are unused.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
@@ -772,6 +803,7 @@ class Pi05Policy(FlowVLAPolicy):
         modulations=None,
         native_prefix=False,
         operators=None,
+        cache_only=False,
     ):
         # Run the tower in its parameters' dtype. Under a selectively-cast
         # backbone (e.g. openpi's bf16-with-fp32-norms regime) the embeddings /
@@ -785,15 +817,31 @@ class Pi05Policy(FlowVLAPolicy):
             else entry_projection.weight.dtype
         )
         hidden = hidden.to(entry_dtype)
-        cos, sin = (
-            rope_tables(tower.rotary_emb, hidden, position_ids)
-            if self.native_embeddings
-            else tower.rotary_emb(hidden, position_ids)
-        )
+        context = None if operators is None else operators.action_context
+        if context is not None and tower is self._expert_tower:
+            cos, sin = context[2:]
+        elif operators is not None and operators.config.numerics == "rlinf":
+            cos, sin = operators.rotary_tables(position_ids, tower.layers[0].self_attn.head_dim)
+        else:
+            cos, sin = (
+                rope_tables(tower.rotary_emb, hidden, position_ids)
+                if self.native_embeddings
+                else tower.rotary_emb(hidden, position_ids)
+            )
         if operators is not None:
             with torch.cuda.device(hidden.device):
                 return operators.tower_forward(
-                    tower, hidden, cos, sin, mask, adarms_cond, prefix_kv, collect, modulations, native_prefix
+                    tower,
+                    hidden,
+                    cos,
+                    sin,
+                    mask,
+                    adarms_cond,
+                    prefix_kv,
+                    collect,
+                    modulations,
+                    native_prefix,
+                    cache_only=cache_only,
                 )
         collected: list | None = [] if collect else None
         fused = modulations is not None and hidden.dtype in (torch.bfloat16, torch.float16)
@@ -865,6 +913,9 @@ class Pi05Policy(FlowVLAPolicy):
     # ---- stage 1: encode prefix (once) --------------------------------------
     def encode_prefix(self, batch: Pi05Batch, return_hidden: bool = False) -> Pi05Prefix:
         """Encode one observation, using the optional PI0.5 compact-layout runtime."""
+        config = getattr(self, "_optimization_config", None)
+        if return_hidden and config is not None and config.numerics == "rlinf":
+            raise ValueError("RLinf compatibility profiles support inference without return_hidden")
         if self._native_enabled() and not return_hidden:
             self._prepare_native_attention()
             return self._runtime.encode(batch, return_hidden)
@@ -953,6 +1004,7 @@ class Pi05Policy(FlowVLAPolicy):
                 collect=True,
                 native_prefix=native_prefix,
                 operators=operators,
+                cache_only=operators is not None and operators.config.prefix_kv_only,
             )
         self._cached_prefix_meta = (prefix_pad_masks.shape[1], prefix_pad_masks.dtype, kv[0][0].dtype)
         return Pi05Prefix(
@@ -986,7 +1038,9 @@ class Pi05Policy(FlowVLAPolicy):
             self._cached_suffix_att = cached
         return cached[None, :]  # [1, suffix_len]; caller expands over batch
 
-    def _embed_suffix(self, x_t: torch.Tensor, t: torch.Tensor, *, skip_time: bool = False):
+    def _embed_suffix(
+        self, x_t: torch.Tensor, t: torch.Tensor, *, skip_time: bool = False, skip_mask: bool = False
+    ):
         """Re-implements lerobot ``embed_suffix`` exactly (same weight modules),
         but builds the static attention mask graph-safely. ``skip_time`` is only
         used after the native runtime has explicitly prepared a fixed schedule.
@@ -1008,6 +1062,8 @@ class Pi05Policy(FlowVLAPolicy):
             h = m.time_mlp_out(h)
             adarms_cond = F.silu(h)
         embs = action_emb  # suffix = action block only (state lives in the prefix)
+        if skip_mask:
+            return embs, None, None, adarms_cond
         B, suffix_len = embs.shape[:2]
         pad_masks = torch.ones(B, suffix_len, dtype=torch.bool, device=x_t.device)
         att_masks = self._suffix_att_masks(suffix_len, embs.dtype, x_t.device).expand(B, suffix_len)
@@ -1033,10 +1089,39 @@ class Pi05Policy(FlowVLAPolicy):
         self, x_t: torch.Tensor, t: torch.Tensor, prefix: Pi05Prefix, modulations=None
     ) -> torch.Tensor:
         m = self._m
+        operators = self._get_optimizations()
+        context = None if operators is None else operators.action_context
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self._embed_suffix(
-            x_t, t, skip_time=modulations is not None
+            x_t,
+            t,
+            skip_time=modulations is not None,
+            skip_mask=context is not None,
         )
 
+        if context is not None:
+            position_ids, mask4d = context[:2]
+        else:
+            position_ids, mask4d = self._action_context(prefix, suffix_pad_masks, suffix_att_masks)
+
+        hidden, _ = self._tower_forward(
+            self._expert_tower,
+            suffix_embs,
+            position_ids,
+            mask4d,
+            adarms_cond=adarms_cond,
+            prefix_kv=prefix.kv,
+            modulations=modulations,
+            operators=operators
+            if modulations is not None or (operators is not None and operators.config.numerics == "rlinf")
+            else None,
+        )
+        suffix_out = hidden[:, -m.config.chunk_size :].to(dtype=m.action_out_proj.weight.dtype)
+        return m.action_out_proj(suffix_out)
+
+    def _action_context(
+        self, prefix: Pi05Prefix, suffix_pad_masks: torch.Tensor, suffix_att_masks: torch.Tensor
+    ) -> tuple:
+        """Prepare prefix-dependent mask and positions once for a fixed schedule."""
         prefix_pad_masks = prefix.prefix_pad_masks
         batch_size, prefix_len = prefix_pad_masks.shape
         suffix_len = suffix_pad_masks.shape[1]
@@ -1049,21 +1134,7 @@ class Pi05Policy(FlowVLAPolicy):
         position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
         mask4d = None if prefix.all_valid else self._attention_mask_4d(full_att_2d)
 
-        hidden, _ = self._tower_forward(
-            self._expert_tower,
-            suffix_embs,
-            position_ids,
-            mask4d,
-            adarms_cond=adarms_cond,
-            prefix_kv=prefix.kv,
-            modulations=modulations,
-            operators=self._get_optimizations() if modulations is not None else None,
-        )
-        # LeRobot casts the suffix to fp32 before the action projection; match the
-        # projection weight dtype instead so a bf16 execution stays consistent
-        # (fp32 checkpoint -> no-op, so parity is unchanged).
-        suffix_out = hidden[:, -m.config.chunk_size :].to(dtype=m.action_out_proj.weight.dtype)
-        return m.action_out_proj(suffix_out)
+        return position_ids, mask4d
 
     # ---- CUDA-graph capability: static-shape denoise loop -------------------
     @property
@@ -1226,7 +1297,19 @@ def _build_pi05(
         ("action_horizon", native.chunk_size),
         ("default_num_steps", native.num_inference_steps),
     ):
-        if key in overrides and overrides[key] != value and key != "default_num_steps":
+        shorter_rlinf_horizon = (
+            key == "action_horizon"
+            and optimizations is not None
+            and optimizations.numerics == "rlinf"
+            and type(overrides.get(key)) is int
+            and 0 < overrides[key] <= value
+        )
+        if (
+            key in overrides
+            and overrides[key] != value
+            and key != "default_num_steps"
+            and not shorter_rlinf_horizon
+        ):
             raise ValueError(f"pi05 {key} override conflicts with checkpoint value {value}")
         setattr(cfg, key, overrides.get(key, value))
     return policy

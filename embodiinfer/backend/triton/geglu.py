@@ -320,6 +320,7 @@ class PairedGelu:
         if tail_m is not None and (tail_m < 16 or tail_m >= tile.m or tail_m & (tail_m - 1)):
             raise ValueError("Prefix tail rows must be a power of two smaller than the full tile")
         self.tile, self.tail_m = tile, tail_m
+        self.arithmetic = False
         codes = torch.arange(65536, device="cuda", dtype=torch.int32).to(torch.uint16)
         self.table = torch.nn.functional.gelu(codes.view(torch.bfloat16), approximate=approximate).view(
             torch.uint16
@@ -348,6 +349,27 @@ class PairedGeluPlan:
 
     def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
         """Use the prepared tile and optional smaller tail for the current matrix."""
+        if self.backend.arithmetic:
+            return dual_geglu(inputs, self.gate, self.up, self.backend.tile)
         return prefix_geglu(
             inputs, self.gate, self.up, self.backend.table, self.backend.tile, self.backend.tail_m
         )
+
+
+class ExactPairedGelu(PairedGelu):
+    """Exact arithmetic for small M, with the table/tail kernel for large M."""
+
+    def __init__(
+        self,
+        *,
+        approximate: str = "none",
+        large_m: bool = False,
+        tile: GemmTile | None = None,
+        tail_m: int | None = None,
+        profile: tuple[int, int] | None = None,
+    ) -> None:
+        """Select the original arithmetic/table split before preparing weights."""
+        if approximate != "none":
+            raise ValueError("Exact paired GEMMs require exact GELU")
+        super().__init__(approximate=approximate, large_m=large_m, tile=tile, tail_m=tail_m, profile=profile)
+        self.arithmetic = not large_m

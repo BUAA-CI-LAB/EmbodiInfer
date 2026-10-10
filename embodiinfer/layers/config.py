@@ -18,6 +18,7 @@ class OperatorBackends:
     norm_quant: str | None = "cuda_strict"
     paired_gelu: str = "triton_lookup"
     projection: str = "torch"
+    rotary: str = "torch"
 
     def __post_init__(self) -> None:
         """Validate names without importing optional backends or resolving devices."""

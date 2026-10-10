@@ -49,7 +49,9 @@ class PairedGeluBackend(Protocol):
 gelu_mul_backends = BackendRegistry[GeluMulBackend]("GELU/product/encoding")
 gelu_mul_backends.register_lazy("cuda", "embodiinfer.backend.cuda.activation", "GeluMulFusion")
 gelu_mul_backends.register_lazy("torch", "embodiinfer.backend.torch.activation", "TorchGeluMul")
+gelu_mul_backends.register_lazy("cuda_lookup", "embodiinfer.backend.cuda.gelu_lookup", "LookupGeluMul")
 
 paired_gelu_backends = BackendRegistry[PairedGeluBackend]("paired GELU projection")
 paired_gelu_backends.register_lazy("triton_lookup", "embodiinfer.backend.triton.geglu", "PairedGelu")
 paired_gelu_backends.register_lazy("torch", "embodiinfer.backend.torch.activation", "TorchPairedGelu")
+paired_gelu_backends.register_lazy("triton_exact", "embodiinfer.backend.triton.geglu", "ExactPairedGelu")

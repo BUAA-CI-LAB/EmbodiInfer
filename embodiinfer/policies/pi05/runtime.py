@@ -238,9 +238,22 @@ class Pi05Runtime:
         with self.lock:
             batch, all_valid = _compact_layout(batch)
             config = getattr(self.policy, "_optimization_config", None)
-            if config is not None and config.attention == "folded_flash" and not return_hidden:
-                batch = _compact_all_valid(batch)
-                all_valid = True
+            if (
+                config is not None
+                and (config.compact_prefix or config.attention == "folded_flash")
+                and not return_hidden
+            ):
+                columns = batch.masks.any(dim=0).nonzero().flatten()
+                batch = Pi05Batch(
+                    batch.images,
+                    batch.img_masks,
+                    batch.tokens.index_select(1, columns),
+                    batch.masks.index_select(1, columns),
+                    batch.request_ids,
+                )
+                all_valid = bool(batch.masks.all()) and all(bool(mask.all()) for mask in batch.img_masks)
+                if config.attention == "folded_flash" and not all_valid:
+                    raise ValueError("Folded FlashAttention requires all-valid compact prefix masks")
             if not self.policy.prefix_cuda_graph or return_hidden or batch.tokens.device.type != "cuda":
                 return self.policy._encode_prefix_impl(batch, return_hidden, all_valid=all_valid)
             key = (

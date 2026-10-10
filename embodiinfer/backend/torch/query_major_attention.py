@@ -29,7 +29,9 @@ class QueryMajorAttention:
 
     @staticmethod
     def capability() -> tuple[bool, str | None]:
-        """Require a supported Triton CUDA target."""
+        """Require FP32-output BF16 BMM and a supported Triton CUDA target."""
+        if "out_dtype" not in (torch.bmm.__doc__ or ""):
+            return False, "Query-major attention requires torch.bmm(out_dtype=torch.float32)"
         from ..triton.capability import triton_capability
 
         result = triton_capability()

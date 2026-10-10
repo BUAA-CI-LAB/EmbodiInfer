@@ -20,7 +20,7 @@ class MlpPlan:
     def __init__(
         self, runtime: Pi05Optimizations, module: Any, layer: ActionLayerPrecision, *, prefix: bool
     ) -> None:
-        """Pack only selected formats and preserve the adapter's tanh GELU."""
+        """Pack only selected formats and preserve the declared GELU contract."""
         self.runtime, self.module, self.layer, self.prefix = runtime, module, layer, prefix
         projections = (module.gate_proj, module.up_proj, module.down_proj)
         if any(
@@ -67,10 +67,10 @@ class MlpPlan:
         return self.project(inputs, self.gate.encode(inputs))
 
     def project(self, inputs: torch.Tensor, encoded: EncodedActivation | None) -> torch.Tensor:
-        """Fuse tanh GELU/product/down encoding after native selected-precision GEMMs."""
+        """Fuse the selected GELU/product/down encoding after native GEMMs."""
         gate, up = self.gate.apply(inputs, encoded), self.up.apply(inputs, encoded)
         if self.runtime.fusion is None:
-            hidden = F.gelu(gate, approximate="tanh") * up
+            hidden = F.gelu(gate, approximate=self.runtime.approximate) * up
             return self.down.apply(hidden, self.down.encode(hidden))
         matrix = gate.reshape(-1, gate.shape[-1]).contiguous()
         key = (tuple(matrix.shape), matrix.device, self.runtime.workspace_key(matrix.device))

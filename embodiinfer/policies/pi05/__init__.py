@@ -1,7 +1,7 @@
 """pi0.5 adapter (openpi / LeRobot PI05) -> embodiinfer ``VLAPolicy``."""
 
 from .modeling_pi05 import Pi05Policy
-from .optimization_config import ActionLayerPrecision, Pi05OptimizationConfig
+from .optimization_config import ActionLayerPrecision, MlpLayerPrecision, Pi05OptimizationConfig
 
 PI05_ACTION_SPACE = "pi05.action_chunk.v1"
 try:
@@ -19,6 +19,7 @@ __all__ = [
     "Pi05Policy",
     "Pi05OptimizationConfig",
     "ActionLayerPrecision",
+    "MlpLayerPrecision",
     "Pi05ServingAdapter",
     "Pi05ServingConfig",
     "PI05ServingAdapter",

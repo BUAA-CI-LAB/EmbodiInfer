@@ -13,8 +13,8 @@ from ...layers.quantization import Precision
 
 
 @dataclass(frozen=True)
-class ActionLayerPrecision:
-    """Calibrated gate/up and down formats for one action transformer layer."""
+class MlpLayerPrecision:
+    """Calibrated gate/up and down formats for one transformer MLP."""
 
     gate_up: Precision = "bf16"
     down: Precision = "bf16"
@@ -24,12 +24,16 @@ class ActionLayerPrecision:
     def __post_init__(self) -> None:
         """Reject invalid precision names and activation ranges before packing."""
         if any(value not in ("bf16", "fp8", "nvfp4") for value in (self.gate_up, self.down)):
-            raise ValueError("Action precision must be bf16, fp8 or nvfp4")
+            raise ValueError("MLP precision must be bf16, fp8 or nvfp4")
         if any(
             type(value) not in (int, float) or not math.isfinite(value) or value <= 0
             for value in (self.gate_up_max, self.down_max)
         ):
             raise ValueError("Activation maxima must be finite and positive")
+
+
+# Keep the original public name for existing action-only recipes and callers.
+ActionLayerPrecision = MlpLayerPrecision
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,8 @@ class Pi05OptimizationConfig:
     reuse. Paired GEMMs and alternative attention require explicit selection;
     they change floating-point accumulation. Hardware profiles originate from
     ccinfer measurements for B1/horizon10/10steps, not migrated performance claims.
-    Mixed recipes must be calibrated against this adapter's tanh GELU contract.
+    The default LeRobot contract uses tanh GELU. ``from_ccinfer_json`` explicitly
+    selects the complete RLinf inference contract, retaining its original scales.
     """
 
     hardware: Literal["thor", "spark"] | None = None
@@ -48,11 +53,17 @@ class Pi05OptimizationConfig:
     kv_workspace: bool = True
     fused_mlp: bool = False
     attention: Literal["reference", "query_major", "folded_flash"] = "reference"
-    action_layers: tuple[ActionLayerPrecision, ...] = ()
+    action_layers: tuple[MlpLayerPrecision, ...] = ()
     checkpoint_sha256: str | None = None
-    activation: Literal["gelu_pytorch_tanh"] = "gelu_pytorch_tanh"
+    activation: Literal["gelu_pytorch_tanh", "gelu_pytorch_exact"] = "gelu_pytorch_tanh"
     schema_version: int = 1
     operators: OperatorBackends = field(default_factory=OperatorBackends)
+    prefix_layers: tuple[MlpLayerPrecision, ...] = ()
+    numerics: Literal["lerobot", "rlinf"] = "lerobot"
+    batch_cameras: bool = False
+    compact_prefix: bool = False
+    prefix_kv_only: bool = False
+    reuse_action_context: bool = False
 
     def __post_init__(self) -> None:
         """Validate semantics and require a checkpoint-bound mixed precision recipe."""
@@ -62,19 +73,37 @@ class Pi05OptimizationConfig:
             or self.hardware not in (None, "thor", "spark")
         ):
             raise ValueError("Unsupported Pi05 optimization schema or hardware profile")
-        if self.activation != "gelu_pytorch_tanh":
-            raise ValueError("Pi05 optimizations must preserve the adapter's tanh GELU")
+        expected = {"lerobot": "gelu_pytorch_tanh", "rlinf": "gelu_pytorch_exact"}.get(self.numerics)
+        if expected is None or self.activation != expected:
+            raise ValueError("Pi05 numerics require the matching exact or tanh GELU contract")
         if not isinstance(self.operators, OperatorBackends):
             raise ValueError("operators must be an OperatorBackends configuration")
-        if any(type(value) is not bool for value in (self.norm_fusion, self.kv_workspace, self.fused_mlp)):
+        if any(
+            type(value) is not bool
+            for value in (
+                self.norm_fusion,
+                self.kv_workspace,
+                self.fused_mlp,
+                self.batch_cameras,
+                self.compact_prefix,
+                self.prefix_kv_only,
+                self.reuse_action_context,
+            )
+        ):
             raise ValueError("Pi05 optimization switches must be booleans")
         if self.attention not in ("reference", "query_major", "folded_flash"):
             raise ValueError("Unknown optimized attention implementation")
-        if not isinstance(self.action_layers, tuple) or any(
-            not isinstance(layer, ActionLayerPrecision) for layer in self.action_layers
+        for name in ("action_layers", "prefix_layers"):
+            layers = getattr(self, name)
+            if not isinstance(layers, tuple) or any(
+                not isinstance(layer, MlpLayerPrecision) for layer in layers
+            ):
+                raise ValueError(f"{name} must be a tuple of MlpLayerPrecision values")
+        if (
+            self.fused_mlp
+            and self.hardware is None
+            and self.operators.paired_gelu in ("triton_lookup", "triton_exact")
         ):
-            raise ValueError("action_layers must be a tuple of ActionLayerPrecision values")
-        if self.fused_mlp and self.hardware is None and self.operators.paired_gelu == "triton_lookup":
             raise ValueError("Paired GEMMs require an explicit Thor or Spark launch profile")
         if self.mixed_precision and self.checkpoint_sha256 is None:
             raise ValueError("Mixed precision requires a calibration checkpoint SHA256")
@@ -87,8 +116,11 @@ class Pi05OptimizationConfig:
 
     @property
     def mixed_precision(self) -> bool:
-        """Whether any action projection uses a calibrated low precision format."""
-        return any(layer.gate_up != "bf16" or layer.down != "bf16" for layer in self.action_layers)
+        """Whether either tower uses a calibrated low precision MLP format."""
+        return any(
+            layer.gate_up != "bf16" or layer.down != "bf16"
+            for layer in (*self.action_layers, *self.prefix_layers)
+        )
 
     @property
     def capability(self) -> tuple[int, int] | None:
@@ -97,17 +129,55 @@ class Pi05OptimizationConfig:
 
     @classmethod
     def from_json(cls, path: str | Path) -> Pi05OptimizationConfig:
-        """Load a standalone recipe, rejecting ccinfer's different activation contract."""
+        """Load a standalone recipe with an explicit activation/numerics contract."""
         values = json.loads(Path(path).read_text())
-        if not isinstance(values, dict) or values.get("activation") != "gelu_pytorch_tanh":
-            raise ValueError("Recipe must identify the EmbodiInfer tanh GELU calibration contract")
-        if "action_layers" in values:
-            values["action_layers"] = tuple(ActionLayerPrecision(**row) for row in values["action_layers"])
+        if not isinstance(values, dict) or values.get("activation") not in (
+            "gelu_pytorch_tanh",
+            "gelu_pytorch_exact",
+        ):
+            raise ValueError("Recipe must identify its exact or tanh GELU calibration contract")
+        for name in ("action_layers", "prefix_layers"):
+            if name in values:
+                values[name] = tuple(MlpLayerPrecision(**row) for row in values[name])
         if "operators" in values:
             if not isinstance(values["operators"], dict):
                 raise ValueError("operators must be a mapping of implementation names")
             values["operators"] = OperatorBackends(**values["operators"])
         return cls(**values)
+
+    @classmethod
+    def from_ccinfer_json(cls, path: str | Path) -> Pi05OptimizationConfig:
+        """Import a frozen ccinfer recipe with its complete inference contract.
+
+        This selects the original activation, precision, layout and hardware
+        operators. Scales are retained only for this matching contract; use
+        `from_json` for separately calibrated LeRobot recipes.
+        """
+        values = json.loads(Path(path).read_text())
+        allowed = {"hardware", "action_layers", "checkpoint_sha256", "schema_version"}
+        if not isinstance(values, dict) or set(values) - allowed:
+            raise ValueError("Expected a standalone ccinfer runtime recipe")
+        hardware = values.get("hardware")
+        if hardware not in ("thor", "spark"):
+            raise ValueError("A ccinfer recipe must select Thor or Spark")
+        values["action_layers"] = tuple(MlpLayerPrecision(**row) for row in values.get("action_layers", ()))
+        return cls(
+            **values,
+            numerics="rlinf",
+            activation="gelu_pytorch_exact",
+            fused_mlp=True,
+            batch_cameras=True,
+            compact_prefix=True,
+            prefix_kv_only=True,
+            reuse_action_context=True,
+            attention="folded_flash" if hardware == "thor" else "query_major",
+            operators=OperatorBackends(
+                paired_gelu="triton_exact",
+                projection="torch_matmul",
+                rotary="cuda",
+                gelu_mul="cuda_lookup" if hardware == "thor" else "cuda",
+            ),
+        )
 
     def to_json(self, path: str | Path) -> None:
         """Export deployment settings without benchmark or calibration dependencies."""

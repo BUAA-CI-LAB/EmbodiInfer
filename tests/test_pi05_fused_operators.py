@@ -1,5 +1,6 @@
 """Migration contracts for instance-local Pi05 fused operators."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +48,74 @@ def test_optimization_recipe_preserves_activation_contract(tmp_path):
 def test_optimization_config_rejects_invalid_contract(values):
     with pytest.raises(ValueError):
         Pi05OptimizationConfig(**values)
+
+
+def test_prefix_precision_is_checkpoint_bound_and_roundtrips(tmp_path):
+    from embodiinfer.policies.pi05 import MlpLayerPrecision
+
+    assert ActionLayerPrecision is MlpLayerPrecision
+    layers = (MlpLayerPrecision("nvfp4", "bf16", 3.0, 4.0),)
+    with pytest.raises(ValueError, match="checkpoint SHA256"):
+        Pi05OptimizationConfig(prefix_layers=layers)
+    config = Pi05OptimizationConfig(prefix_layers=layers, checkpoint_sha256="1" * 64)
+    assert config.mixed_precision and not config.action_layers
+    path = tmp_path / "prefix.json"
+    config.to_json(path)
+    assert Pi05OptimizationConfig.from_json(path) == config
+    with pytest.raises(ValueError, match="prefix_layers"):
+        Pi05OptimizationConfig(prefix_layers=[MlpLayerPrecision()])
+
+
+@pytest.mark.parametrize("hardware", ["thor", "spark"])
+def test_ccinfer_recipe_preserves_scales_and_complete_contract(tmp_path, hardware):
+    values = dict(
+        hardware=hardware,
+        action_layers=[dict(gate_up="fp8", down="nvfp4", gate_up_max=2.5, down_max=8.75)],
+        checkpoint_sha256="a" * 64,
+        schema_version=1,
+    )
+    path = tmp_path / "original.json"
+    path.write_text(json.dumps(values))
+    config = Pi05OptimizationConfig.from_ccinfer_json(path)
+    assert config.action_layers == (ActionLayerPrecision("fp8", "nvfp4", 2.5, 8.75),)
+    assert config.checkpoint_sha256 == values["checkpoint_sha256"]
+    assert config.numerics == "rlinf" and config.activation == "gelu_pytorch_exact"
+    assert all(
+        (config.batch_cameras, config.compact_prefix, config.prefix_kv_only, config.reuse_action_context)
+    )
+    assert config.operators.paired_gelu == "triton_exact"
+    assert config.operators.projection == "torch_matmul" and config.operators.rotary == "cuda"
+    assert config.attention == ("folded_flash" if hardware == "thor" else "query_major")
+    config.to_json(path)
+    assert Pi05OptimizationConfig.from_json(path) == config
+    with pytest.raises(ValueError, match="standalone ccinfer"):
+        Pi05OptimizationConfig.from_ccinfer_json(path)
+
+
+def test_rlinf_profile_rejects_silent_eager_fallback():
+    policy = SimpleNamespace(
+        _optimization_config=Pi05OptimizationConfig(numerics="rlinf", activation="gelu_pytorch_exact"),
+        _native_enabled=lambda: False,
+    )
+    with pytest.raises(RuntimeError, match="CUDA native inference"):
+        Pi05Policy._get_optimizations(policy)
+    policy._optimization_config = Pi05OptimizationConfig()
+    assert Pi05Policy._get_optimizations(policy) is None
+
+
+def test_half_width_rotary_rejects_invalid_inputs():
+    from embodiinfer.backend.torch.rotary import TorchRotary
+    from embodiinfer.policies.pi05.embeddings import rlinf_rope_tables
+
+    rotation = TorchRotary()
+    cosine, sine = rlinf_rope_tables(torch.tensor([[0, 1]]), 4)
+    x = torch.ones(1, 2, 3, 4, dtype=torch.bfloat16)
+    assert rotation(x, sine, cosine).dtype == torch.bfloat16
+    assert cosine.dtype == sine.dtype == torch.float32
+    with pytest.raises(ValueError, match="rank-four BF16"):
+        rotation(torch.tensor(1), sine, cosine)
+    with pytest.raises(ValueError, match="half-width factors"):
+        rotation(x, sine.bfloat16(), cosine)
 
 
 @pytest.mark.parametrize(
@@ -194,6 +263,11 @@ def test_fused_gelu_uses_tanh_and_preserves_product_rounding(bits):
 @pytest.mark.parametrize("name", ["query_major", "folded_flash"])
 def test_registered_attention_matches_mathematical_reference(name):
     from embodiinfer.layers import get_attention_backend
+    from embodiinfer.layers.attention import attention_backend_capability
+
+    available, reason = attention_backend_capability(name)
+    if not available:
+        pytest.skip(reason)
 
     torch.manual_seed(33)
     q = torch.randn(1, 8, 10, 64, device="cuda", dtype=torch.bfloat16)
@@ -317,6 +391,12 @@ def tiny_cuda_policy(config):
     [("reference", False), ("folded_flash", False), ("query_major", False), ("reference", True)],
 )
 def test_complete_native_graph_replays_changed_observations_and_owns_outputs(attention, paired_reference):
+    if attention != "reference":
+        from embodiinfer.layers.attention import attention_backend_capability
+
+        available, reason = attention_backend_capability(attention)
+        if not available:
+            pytest.skip(reason)
     torch.manual_seed(34)
     policy = tiny_cuda_policy(
         Pi05OptimizationConfig(
@@ -554,8 +634,101 @@ def test_native_nvfp4_epilogue_matches_separate_quantization():
 
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("precision,reference_ops", [("fp8", False), ("fp8", True), ("nvfp4", False)])
-def test_mixed_projection_full_loop_graph_and_refit_invalidation(tmp_path, precision, reference_ops):
+def test_rlinf_rotary_registry_preserves_reference_bytes():
+    from embodiinfer.layers import rotary_backends
+    from embodiinfer.policies.pi05.embeddings import rlinf_rope_tables
+
+    request = OperatorRequest("cuda", torch.bfloat16, cuda_graph=True)
+    reference = rotary_backends.get("torch", request)
+    migrated = rotary_backends.get("cuda", request)
+    inputs = torch.randn(2, 4, 10, 256, device="cuda", dtype=torch.bfloat16).transpose(1, 2)
+    cosine, sine = rlinf_rope_tables(torch.arange(10, device="cuda")[None].expand(2, -1), 256)
+    expected = reference(inputs, sine, cosine)
+    actual = migrated(inputs, sine, cosine)
+    assert torch.equal(actual.view(torch.uint8), expected.contiguous().view(torch.uint8))
+
+
+@pytest.mark.gpu
+def test_thor_lookup_nvfp4_epilogue_preserves_separate_encoder_bytes():
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("native NVFP4 requires Blackwell")
+    from embodiinfer.backend.cuda.gelu_lookup import LookupGeluMul
+    from embodiinfer.backend.cuda.quantization import CudaQuantizer
+
+    gate, up = (torch.randn(19, 1024, device="cuda", dtype=torch.bfloat16) for _ in range(2))
+    quantizer = CudaQuantizer()
+    hidden = F.gelu(gate) * up
+    expected = quantizer.plan(hidden, 4, 0.002).quantize(hidden)
+    actual = LookupGeluMul(quantizer).plan(gate, 4, 0.002).encode(gate, up)
+    assert torch.equal(actual.output, expected.output)
+    assert torch.equal(actual.blocked.view(torch.uint8), expected.blocked.view(torch.uint8))
+
+
+@pytest.mark.gpu
+def test_rlinf_cache_only_and_shared_context_preserve_graph_actions(monkeypatch):
+    from dataclasses import replace
+
+    from embodiinfer.policies.pi05.embeddings import rlinf_time_embedding
+
+    base = Pi05OptimizationConfig(
+        numerics="rlinf", activation="gelu_pytorch_exact", operators=OperatorBackends(rotary="cuda")
+    )
+    policy = tiny_cuda_policy(base)
+    policy._sinusoidal = rlinf_time_embedding
+    policy.prefix_cuda_graph = False
+    batch = Pi05Batch(
+        [torch.randn(1, 3, 8, 8, device="cuda")],
+        [torch.tensor([True], device="cuda")],
+        torch.tensor([[1, 2, 3]], device="cuda"),
+        torch.tensor([[True, False, True]], device="cuda"),
+    )
+    noise = torch.randn(1, 10, 8, device="cuda")
+    with torch.inference_mode():
+        reference_prefix = policy.encode_prefix(batch)
+        expected = policy._runtime.decode(noise, reference_prefix, 10, False)
+        policy._clear_inference_caches()
+        policy._optimization_config = replace(base, prefix_kv_only=True, reuse_action_context=True)
+
+        def unused(*_args, **_kwargs):
+            raise AssertionError("cache-only prefix executed the final MLP")
+
+        monkeypatch.setattr(policy._prefix_tower.layers[-1].mlp.gate_proj, "forward", unused)
+        prefix = policy.encode_prefix(batch)
+        for actual_kv, expected_kv in zip(prefix.kv, reference_prefix.kv, strict=True):
+            for actual, reference in zip(actual_kv, expected_kv, strict=True):
+                assert torch.equal(actual, reference)
+        calls = 0
+        original = policy._action_context
+
+        def count_context(*args):
+            nonlocal calls
+            calls += 1
+            return original(*args)
+
+        monkeypatch.setattr(policy, "_action_context", count_context)
+        assert torch.equal(policy._runtime.decode(noise, prefix, 10, False), expected)
+        assert calls == 1
+        assert policy._fused_ops.action_context is None
+        assert torch.equal(policy._runtime.decode(noise, prefix, 10, True), expected)
+        changed = noise.neg()
+        assert torch.equal(
+            policy._runtime.decode(changed, prefix, 10, True),
+            policy._runtime.decode(changed, prefix, 10, False),
+        )
+        policy._clear_inference_caches()
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    "tower,precision,reference_ops",
+    [
+        (tower, precision, reference_ops)
+        for tower in ("action", "prefix")
+        for precision, reference_ops in (("fp8", False), ("fp8", True), ("nvfp4", False), ("nvfp4", True))
+    ]
+    + [("both", "nvfp4", False)],
+)
+def test_mixed_projection_full_loop_graph_and_refit_invalidation(tmp_path, precision, reference_ops, tower):
     import hashlib
 
     if not hasattr(F, "scaled_mm"):
@@ -564,11 +737,20 @@ def test_mixed_projection_full_loop_graph_and_refit_invalidation(tmp_path, preci
         pytest.skip("native NVFP4 GEMM validation requires Blackwell")
     checkpoint = tmp_path / "model.safetensors"
     checkpoint.write_bytes(b"synthetic calibration checkpoint identity")
+    formats = {tower: precision} if tower != "both" else {"action": "fp8", "prefix": "nvfp4"}
     config = Pi05OptimizationConfig(
-        action_layers=(ActionLayerPrecision(precision, precision, 6.0, 4.0),) * 2,
+        **{
+            f"{scope}_layers": (ActionLayerPrecision(value, value, 6.0, 4.0),) * 2
+            for scope, value in formats.items()
+        },
         checkpoint_sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
         operators=(
-            OperatorBackends(normalization="torch", quantization="torch", gelu_mul="torch", norm_quant=None)
+            OperatorBackends(
+                normalization="torch",
+                quantization="torch" if precision == "fp8" else "cuda",
+                gelu_mul="torch",
+                norm_quant=None,
+            )
             if reference_ops
             else OperatorBackends()
         ),
@@ -590,10 +772,18 @@ def test_mixed_projection_full_loop_graph_and_refit_invalidation(tmp_path, preci
             actual = policy._runtime.decode(noise, prefix, 10, True)
             assert torch.isfinite(actual).all()
             assert torch.equal(actual, expected)
+        for scope, value in formats.items():
+            selected = policy._prefix_tower if scope == "prefix" else policy._expert_tower
+            assert all(
+                policy._fused_ops.mlp_plans[id(layer.mlp)].gate.precision == value
+                for layer in selected.layers
+            )
         if reference_ops:
             policy._clear_inference_caches()
             policy._optimization_config = Pi05OptimizationConfig(
-                action_layers=config.action_layers, checkpoint_sha256=config.checkpoint_sha256
+                action_layers=config.action_layers,
+                prefix_layers=config.prefix_layers,
+                checkpoint_sha256=config.checkpoint_sha256,
             )
             cuda_prefix = policy.encode_prefix(batch)
             cuda_output = policy._runtime.decode(noise, cuda_prefix, 10, True)

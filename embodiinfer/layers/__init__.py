@@ -30,12 +30,15 @@ from .quantization import (
     quantization_backends,
 )
 from .registry import BackendRegistry, OperatorCapabilities, OperatorRequest
+from .rotary import RotaryBackend, rotary_backends
 
 __all__ = [
     "BackendRegistry",
     "OperatorCapabilities",
     "OperatorRequest",
     "OperatorBackends",
+    "RotaryBackend",
+    "rotary_backends",
     "NormalizationBackend",
     "NormQuantBackend",
     "GeluMulBackend",

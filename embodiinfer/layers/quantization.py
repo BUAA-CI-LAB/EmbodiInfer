@@ -89,3 +89,6 @@ projection_backends = BackendRegistry[ProjectionBackend]("calibrated projection"
 projection_backends.register_lazy(
     "torch", "embodiinfer.backend.torch.projection", "CalibratedProjectionBackend"
 )
+projection_backends.register_lazy(
+    "torch_matmul", "embodiinfer.backend.torch.projection", "CalibratedMatmulBackend"
+)

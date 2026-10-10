@@ -220,8 +220,8 @@ OpenVLA-OFT's Llama, and so on — is not promoted there and stays in its
 
 ### Prepared operator interfaces
 
-`layers/normalization.py`, `activation.py` and `quantization.py` define reusable
-RMSNorm, residual/norm/encoding, GELU/product/encoding, paired projection and
+`layers/normalization.py`, `activation.py`, `rotary.py` and `quantization.py` define reusable
+RMSNorm, residual/norm/encoding, GELU/product/encoding, paired projection, FP32-factor rotary and
 calibrated projection contracts. Each has a lazy `BackendRegistry`, using
 `OperatorRequest` and `OperatorCapabilities` to check device, dtype, layout,
 encoding and CUDA Graph support before construction. Arithmetic declarations

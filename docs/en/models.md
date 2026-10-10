@@ -117,33 +117,68 @@ Set `norm_fusion=False` to test K/V storage alone using the existing normalizati
 
 The migrated Triton paired BF16 gate/up GEMMs (`fused_mlp=True`) require an explicit
 `hardware="thor"` or `"spark"` profile. These profiles require the matching SM110/SM121 device,
-standard 18-layer towers, B1, a checkpoint with horizon 10, and 10 denoise steps.
-They are ccinfer launch choices; no migrated full-model latency is claimed.
+standard 18-layer towers, B1, an inference horizon of 10, and 10 denoise steps.
+They are ccinfer launch choices; measurements for the migrated adapter are scoped
+in the [benchmark documentation](../../benchmarks/pi05-benchmark/README.md).
 `attention="query_major"` removes group-major Q/probability copies;
+it requires `torch.bmm(out_dtype=torch.float32)` and reports unavailable when
+the installed Torch lacks that API.
 `"folded_flash"` compacts the B1 prefix and folds small MQA queries for Flash SDPA.
 Both attention variants and paired GEMMs change accumulation and require a
 same-noise full-action comparison before deployment.
 
-An `action_layers` recipe can choose BF16, FP8 or NVFP4 independently for gate/up
-and down in each action layer. This uses fixed calibrated activation scales,
-shared gate/up encoding, residual/RMSNorm/encoding fusion, and a fused GELU × up ×
+The `prefix_layers` and `action_layers` recipes can choose BF16, FP8 or NVFP4
+independently for gate/up and down in each tower. Each populated tuple contains
+one `MlpLayerPrecision` per layer; an empty tuple keeps that tower in BF16.
+`ActionLayerPrecision` remains a compatibility alias. This supports NVFP4 prefix
+with BF16 action, or separately protected FP8 action groups. It uses fixed
+calibrated activation scales, shared gate/up encoding, residual/RMSNorm/encoding
+fusion, and a fused GELU × up ×
 encoding epilogue. Keep attention and action/time projections in their original
 precision. NVFP4 requires Blackwell; mixed GEMMs require the PyTorch 2.13 API.
 
-Recipes identify `activation="gelu_pytorch_tanh"` and the SHA256 of a local
-`model.safetensors`. EmbodiInfer preserves its existing tanh GELU and RoPE;
-ccinfer's exact-GELU calibration files cannot be reused. No calibrated deployment
-recipe is included. Refit clears derived weights/workspaces/graphs and rejects
+The default `numerics="lerobot"` identifies `activation="gelu_pytorch_tanh"`;
+recipes bind scales to the SHA256 of a local `model.safetensors`.
+This default retains LeRobot's existing activation, RoPE and vision precision.
+Refit clears derived weights/workspaces/graphs and rejects
 stale mixed precision calibration. These plans require native inference, TP=1,
 `compile_backend="none"`, no global quantization, and `EngineConfig(dtype="auto")`
 to preserve FP32 norm/action/time parameters. CUDA Graphs remain supported.
 The nested `operators: OperatorBackends` configuration selects registered norm,
-quantization, GELU epilogue, paired projection and projection implementations.
+quantization, GELU epilogue, paired projection, projection and rotary implementations.
 Torch reference implementations are available; choose `norm_quant=None` when
 using reference norm/quantization because the CUDA composite needs CUDA dependencies.
+The Torch quantizer supports FP8 only. For an NVFP4 pointwise reference, select
+Torch normalization/GELU with `quantization="cuda"` and `norm_quant=None`;
+the encoder and GEMM remain native CUDA.
 The Torch paired projection reference does not require a Thor/Spark launch profile.
 See [the API example](api.md#pi05-fused-operator-configuration) and
 [toolkit requirements](installation.md#pi05-fused-cuda-operators).
+
+**Complete RLinf/ccinfer inference profile.** Explicitly select `numerics="rlinf"`
+with `activation="gelu_pytorch_exact"`. This reproduces ccinfer's BF16 vision
+encoder/projector, FP32 patch/position/time/rotary math, BF16 query prescaling,
+separate Q/K/V, arithmetic action GEGLU, lookup prefix GEGLU and contiguous BF16
+down-projection layouts. It also enables camera batching, prefix compaction,
+last-prefix-block K/V-only execution, and shared action mask/position/rotary work.
+Select these switches through a complete recipe; `numerics` alone changes the
+numerical contract without automatically enabling every optimization.
+
+`Pi05OptimizationConfig.from_ccinfer_json(path)` imports an original production
+ccinfer recipe with unchanged scales and the complete profile. Portable, translated
+recipes live in `configs/pi05/rlinf_libero_{thor,spark}_fp8.json` and load with
+`from_json`. The `nvfp4_prefix` and `nvfp4_prefix_fp8_action` variants retain frozen
+experimental prefix scales. Each recipe requires its matching hardware and
+RLinf-Pi05-LIBERO-SFT weight hash. Set `native_embeddings=True`,
+`native_inference=True`, `prefix_cuda_graph=True`, `action_horizon=10` and
+`default_num_steps=10`; the factory allows this explicit shorter inference horizon
+while retaining checkpoint metadata (50 actions). Use CUDA eval/no-grad inference;
+training, logprob/hidden-state workflows and Inductor are outside this profile.
+On Thor and Spark, all four configurations matched ccinfer's retained K/V,
+ten velocities and full actions byte-for-byte on six recorded observations,
+including changed-noise graph replay. This establishes migration fidelity to each
+recipe; low precision still changes outputs relative to BF16. See the
+[measurement conditions and results](../../benchmarks/pi05-benchmark/README.md#完整-ccinfer-推理路径的直接对照2026-10-10).
 
 ### DM0.5
 

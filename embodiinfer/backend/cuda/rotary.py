@@ -4,11 +4,16 @@ import ctypes
 
 import torch
 
+from ...layers.registry import OperatorCapabilities
 from .native import build_library
 
 
 class RotaryKernel:
     """Rotate tensors on the current stream without changing any model globals."""
+
+    capabilities = OperatorCapabilities(
+        ("cuda",), (torch.bfloat16,), "fp32_rope_bf16_output", rank=4, minimum_sm=(8, 0)
+    )
 
     def __init__(self) -> None:
         """Load the architecture-specific rotation kernel outside graph capture."""

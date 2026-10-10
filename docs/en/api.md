@@ -129,11 +129,35 @@ the existing attention and MLP implementation. Select alternative attention,
 paired GEMMs or calibrated per-layer precision through the configuration; see
 [supported profiles and precision contracts](models.md#opt-in-fused-operators).
 `Pi05OptimizationConfig.from_json(path)` loads a standalone recipe;
-`config.to_json(path)` exports one. JSON must explicitly identify the
-`gelu_pytorch_tanh` activation contract. The existing demo accepts
+`config.to_json(path)` exports one. JSON must explicitly identify its
+matching GELU/numerics contract. The existing demo accepts
 `--optimizations /path/to/recipe.json`; use `--envs 1` for B1 profiles.
 Full-checkpoint parity and task quality remain deployment gates, including for
 the strict operator route; component parity alone does not establish them.
+
+For the complete RLinf/ccinfer inference profile on Thor:
+
+```python
+import torch
+
+torch.set_float32_matmul_precision("highest")
+options = Pi05OptimizationConfig.from_json("configs/pi05/rlinf_libero_thor_fp8.json")
+policy = make_policy(
+    "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
+    native_embeddings=True, native_inference=True, prefix_cuda_graph=True,
+    low_cpu_mem_usage=True, action_horizon=10, default_num_steps=10,
+    optimizations=options,
+)
+engine = EngineCore(
+    policy, EngineConfig(device="cuda", dtype="auto", use_cuda_graph=True, capture_full_loop=True),
+)
+```
+
+Use the Spark recipe on SM121. The `nvfp4_prefix` and
+`nvfp4_prefix_fp8_action` recipe variants reproduce the experimental mixed formats.
+`from_ccinfer_json(path)` imports the original action recipe and enables its
+complete inference profile without changing scales. These are explicitly RLinf
+inference semantics; they do not replace LeRobot's default or its rollout contract.
 
 Select or extend an implementation through the shared operator layer:
 

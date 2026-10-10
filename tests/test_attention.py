@@ -281,3 +281,17 @@ def test_sdpa_unknown_signature_uses_compatibility_path(monkeypatch):
     monkeypatch.setattr(attention_module.inspect, "signature", lambda _: (_ for _ in ()).throw(ValueError()))
     assert not attention_module._supports_gqa(lambda *args: None)
     assert attention_module._supports_gqa(torch_functional.scaled_dot_product_attention)
+
+
+@pytest.mark.parametrize("name", ["query_major", "query_major_cuda"])
+def test_query_major_rejects_missing_fp32_bmm_before_construction(monkeypatch, name):
+    from embodiinfer.backend.torch.query_major_attention import QueryMajorAttention
+
+    def legacy_bmm(input, mat2, *, out=None):
+        """bmm(input, mat2, *, out=None)."""
+        pytest.fail("Capability detection must not execute BMM")
+
+    monkeypatch.setattr(torch, "bmm", legacy_bmm)
+    monkeypatch.setattr(QueryMajorAttention, "__init__", lambda _: pytest.fail("constructed backend"))
+    with pytest.raises(RuntimeError, match="requires torch.bmm"):
+        get_attention_backend(name)

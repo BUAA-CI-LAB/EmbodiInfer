@@ -20,11 +20,13 @@ from ...layers import (
     paired_gelu_backends,
     projection_backends,
     quantization_backends,
+    rotary_backends,
 )
 from ...layers.activation import GeluMulBackend, PairedGeluBackend
 from ...layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
 from ...layers.quantization import ActivationQuantizer, ProjectionBackend
-from .optimization_config import ActionLayerPrecision, Pi05OptimizationConfig
+from .embeddings import rlinf_rope_tables, rope_tables
+from .optimization_config import MlpLayerPrecision, Pi05OptimizationConfig
 
 if TYPE_CHECKING:
     from .modeling_pi05 import Pi05Policy, Pi05Prefix
@@ -46,6 +48,9 @@ class Pi05Optimizations:
     def __init__(self, policy: Pi05Policy, config: Pi05OptimizationConfig) -> None:
         """Validate precision boundaries and prepare only selected CUDA operators."""
         self.policy, self.config = policy, config
+        self.approximate = "none" if config.activation == "gelu_pytorch_exact" else "tanh"
+        self.action_context = None
+        self.vision = None
         device = policy._m.action_in_proj.weight.device
         if device.type != "cuda":
             raise ValueError("Fused Pi05 inference requires CUDA")
@@ -63,12 +68,15 @@ class Pi05Optimizations:
                     parameter.dtype != torch.float32 for parameter in norm.parameters()
                 ):
                     raise ValueError("Strict fused RMSNorm requires eps=1e-6 and FP32 norm parameters")
-        if config.action_layers and len(config.action_layers) != len(policy._expert_tower.layers):
-            raise ValueError("Specify exactly one action precision pair per transformer layer")
-        if any("nvfp4" in (layer.gate_up, layer.down) for layer in config.action_layers) and (
+        for name, tower in (("action", policy._expert_tower), ("prefix", policy._prefix_tower)):
+            layers = getattr(config, f"{name}_layers")
+            if layers and len(layers) != len(tower.layers):
+                raise ValueError(f"Specify exactly one {name} precision pair per transformer layer")
+        precision_layers = (*config.action_layers, *config.prefix_layers)
+        if any("nvfp4" in (layer.gate_up, layer.down) for layer in precision_layers) and (
             torch.cuda.get_device_capability(device)[0] < 10
         ):
-            raise ValueError("NVFP4 action projections require a Blackwell CUDA device")
+            raise ValueError("NVFP4 MLP projections require a Blackwell CUDA device")
         if config.hardware is not None:
             for tower, width, intermediate in (
                 (policy._prefix_tower, 2048, 16384),
@@ -93,6 +101,7 @@ class Pi05Optimizations:
             raise RuntimeError("Calibrated mixed precision requires the scaled_mm API tested in PyTorch 2.13")
         selected = config.operators
         request = OperatorRequest(device, torch.bfloat16, cuda_graph=True)
+        self.rotary = rotary_backends.get(selected.rotary, request) if config.numerics == "rlinf" else None
         self.norm: NormalizationBackend | None = (
             normalization_backends.get(selected.normalization, request) if config.norm_fusion else None
         )
@@ -106,11 +115,11 @@ class Pi05Optimizations:
         if config.fused_mlp or config.mixed_precision:
             self.projection = projection_backends.get(selected.projection, request)
         if config.mixed_precision:
-            bits = 4 if any("nvfp4" in (layer.gate_up, layer.down) for layer in config.action_layers) else 8
+            bits = 4 if any("nvfp4" in (layer.gate_up, layer.down) for layer in precision_layers) else 8
             encoding_request = OperatorRequest(device, torch.bfloat16, bits=bits, cuda_graph=True)
             self.quantizer = quantization_backends.get(selected.quantization, encoding_request)
             self.fusion = gelu_mul_backends.get(
-                selected.gelu_mul, request, backend=self.quantizer, approximate="tanh"
+                selected.gelu_mul, request, backend=self.quantizer, approximate=self.approximate
             )
             if (
                 self.quantizer.capabilities.arithmetic != "rounded_bf16_encoding"
@@ -128,7 +137,7 @@ class Pi05Optimizations:
                 self.paired[prefix] = paired_gelu_backends.get(
                     selected.paired_gelu,
                     request,
-                    approximate="tanh",
+                    approximate=self.approximate,
                     profile=config.capability,
                     large_m=prefix,
                 )
@@ -145,6 +154,43 @@ class Pi05Optimizations:
         self.active_kv: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
         self.active_sources: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
         self._scope: int | None = None
+
+    def embed_image(self, image: torch.Tensor) -> torch.Tensor:
+        """Run the RLinf vision contract over controller-owned derived weights."""
+        if self.vision is None:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Warm vision weights before graph capture")
+            from .vision import SiglipPlan
+
+            self.vision = SiglipPlan(self.policy._m.paligemma_with_expert.paligemma.model)
+        return self.vision(image)
+
+    def rotary_tables(self, positions: torch.Tensor, width: int) -> tuple:
+        """Prepare the original half-width FP32 RLinf factors once per context."""
+        return rlinf_rope_tables(positions, width)
+
+    def rotate(self, inputs: torch.Tensor, cosine: torch.Tensor, sine: torch.Tensor) -> torch.Tensor:
+        """Adapt BHSD storage to the reusable BTNH rotary contract."""
+        return self.rotary(inputs.transpose(1, 2), sine, cosine).transpose(1, 2)
+
+    @staticmethod
+    def reference_attention(
+        query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor | None
+    ) -> torch.Tensor:
+        """Preserve RLinf's BF16 query scaling, FP32 scores and BF16 probabilities."""
+        batch, heads, length, width = query.shape
+        query = (
+            (query * width**-0.5)
+            .transpose(1, 2)
+            .reshape(batch, length, key.shape[1], heads // key.shape[1], width)
+        )
+        scores = torch.einsum("BTKGH,BSKH->BKGTS", query.float(), key.transpose(1, 2).float())
+        if mask is not None:
+            allowed = mask if mask.dtype == torch.bool else mask == 0
+            scores = torch.where(allowed[:, :, None], scores, -2.3819763e38)
+        probabilities = F.softmax(scores, dim=-1).to(value.dtype)
+        output = torch.einsum("BKGTS,BSKH->BTKGH", probabilities, value.transpose(1, 2))
+        return output.reshape(batch, length, heads, width).transpose(1, 2)
 
     def workspace_key(self, device: torch.device) -> tuple[str, int]:
         """Give captured executions independent storage and eager streams reusable storage."""
@@ -230,17 +276,17 @@ class Pi05Optimizations:
         if id(module) not in self.mlp_plans:
             if torch.cuda.is_current_stream_capturing():
                 raise RuntimeError("Prepare MLP weights before CUDA Graph capture")
-            layer = ActionLayerPrecision()
-            if expert and self.config.action_layers:
-                index = next(
-                    i for i, block in enumerate(self.policy._expert_tower.layers) if block.mlp is module
-                )
-                layer = self.config.action_layers[index]
+            layer = MlpLayerPrecision()
+            layers = self.config.action_layers if expert else self.config.prefix_layers
+            if layers:
+                tower = self.policy._expert_tower if expert else self.policy._prefix_tower
+                index = next(i for i, block in enumerate(tower.layers) if block.mlp is module)
+                layer = layers[index]
             self.mlp_plans[id(module)] = MlpPlan(self, module, layer, prefix=not expert)
         return self.mlp_plans[id(module)]
 
     def mlp(self, module: Any, inputs: torch.Tensor, *, expert: bool) -> torch.Tensor:
-        """Run paired BF16 GEMMs or checkpoint-calibrated projections with tanh GELU."""
+        """Run paired BF16 GEMMs or calibrated projections with the selected GELU."""
         return self._mlp_plan(module, expert=expert)(inputs)
 
     def quantized_residual_mlp(
@@ -251,10 +297,12 @@ class Pi05Optimizations:
         gate: torch.Tensor | None,
         modulation: torch.Tensor | None,
         module: Any,
+        *,
+        expert: bool = True,
     ) -> tuple:
-        """Fuse residual/RMSNorm/encoding when the action gate/up uses low precision."""
+        """Fuse residual/RMSNorm/encoding for a low precision gate/up in either tower."""
         # Resolve the immutable weight pack before selecting its activation encoder.
-        mlp = self._mlp_plan(module, expert=True)
+        mlp = self._mlp_plan(module, expert=expert)
         bits = 8 if mlp.gate.precision == "fp8" else 4
         scale = mlp.gate.maximum / (448 * (6 if bits == 4 else 1))
         key = (id(norm), tuple(inputs.shape), bits, scale, self.workspace_key(inputs.device))
@@ -285,6 +333,8 @@ class Pi05Optimizations:
         collect: bool,
         modulations: tuple | None,
         native_prefix: bool,
+        *,
+        cache_only: bool = False,
     ) -> tuple[torch.Tensor, list | None]:
         """Run the existing tower equations through selected operator plans."""
         from .modeling_pi05 import _gated_residual, _mlp
@@ -306,6 +356,23 @@ class Pi05Optimizations:
             normalized, gate = self.normalize(
                 layer.input_layernorm, hidden, affine(layer.input_layernorm, 2 * index), native=fused
             )
+            if cache_only and collect and not expert and index == len(tower.layers) - 1:
+                from .modeling_pi05 import _apply_rope, _fused_qkv
+
+                attn = layer.self_attn
+                if self.config.numerics == "rlinf" or self.policy.attention == "eager":
+                    key, value = attn.k_proj(normalized), attn.v_proj(normalized)
+                else:
+                    _, key, value = _fused_qkv(attn, normalized)
+                batch, length = normalized.shape[:2]
+                key, value = (x.view(batch, length, -1, attn.head_dim).transpose(1, 2) for x in (key, value))
+                key = (
+                    self.rotate(key, cos, sin)
+                    if self.config.numerics == "rlinf"
+                    else _apply_rope(key, key, cos, sin, False)[0]
+                )
+                collected.append((key, value))
+                return hidden, collected
             attended = self.policy._attn_sublayer(
                 layer.self_attn,
                 normalized,
@@ -319,14 +386,17 @@ class Pi05Optimizations:
                 operators=self,
             )
             modulation = affine(layer.post_attention_layernorm, 2 * index + 1)
-            precision = (
-                self.config.action_layers[index]
-                if expert and self.config.action_layers
-                else ActionLayerPrecision()
-            )
+            layers = self.config.action_layers if expert else self.config.prefix_layers
+            precision = layers[index] if layers else MlpLayerPrecision()
             if self.norm_quant is not None and precision.gate_up != "bf16":
                 hidden, update, gate = self.quantized_residual_mlp(
-                    layer.post_attention_layernorm, hidden, attended, gate, modulation, layer.mlp
+                    layer.post_attention_layernorm,
+                    hidden,
+                    attended,
+                    gate,
+                    modulation,
+                    layer.mlp,
+                    expert=expert,
                 )
             else:
                 hidden, normalized, gate = self.residual_normalize(
@@ -336,7 +406,12 @@ class Pi05Optimizations:
                     update = self.mlp(layer.mlp, normalized, expert=expert)
                 else:
                     update = _mlp(
-                        layer.mlp, normalized, False, fused, fuse_projections=self.policy.attention != "eager"
+                        layer.mlp,
+                        normalized,
+                        False,
+                        fused,
+                        fuse_projections=self.policy.attention != "eager" and self.config.numerics != "rlinf",
+                        approximate=self.approximate,
                     )
             hidden = _gated_residual(hidden, update, gate, False, fused)
         hidden, _ = self.normalize(tower.norm, hidden, affine(tower.norm, -1), native=fused)
@@ -344,6 +419,30 @@ class Pi05Optimizations:
 
     @contextmanager
     def decode_context(self, prefix: Pi05Prefix) -> Iterator[None]:
+        """Hoist prefix-dependent arithmetic and bind K/V storage for all steps."""
+        if getattr(self, "action_context", None) is not None:
+            raise RuntimeError("Pi05 action contexts cannot be nested")
+        if self.config.reuse_action_context:
+            batch, length = prefix.batch_size, self.policy.config.action_horizon
+            pad = torch.ones(batch, length, dtype=torch.bool, device=prefix.prefix_pad_masks.device)
+            groups = self.policy._suffix_att_masks(length, self.policy.execution_dtype, pad.device).expand(
+                batch, length
+            )
+            positions, mask = self.policy._action_context(prefix, pad, groups)
+            tower = self.policy._expert_tower
+            if self.config.numerics == "rlinf":
+                cosine, sine = self.rotary_tables(positions, tower.layers[0].self_attn.head_dim)
+            else:
+                cosine, sine = rope_tables(tower.rotary_emb, prefix.kv[0][0], positions)
+            self.action_context = positions, mask, cosine, sine
+        try:
+            with self._kv_context(prefix):
+                yield
+        finally:
+            self.action_context = None
+
+    @contextmanager
+    def _kv_context(self, prefix: Pi05Prefix) -> Iterator[None]:
         """Copy each read-only prefix once, then overwrite only suffix K/V slots."""
         if not self.config.kv_workspace:
             yield
@@ -405,3 +504,4 @@ class Pi05Optimizations:
         self.kv_buffers.clear()
         self.active_kv = None
         self.active_sources.clear()
+        self.action_context = self.vision = None

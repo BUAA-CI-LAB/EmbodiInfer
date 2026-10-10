@@ -1,7 +1,9 @@
 """Device-local BF16 GELU table and fused FP4 epilogues."""
 
 import ctypes
+from typing import Literal
 
+from ...layers.quantization import ActivationQuantizer
 from .activation import GeluMulFusion
 from .native import build_library
 
@@ -66,3 +68,15 @@ class GeluLookup:
             return self.original.cc_geglu_fp4(*args)
         mode = {"arithmetic": 0, "lookup": 1, "lookup_shared": 2}[self.mode]
         return self.library.cc_lookup_fp4(*args[:-2], self.table.data_ptr(), self.threads, mode, args[-1])
+
+
+class LookupGeluMul(GeluMulFusion):
+    """Calibrated epilogues with the measured 128-thread FP4 table launch."""
+
+    def __init__(
+        self, backend: ActivationQuantizer, *, approximate: Literal["none", "tanh"] = "none"
+    ) -> None:
+        """Keep the table and ABI adapter alive for every prepared epilogue."""
+        super().__init__(backend, approximate=approximate)
+        self.lookup = GeluLookup(self)
+        self.lookup.select("lookup", 128)

@@ -22,6 +22,8 @@ class Projection:
         precision: Precision,
         backend: ActivationQuantizer | None,
         workspace_key: Callable[[torch.device], WorkspaceKey] | None = None,
+        *,
+        contiguous_matmul: bool = False,
     ) -> None:
         """Preserve the validated weight quantizer and native GEMM layouts."""
         if precision not in ("bf16", "fp8", "nvfp4"):
@@ -39,6 +41,7 @@ class Projection:
             if torch.cuda.get_device_capability(weight.device) < minimum_sm:
                 raise ValueError(f"{precision} native GEMM requires SM {minimum_sm} or newer")
         self.precision, self.maximum, self.backend = precision, maximum, backend
+        self.contiguous_matmul, self.bf16_matrix = contiguous_matmul, None
         self.workspace_key = workspace_key or (
             lambda device: ("stream", torch.cuda.current_stream(device).cuda_stream)
         )
@@ -95,7 +98,14 @@ class Projection:
         shape = (*inputs.shape[:-1], self.output_dim)
         matrix = inputs.reshape(-1, inputs.shape[-1]).contiguous()
         if self.precision == "bf16":
-            output = F.linear(matrix, self.bf16_weight)
+            if self.contiguous_matmul:
+                if self.bf16_matrix is None:
+                    if self.device.type == "cuda" and torch.cuda.is_current_stream_capturing():
+                        raise RuntimeError("Warm contiguous BF16 weights before capture")
+                    self.bf16_matrix = self.bf16_weight.t().contiguous()
+                output = torch.matmul(matrix, self.bf16_matrix)
+            else:
+                output = F.linear(matrix, self.bf16_weight)
         elif self.precision == "fp8":
             output = F.scaled_mm(
                 encoded.output,
@@ -136,3 +146,18 @@ class CalibratedProjectionBackend:
     ) -> Projection:
         """Create weight packs and execution-scoped encoders before capture."""
         return Projection(weight, maximum, precision, quantizer, workspace_key)
+
+
+class CalibratedMatmulBackend(CalibratedProjectionBackend):
+    """Retain contiguous [input,output] matrices for BF16 native GEMMs."""
+
+    def plan(
+        self,
+        weight: torch.Tensor,
+        maximum: float,
+        precision: Precision,
+        quantizer: ActivationQuantizer | None,
+        workspace_key: Callable[[torch.device], WorkspaceKey],
+    ) -> Projection:
+        """Pack BF16 matrices on first warmup; calibrated GEMMs are unchanged."""
+        return Projection(weight, maximum, precision, quantizer, workspace_key, contiguous_matmul=True)
