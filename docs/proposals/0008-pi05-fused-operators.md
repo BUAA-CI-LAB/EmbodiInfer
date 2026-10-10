@@ -40,6 +40,10 @@ keyed by source, toolchain and device. Common calibrated projections live in
 `backend/torch/projection.py`. Paired-GEMM tile and tail choices belong to Triton;
 model dimensions and per-layer precision choices belong to Pi05.
 
+CUDA operator instances bind to their construction device. Plans reject inputs
+from another device, and each native launch selects that device and its current
+Torch stream, restoring the caller's device afterwards.
+
 A policy-local controller owns execution-scoped plans through these contracts.
 Each graph owns independent workspaces. Projection plans expose scope release;
 the runtime releases graphs before operator storage. Refit, training transitions
@@ -174,6 +178,9 @@ Native operators require a compatible CUDA toolkit and device instructions.
 NVFP4 requires Blackwell; Thor/Spark launch profiles cover B1/horizon10/ten steps
 and must not be generalized to other shapes or devices. The RLinf profile requires
 inference-only CUDA eval/no-grad execution and rejects training fallbacks.
+The native Pi05 decoder exposes only deterministic `ActionDecoder` capabilities;
+it does not advertise stochastic RL sampling or differentiable log-probability
+recomputation.
 Numerical drift and task quality require separate evaluation. Measured gains
 include vision precision and execution-profile changes as well as kernel fusion;
 the original-numerics comparison reports the narrower operator-only benefit.

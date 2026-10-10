@@ -3,6 +3,8 @@
 import ctypes
 from typing import Literal
 
+import torch
+
 from ...layers.quantization import ActivationQuantizer
 from .activation import GeluMulFusion
 from .native import build_library
@@ -14,7 +16,8 @@ class GeluLookup:
     def __init__(self, fusion: GeluMulFusion) -> None:
         """Load the cached library for the current CUDA device."""
         self.fusion, self.original = fusion, fusion.library
-        built = build_library("gelu_lookup", strict=False, specific=True, native_fp4=False)
+        with torch.cuda.device(fusion.device):
+            built = build_library("gelu_lookup", strict=False, specific=True, native_fp4=False)
         self.library, self.compiler, self.command = built.library, built.compiler, built.command
         pointer = ctypes.c_void_p
         self.library.cc_init_gelu.argtypes = [pointer, pointer]

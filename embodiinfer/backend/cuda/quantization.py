@@ -25,6 +25,7 @@ class CudaQuantizer:
 
     def __init__(self) -> None:
         """Load the cached library for the current CUDA device."""
+        self.device = torch.device("cuda", torch.cuda.current_device())
         built = build_library(
             "quantize", strict=False, specific=True, native_fp4=torch.cuda.get_device_capability()[0] >= 10
         )
@@ -72,15 +73,20 @@ class CudaQuantizer:
         self, output: torch.Tensor, input_scale: torch.Tensor, weight_scale: torch.Tensor
     ) -> torch.Tensor:
         """Apply NVFP4 global scales in place with the reference BF16 rounding order."""
-        self._check(
-            self.library.cc_rescale(
-                output.data_ptr(),
-                input_scale.data_ptr(),
-                weight_scale.data_ptr(),
-                output.numel(),
-                torch.cuda.current_stream().cuda_stream,
+        if output.device != self.device or any(
+            scale.device != self.device for scale in (input_scale, weight_scale)
+        ):
+            raise ValueError("Quantizer output and scales must share the backend device")
+        with torch.cuda.device(output.device):
+            self._check(
+                self.library.cc_rescale(
+                    output.data_ptr(),
+                    input_scale.data_ptr(),
+                    weight_scale.data_ptr(),
+                    output.numel(),
+                    torch.cuda.current_stream(output.device).cuda_stream,
+                )
             )
-        )
         return output
 
 
@@ -89,7 +95,7 @@ class QuantizationPlan:
 
     def __init__(self, backend: CudaQuantizer, inputs: torch.Tensor, bits: int, scale: float | None) -> None:
         """Allocate buffers and record a dynamic or calibrated global scaling policy."""
-        if not inputs.is_cuda or inputs.dtype != torch.bfloat16 or not inputs.is_contiguous():
+        if inputs.device != backend.device or inputs.dtype != torch.bfloat16 or not inputs.is_contiguous():
             raise ValueError("CUDA quantization requires contiguous CUDA BF16 inputs")
         if inputs.ndim != 2 or min(inputs.shape) <= 0 or inputs.shape[1] % 64 or bits not in (4, 8):
             raise ValueError("Expected a matrix with K divisible by 64 and bits in {4, 8}")
@@ -125,35 +131,36 @@ class QuantizationPlan:
         if inputs.device != self.output.device or inputs.dtype != torch.bfloat16:
             raise ValueError("Quantization input device or dtype changed")
         library = self.backend.library
-        stream = torch.cuda.current_stream().cuda_stream
-        if self.dynamic:
-            self.backend._check(
-                library.cc_scale(
+        with torch.cuda.device(inputs.device):
+            stream = torch.cuda.current_stream(inputs.device).cuda_stream
+            if self.dynamic:
+                self.backend._check(
+                    library.cc_scale(
+                        inputs.data_ptr(),
+                        self.partials.data_ptr(),
+                        self.scale.data_ptr(),
+                        inputs.numel(),
+                        448.0 if self.bits == 8 else 448.0 * 6.0,
+                        stream,
+                    )
+                )
+            if self.bits == 8:
+                status = library.cc_fp8(
                     inputs.data_ptr(),
-                    self.partials.data_ptr(),
+                    self.output.data_ptr(),
                     self.scale.data_ptr(),
                     inputs.numel(),
-                    448.0 if self.bits == 8 else 448.0 * 6.0,
                     stream,
                 )
-            )
-        if self.bits == 8:
-            status = library.cc_fp8(
-                inputs.data_ptr(),
-                self.output.data_ptr(),
-                self.scale.data_ptr(),
-                inputs.numel(),
-                stream,
-            )
-        else:
-            status = library.cc_fp4(
-                inputs.data_ptr(),
-                self.output.data_ptr(),
-                self.scales.data_ptr(),
-                self.blocked.data_ptr(),
-                self.scale.data_ptr(),
-                *self.shape,
-                stream,
-            )
-        self.backend._check(status)
+            else:
+                status = library.cc_fp4(
+                    inputs.data_ptr(),
+                    self.output.data_ptr(),
+                    self.scales.data_ptr(),
+                    self.blocked.data_ptr(),
+                    self.scale.data_ptr(),
+                    *self.shape,
+                    stream,
+                )
+            self.backend._check(status)
         return self

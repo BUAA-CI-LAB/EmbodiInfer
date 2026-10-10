@@ -52,6 +52,8 @@ CUDA graph 前缀流水线和 `decoder`。
 （OpenVLA-OFT），它们是 `RLDecoder`；此外还有 `CosmosDiffusionDecoder`（仅规划
 的 Cosmos Policy）和 `AutoregressiveDecoder`（有状态 token 解码，ActiveVLN），它们
 是普通的 `ActionDecoder`。
+仅支持推理的 flow 策略使用 `FlowActionDecoder`；原生 Pi05 decoder 在此基础上
+优化执行，不声明 RL 采样或梯度重算能力。
 
 ## 同步执行：EngineCore {#enginecore}
 

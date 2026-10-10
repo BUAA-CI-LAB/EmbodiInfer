@@ -1,6 +1,6 @@
 """PI0.5 inference caches and graphs.
 
-The engine keeps its public FlowDecoder contract. Schedule-specific AdaRMS
+The engine keeps its public ActionDecoder contract. Schedule-specific AdaRMS
 projections and compact camera/text layouts remain local to this policy.
 """
 
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from ....models.schedulers.flow import euler_step
-from ...decoder import FlowDecoder
+from ...decoder import FlowActionDecoder
 from ..processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
@@ -334,8 +334,8 @@ class Pi05Runtime:
         )
 
 
-class Pi05FlowDecoder(FlowDecoder):
-    """Specialize deterministic inference while inheriting the public RL paths."""
+class Pi05FlowDecoder(FlowActionDecoder):
+    """Expose deterministic inference without the policy-gradient rollout capability."""
 
     def integrate(
         self,

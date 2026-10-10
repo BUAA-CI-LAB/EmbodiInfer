@@ -176,6 +176,8 @@ The checkpoint retains its nominal horizon metadata.
 CUDA Graph configuration belongs to `EngineConfig`; prefix capture remains a
 policy option. Inductor, global quantization and TP are rejected in combination
 with these operator plans. `openpi_rlinf` requires CUDA eval/no-grad inference.
+The native Pi05 decoder exposes deterministic generation only; it does not
+implement the `RLDecoder` sampling or differentiable log-probability contract.
 
 For ablations, construct `Pi05OptimizationConfig` directly or use
 `dataclasses.replace` on a resolved preset. `MlpLayerPrecision` selects gate/up

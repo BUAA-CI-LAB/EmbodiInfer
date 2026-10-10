@@ -17,6 +17,7 @@ class RotaryKernel:
 
     def __init__(self) -> None:
         """Load the architecture-specific rotation kernel outside graph capture."""
+        self.device = torch.device("cuda", torch.cuda.current_device())
         self.library = build_library("rotary", strict=True).library
         pointer = ctypes.c_void_p
         self.library.cc_rotary.argtypes = [pointer] * 4 + [
@@ -31,7 +32,7 @@ class RotaryKernel:
         """Apply reference rotation using FP32 sine/cosine and a distinct BF16 output."""
         if inputs.ndim != 4 or inputs.shape[-1] % 2:
             raise ValueError("RoPE requires [batch, length, heads, even width]")
-        if not inputs.is_cuda or inputs.dtype != torch.bfloat16:
+        if inputs.device != self.device or inputs.dtype != torch.bfloat16:
             raise ValueError("RoPE kernel requires CUDA BF16 inputs")
         values = inputs.contiguous()
         sine, cosine = sine.contiguous(), cosine.contiguous()
@@ -43,16 +44,17 @@ class RotaryKernel:
         ):
             raise ValueError("RoPE requires matching FP32 sine/cosine on the input device")
         output = torch.empty_like(values)
-        status = self.library.cc_rotary(
-            values.data_ptr(),
-            sine.data_ptr(),
-            cosine.data_ptr(),
-            output.data_ptr(),
-            values.numel() // 2,
-            values.shape[2],
-            half,
-            torch.cuda.current_stream(values.device).cuda_stream,
-        )
-        if status:
-            raise RuntimeError(f"RoPE kernel launch failed: {status}")
+        with torch.cuda.device(values.device):
+            status = self.library.cc_rotary(
+                values.data_ptr(),
+                sine.data_ptr(),
+                cosine.data_ptr(),
+                output.data_ptr(),
+                values.numel() // 2,
+                values.shape[2],
+                half,
+                torch.cuda.current_stream(values.device).cuda_stream,
+            )
+            if status:
+                raise RuntimeError(f"RoPE kernel launch failed: {status}")
         return output

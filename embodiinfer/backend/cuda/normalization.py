@@ -118,21 +118,22 @@ class NormPlan:
         self, inputs: torch.Tensor, scale: torch.Tensor | None, modulation: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         batch, tokens, columns = self.shape
-        self.backend._check(
-            self.backend.library.cc_norm(
-                inputs.data_ptr(),
-                self.mean.data_ptr() if self.mean is not None else None,
-                scale.data_ptr() if scale is not None else None,
-                modulation.data_ptr() if modulation is not None else None,
-                self.output.data_ptr(),
-                self.gate.data_ptr() if self.gate is not None else None,
-                batch * tokens,
-                columns,
-                tokens,
-                int(self.mode == "reduce"),
-                torch.cuda.current_stream(self.output.device).cuda_stream,
+        with torch.cuda.device(inputs.device):
+            self.backend._check(
+                self.backend.library.cc_norm(
+                    inputs.data_ptr(),
+                    self.mean.data_ptr() if self.mean is not None else None,
+                    scale.data_ptr() if scale is not None else None,
+                    modulation.data_ptr() if modulation is not None else None,
+                    self.output.data_ptr(),
+                    self.gate.data_ptr() if self.gate is not None else None,
+                    batch * tokens,
+                    columns,
+                    tokens,
+                    int(self.mode == "reduce"),
+                    torch.cuda.current_stream(inputs.device).cuda_stream,
+                )
             )
-        )
         return self.output, self.gate
 
     def residual_normalize(
@@ -160,39 +161,40 @@ class NormPlan:
         ):
             raise ValueError("Residual gate must be contiguous CUDA BF16 [B,1,D]")
         batch, tokens, columns = self.shape
-        stream = torch.cuda.current_stream(self.output.device).cuda_stream
         pointers = [
             inputs.data_ptr(),
             update.data_ptr(),
             residual_gate.data_ptr() if residual_gate is not None else None,
         ]
-        if self.mode == "pointwise":
-            self.backend._check(
-                self.backend.library.cc_residual_square(
-                    *pointers,
-                    self.residual.data_ptr(),
-                    self.square.data_ptr(),
-                    batch * tokens,
-                    columns,
-                    tokens,
-                    stream,
+        with torch.cuda.device(inputs.device):
+            stream = torch.cuda.current_stream(inputs.device).cuda_stream
+            if self.mode == "pointwise":
+                self.backend._check(
+                    self.backend.library.cc_residual_square(
+                        *pointers,
+                        self.residual.data_ptr(),
+                        self.square.data_ptr(),
+                        batch * tokens,
+                        columns,
+                        tokens,
+                        stream,
+                    )
                 )
-            )
-            torch.mean(self.square, dim=-1, keepdim=True, out=self.mean)
-            self._normalize_with_mean(self.residual, scale, modulation)
-        else:
-            self.backend._check(
-                self.backend.library.cc_residual_norm(
-                    *pointers,
-                    scale.data_ptr() if scale is not None else None,
-                    modulation.data_ptr() if modulation is not None else None,
-                    self.residual.data_ptr(),
-                    self.output.data_ptr(),
-                    self.gate.data_ptr() if self.gate is not None else None,
-                    batch * tokens,
-                    columns,
-                    tokens,
-                    stream,
+                torch.mean(self.square, dim=-1, keepdim=True, out=self.mean)
+                self._normalize_with_mean(self.residual, scale, modulation)
+            else:
+                self.backend._check(
+                    self.backend.library.cc_residual_norm(
+                        *pointers,
+                        scale.data_ptr() if scale is not None else None,
+                        modulation.data_ptr() if modulation is not None else None,
+                        self.residual.data_ptr(),
+                        self.output.data_ptr(),
+                        self.gate.data_ptr() if self.gate is not None else None,
+                        batch * tokens,
+                        columns,
+                        tokens,
+                        stream,
+                    )
                 )
-            )
         return self.residual, self.output, self.gate

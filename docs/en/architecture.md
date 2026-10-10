@@ -62,6 +62,8 @@ are `FlowDecoder` (pi0.5 / GR00T N1.7 / LingBot-VLA) and `ParallelDecoder`
 (OpenVLA-OFT), which are `RLDecoder`s, plus `CosmosDiffusionDecoder` (planning-only
 Cosmos Policy) and `AutoregressiveDecoder` (recurrent token decode, ActiveVLN), which
 are plain `ActionDecoder`s.
+Inference-only flow policies use `FlowActionDecoder`; the native Pi05 decoder
+specializes it without advertising RL sampling or gradient recomputation.
 
 ## EngineCore
 

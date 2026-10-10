@@ -18,6 +18,7 @@ class CudaSoftmax:
 
     def __init__(self) -> None:
         """Load the cached library for the current CUDA device."""
+        self.device = torch.device("cuda", torch.cuda.current_device())
         built = build_library("softmax", strict=True, specific=False, native_fp4=False)
         self.library, self.compiler, self.command = built.library, built.compiler, built.command
         pointer = ctypes.c_void_p
@@ -29,8 +30,18 @@ class CudaSoftmax:
         ]
         self.library.cc_mask_softmax.restype = ctypes.c_int
 
-    def __call__(self, logits, mask, output, warps, *, query_rows=False):
-        """Launch on the current Torch stream, including during CUDA Graph capture."""
+    def __call__(
+        self,
+        logits: torch.Tensor,
+        mask: torch.Tensor,
+        output: torch.Tensor,
+        warps: int,
+        *,
+        query_rows: bool = False,
+    ) -> None:
+        """Launch on the input device's current stream, including during graph capture."""
+        if any(tensor.device != self.device for tensor in (logits, mask, output)):
+            raise ValueError("CUDA softmax inputs and output must share the backend device")
         if logits.shape[-1] > 2048:
             raise ValueError("CUDA warp softmax supports at most 2048 keys")
         batch, heads, groups, queries, keys = logits.shape
@@ -40,14 +51,15 @@ class CudaSoftmax:
                 heads, groups, queries, keys, batch * heads * groups * queries, int(query_rows)
             ),
         )
-        status = self.library.cc_mask_softmax(
-            logits.data_ptr(),
-            mask.data_ptr(),
-            output.data_ptr(),
-            layout,
-            warps,
-            int(output.dtype == torch.bfloat16),
-            torch.cuda.current_stream(logits.device).cuda_stream,
-        )
-        if status:
-            raise RuntimeError(f"CUDA mask/softmax/cast launch failed: {status}")
+        with torch.cuda.device(logits.device):
+            status = self.library.cc_mask_softmax(
+                logits.data_ptr(),
+                mask.data_ptr(),
+                output.data_ptr(),
+                layout,
+                warps,
+                int(output.dtype == torch.bfloat16),
+                torch.cuda.current_stream(logits.device).cuda_stream,
+            )
+            if status:
+                raise RuntimeError(f"CUDA mask/softmax/cast launch failed: {status}")

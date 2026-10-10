@@ -30,10 +30,16 @@ class NormQuantFusion:
         """Load the cached library for the current CUDA device."""
         if not isinstance(quantizer, CudaQuantizer) or not isinstance(norm, NormFusion):
             raise ValueError("CUDA norm/encoding requires CUDA quantization and strict CUDA normalization")
+        if quantizer.device != norm.device:
+            raise ValueError("CUDA norm/encoding backends must share a device")
         self.quantizer, self.norm, self.device = quantizer, norm, norm.device
-        built = build_library(
-            "norm_quant", strict=True, specific=True, native_fp4=torch.cuda.get_device_capability()[0] >= 10
-        )
+        with torch.cuda.device(self.device):
+            built = build_library(
+                "norm_quant",
+                strict=True,
+                specific=True,
+                native_fp4=torch.cuda.get_device_capability(self.device)[0] >= 10,
+            )
         self.library, self.compiler, self.command = built.library, built.compiler, built.command
         pointer, integer = ctypes.c_void_p, ctypes.c_int
         self.library.cc_norm_quant.argtypes = [pointer] * 9 + [integer] * 4 + [pointer]
@@ -142,24 +148,25 @@ class NormQuantPlan:
         ):
             raise ValueError("Norm quantization requires original FP32 [B,T,1] mean statistics")
         batch, tokens, columns = self.shape
-        self.backend.norm._check(
-            self.backend.library.cc_norm_quant(
-                inputs.data_ptr(),
-                mean.data_ptr(),
-                scale.data_ptr() if scale is not None else None,
-                modulation.data_ptr() if modulation is not None else None,
-                self.output.data_ptr(),
-                self.scales.data_ptr(),
-                self.blocked.data_ptr(),
-                self.gate.data_ptr() if self.gate is not None else None,
-                self.scale.data_ptr(),
-                batch * tokens,
-                columns,
-                tokens,
-                self.bits,
-                torch.cuda.current_stream(inputs.device).cuda_stream,
+        with torch.cuda.device(inputs.device):
+            self.backend.norm._check(
+                self.backend.library.cc_norm_quant(
+                    inputs.data_ptr(),
+                    mean.data_ptr(),
+                    scale.data_ptr() if scale is not None else None,
+                    modulation.data_ptr() if modulation is not None else None,
+                    self.output.data_ptr(),
+                    self.scales.data_ptr(),
+                    self.blocked.data_ptr(),
+                    self.gate.data_ptr() if self.gate is not None else None,
+                    self.scale.data_ptr(),
+                    batch * tokens,
+                    columns,
+                    tokens,
+                    self.bits,
+                    torch.cuda.current_stream(inputs.device).cuda_stream,
+                )
             )
-        )
         return self
 
     def residual_normalize(
@@ -182,19 +189,20 @@ class NormQuantPlan:
         ):
             raise ValueError("Residual gate must be contiguous CUDA BF16 [B,1,D]")
         batch, tokens, columns = self.shape
-        self.backend.norm._check(
-            self.backend.norm.library.cc_residual_square(
-                inputs.data_ptr(),
-                update.data_ptr(),
-                residual_gate.data_ptr() if residual_gate is not None else None,
-                self.residual.data_ptr(),
-                self.square.data_ptr(),
-                batch * tokens,
-                columns,
-                tokens,
-                torch.cuda.current_stream(inputs.device).cuda_stream,
+        with torch.cuda.device(inputs.device):
+            self.backend.norm._check(
+                self.backend.norm.library.cc_residual_square(
+                    inputs.data_ptr(),
+                    update.data_ptr(),
+                    residual_gate.data_ptr() if residual_gate is not None else None,
+                    self.residual.data_ptr(),
+                    self.square.data_ptr(),
+                    batch * tokens,
+                    columns,
+                    tokens,
+                    torch.cuda.current_stream(inputs.device).cuda_stream,
+                )
             )
-        )
         torch.mean(self.square, dim=-1, keepdim=True, out=self.mean)
         self.normalize(self.residual, scale=scale, modulation=modulation, mean=self.mean)
         return self.residual, self, self.gate

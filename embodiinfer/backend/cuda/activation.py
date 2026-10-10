@@ -29,6 +29,7 @@ class GeluMulFusion:
         """Load the cached library for the current CUDA device."""
         if approximate not in ("none", "tanh"):
             raise ValueError("GELU approximation must be none or tanh")
+        self.device = torch.device("cuda", torch.cuda.current_device())
         self.backend, self.approximate = backend, approximate
         codes = torch.arange(65536, device="cuda", dtype=torch.int32).to(torch.uint16)
         self.table = torch.nn.functional.gelu(codes.view(torch.bfloat16), approximate=approximate).view(
@@ -81,7 +82,7 @@ class FusionPlan:
         """Allocate output and retain the existing quantizer's scale/layout contract."""
         if bits not in (4, 8, 16):
             raise ValueError("Expected bits in {4, 8, 16}")
-        if not gate.is_cuda or gate.dtype != torch.bfloat16 or not gate.is_contiguous():
+        if gate.device != backend.device or gate.dtype != torch.bfloat16 or not gate.is_contiguous():
             raise ValueError("Fusion requires contiguous CUDA BF16 gate/up matrices")
         if gate.ndim != 2 or min(gate.shape) <= 0:
             raise ValueError("Fusion requires a matrix")
@@ -108,29 +109,30 @@ class FusionPlan:
                 raise ValueError("Fusion input shape/device changed")
             if tensor.dtype != torch.bfloat16 or not tensor.is_contiguous():
                 raise ValueError("Fusion requires contiguous BF16 inputs")
-        stream = torch.cuda.current_stream().cuda_stream
-        if self.bits == 4:
-            status = self.backend.library.cc_geglu_fp4(
-                gate.data_ptr(),
-                up.data_ptr(),
-                self.output.data_ptr(),
-                self.scales.data_ptr(),
-                self.blocked.data_ptr(),
-                self.scale.data_ptr(),
-                *self.shape,
-                self.backend.table.data_ptr(),
-                stream,
-            )
-        else:
-            status = self.backend.library.cc_geglu(
-                gate.data_ptr(),
-                up.data_ptr(),
-                self.output.data_ptr(),
-                self.scale.data_ptr() if self.scale is not None else None,
-                gate.numel(),
-                self.bits,
-                self.backend.table.data_ptr(),
-                stream,
-            )
-        self.backend._check(status)
+        with torch.cuda.device(gate.device):
+            stream = torch.cuda.current_stream(gate.device).cuda_stream
+            if self.bits == 4:
+                status = self.backend.library.cc_geglu_fp4(
+                    gate.data_ptr(),
+                    up.data_ptr(),
+                    self.output.data_ptr(),
+                    self.scales.data_ptr(),
+                    self.blocked.data_ptr(),
+                    self.scale.data_ptr(),
+                    *self.shape,
+                    self.backend.table.data_ptr(),
+                    stream,
+                )
+            else:
+                status = self.backend.library.cc_geglu(
+                    gate.data_ptr(),
+                    up.data_ptr(),
+                    self.output.data_ptr(),
+                    self.scale.data_ptr() if self.scale is not None else None,
+                    gate.numel(),
+                    self.bits,
+                    self.backend.table.data_ptr(),
+                    stream,
+                )
+            self.backend._check(status)
         return self
