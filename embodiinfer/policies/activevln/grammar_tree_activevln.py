@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 _START, _FORWARD, _DIRECTION, _SPACE, _DIGIT, _END, _DONE = range(7)
 _NUCLEUS_CANDIDATES = 64
 _SAMPLE_ROWS = 256
+_UNKNOWN = object()
 
 
 class ActionGrammar:
@@ -105,6 +106,27 @@ class ActionGrammar:
             edges[self.eos] = (_DONE, index, None, 0)
         self._edges[state] = edges
         return edges
+
+
+class StopReasons:
+    """``_stop_reason`` memoized by response tokens.
+
+    Like the grammar, this assumes the policy's tokenizer, action parser and
+    EOS ids stay fixed for the runtime's lifetime.
+    """
+
+    def __init__(self, policy, capacity: int = 1 << 16) -> None:
+        self.policy, self.capacity = policy, capacity
+        self._reasons: dict[tuple[int, ...], str | None] = {}
+
+    def __call__(self, ids: list[int]) -> str | None:
+        key = tuple(ids)
+        reason = self._reasons.get(key, _UNKNOWN)
+        if reason is _UNKNOWN:
+            if len(self._reasons) >= self.capacity:
+                self._reasons.clear()
+            reason = self._reasons[key] = _stop_reason(self.policy, ids)
+        return reason
 
 
 def prompt_action_phrases(action_space: str) -> list[str]:
@@ -399,13 +421,23 @@ def _sample(scaled: torch.Tensor, top_p: float, generator) -> tuple[torch.Tensor
     return tokens, scores
 
 
-def _padded(sets: Sequence[set[int]], pads: Sequence[int]) -> torch.Tensor:
+def _padded(sets: Sequence[set[int]], pads: Sequence[int]) -> np.ndarray:
     width = max(len(values) for values in sets)
     array = np.empty((len(sets), width), dtype=np.int64)
     for row, (values, pad) in enumerate(zip(sets, pads, strict=True)):
         array[row].fill(pad)
         array[row, : len(values)] = np.fromiter(values, dtype=np.int64, count=len(values))
-    return torch.from_numpy(array)
+    return array
+
+
+def _history_sets(histories: Sequence[torch.Tensor], vocab: int) -> list[set[int]]:
+    """Distinct token ids of every history, read back in one transfer."""
+    mask = torch.zeros(len(histories), vocab, dtype=torch.bool, device=histories[0].device)
+    for row, history in enumerate(histories):
+        mask[row, history] = True
+    pairs = mask.nonzero().cpu().numpy()
+    bounds = np.searchsorted(pairs[:, 0], np.arange(len(histories) + 1))
+    return [set(pairs[start:end, 1].tolist()) for start, end in zip(bounds[:-1], bounds[1:], strict=True)]
 
 
 def _penalize(logits: torch.Tensor, seen: torch.Tensor, paths: torch.Tensor, penalty: float) -> torch.Tensor:
@@ -434,30 +466,32 @@ def generate_batched_grammar_tokens(
     token is terminal or off-grammar joins the same forward as a singleton.
     Only accepted nodes enter each row's linear KV history.
     """
-    policy, device = runtime.policy, runtime.device
+    policy = runtime.policy
     drafter, budget, generator = (
         runtime.grammar_drafter,
         runtime.grammar_tree_budget,
         runtime.sampling_generator,
     )
+    stop = runtime.grammar_stops
     count, batch = len(prefix.prepared.turns), runtime.batch_size
     sizes = runtime._tree_query_sizes()
     penalty = policy.repetition_penalty
     lengths, coordinates = list(prefix.lengths), list(prefix.positions)
-    seen = [set(torch.unique(history).tolist()) for history in prefix.token_history]
-    pads = [int(history[0]) for history in prefix.token_history]
+    seen = _history_sets(prefix.token_history, prefix.logits.shape[-1])
+    # A pad must already be in the row's history; repeating it changes no penalty.
+    pads = [min(values) for values in seen]
     tokens: list[list[int]] = [[] for _ in range(count)]
-    scores: list[list[torch.Tensor]] = [[] for _ in range(count)]
+    scores: list[list[float]] = [[] for _ in range(count)]
     reasons, active = ["max_tokens"] * count, [True] * count
 
     def check_cancel() -> None:
         if cancelled is not None and cancelled():
             raise SessionCancelledError("batched ActiveVLN grammar-tree generation was cancelled")
 
-    first = torch.tensor(pads, device=device)[:, None, None]
-    effective = _penalize(prefix.logits[:, None].clone(), _padded(seen, pads).to(device), first, penalty)
+    history, first = runtime._upload(_padded(seen, pads), np.asarray(pads, dtype=np.int64)[:, None, None])
+    effective = _penalize(prefix.logits[:, None].clone(), history, first, penalty)
     pending, pending_scores = select_tokens(effective[:, 0], policy, generator)
-    pending_ids, pending_scores = pending.tolist(), list(pending_scores.unbind())
+    pending_ids, pending_scores = pending.tolist(), pending_scores.tolist()
 
     while any(active):
         check_cancel()
@@ -468,7 +502,7 @@ def generate_batched_grammar_tokens(
             if not active[row]:
                 continue
             candidate = tokens[row] + [pending_ids[row]]
-            if len(candidate) >= policy.max_new_tokens or _stop_reason(policy, candidate) is not None:
+            if len(candidate) >= policy.max_new_tokens or stop(candidate) is not None:
                 continue
             tree = drafter.tree(candidate, budget)
             if tree is not None and lengths[row] + tree.size > min(
@@ -502,24 +536,28 @@ def generate_batched_grammar_tokens(
                 paths[row, :size, :tree_depth] = np.where(tree.path_valid, tree.path_ids, pads[row])
                 write_lengths[row] = size
         is_tree = query > 1
+        # Upload everything before the forward: penalty and selection then
+        # queue behind it, and reading the chosen tokens is the step's one wait.
+        input_ids, positions, history, paths = runtime._upload(
+            input_ids, np.broadcast_to(positions, (3, batch, query)), _padded(seen, pads), paths
+        )
         hidden = runtime._forward(
-            policy._text.embed_tokens(torch.from_numpy(input_ids).to(device)),
-            torch.from_numpy(positions).to(device)[None].expand(3, -1, -1).contiguous(),
+            policy._text.embed_tokens(input_ids),
+            positions,
             offsets,
-            ancestors=torch.from_numpy(ancestors).to(device) if is_tree else None,
+            ancestors=runtime._upload(ancestors)[0] if is_tree else None,
             write_lengths=write_lengths,
         )
         logits = runtime._tree_logits(hidden[:count]) if is_tree else policy._lm_head(hidden[:count])
-        effective = _penalize(
-            logits, _padded(seen, pads).to(device), torch.from_numpy(paths).to(device), penalty
-        )
+        effective = _penalize(logits, history, paths, penalty)
         chosen, chosen_scores = select_tokens(effective, policy, generator)
-        chosen_ids = chosen.tolist()
+        chosen_ids, chosen_scores = chosen.tolist(), chosen_scores.tolist()
         if is_tree:
             verified = [tree for tree in trees if tree is not None]
             runtime.counters["tree_verified_rows"] += len(verified)
             runtime.counters["tree_candidate_nodes"] += sum(tree.size for tree in verified)
             runtime.counters["tree_padding_nodes"] += batch * query - sum(write_lengths)
+        kept = []
         for row in range(count):
             if not active[row]:
                 continue
@@ -531,31 +569,33 @@ def generate_batched_grammar_tokens(
                 accepted.append(node)
                 tokens[row].append(token)
                 scores[row].append(score)
-                reason = _stop_reason(policy, tokens[row])
+                reason = stop(tokens[row])
                 if reason is not None or len(tokens[row]) >= policy.max_new_tokens:
                     reasons[row], active[row] = reason or "max_tokens", False
                     break
                 drawn = chosen_ids[row][node]
                 child = None if tree is None else tree.children.get((node, drawn))
                 if child is None:
-                    pending_ids[row], pending_scores[row] = drawn, chosen_scores[row, node]
+                    pending_ids[row], pending_scores[row] = drawn, chosen_scores[row][node]
                     break
-                token, score, node = drawn, chosen_scores[row, node], child
+                token, score, node = drawn, chosen_scores[row][node], child
             if tree is None:
                 runtime.counters["tree_fallback_tokens"] += 1
             else:
                 runtime.counters["tree_accepted_tokens"] += len(accepted)
                 if accepted != list(range(len(accepted))):
                     # Physical tree order differs from the linear accepted history.
-                    index = torch.tensor(accepted, device=device)
-                    compacted = runtime._row_kv(row, lengths[row], lengths[row] + tree.size).index_select(
-                        -2, index
-                    )
-                    runtime._row_kv(row, lengths[row], lengths[row] + len(accepted)).copy_(compacted)
+                    kept.append((row, lengths[row], accepted))
             lengths[row] += len(accepted)
             coordinates[row] += len(accepted)
             seen[row].update(tokens[row][-len(accepted) :])
+        runtime._keep_tree_nodes(kept)
     for row in range(count):
         drafter.observe(tokens[row])
-    committed = [list(torch.tensor(row_tokens, device=device).unbind()) for row_tokens in tokens]
-    return runtime._finish_generation(prefix, committed, scores, lengths, coordinates, reasons)
+    split = [len(row_tokens) for row_tokens in tokens]
+    (token_ids,) = runtime._upload(np.fromiter(itertools.chain.from_iterable(tokens), dtype=np.int64))
+    # The Python float round trip is exact only while select_tokens returns float32 scores.
+    (token_scores,) = runtime._upload(np.fromiter(itertools.chain.from_iterable(scores), dtype=np.float32))
+    return runtime._finish_generation(
+        prefix, token_ids.split(split), token_scores.split(split), lengths, coordinates, reasons
+    )
