@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +71,8 @@ class ActiveVLNProcessor:
             local_files_only=not allow_download,
         )
         self.action_space = action_space
+        # Frame size -> (image grid, empty patches); the grid depends on nothing else.
+        self._image_layouts: dict[tuple[int, ...], tuple[torch.Tensor, torch.Tensor]] = {}
 
     @property
     def tokenizer(self):
@@ -133,6 +135,35 @@ class ActiveVLNProcessor:
             attention_mask=encoded.attention_mask,
             pixel_values=encoded.pixel_values,
             image_grid_thw=encoded.image_grid_thw,
+            serialized_prompt=text,
+            prompt_sha256=hashlib.sha256(text.encode()).hexdigest(),
+        )
+
+    def process_turn_tokens(self, observation: Observation, *, initial: bool) -> ProcessedTurn:
+        """``process_turn`` with empty ``pixel_values``, for patches computed on the device.
+
+        After the first frame of a size, the text is expanded and tokenized
+        exactly as the Qwen processor does, without its CPU image pipeline.
+        """
+        size = tuple(observation.images.shape[2:])
+        text = self.turn_text(observation, initial=initial)
+        token = self._processor.image_token
+        layout = self._image_layouts.get(size)
+        if layout is None or text.count(token) != 1:
+            turn = self.process_turn(observation, initial=initial)
+            empty = turn.pixel_values.new_empty((0, turn.pixel_values.shape[-1]))
+            if turn.image_grid_thw.shape[0] == 1:
+                self._image_layouts[size] = (turn.image_grid_thw, empty)
+            return replace(turn, pixel_values=empty)
+        grid, empty = layout
+        count = int(grid[0].prod()) // self._processor.image_processor.merge_size**2
+        expanded = text.replace(token, "<|placeholder|>" * count, 1).replace("<|placeholder|>", token)
+        encoded = self._processor(text=[expanded], padding=False, return_tensors="pt")
+        return ProcessedTurn(
+            input_ids=encoded.input_ids,
+            attention_mask=encoded.attention_mask,
+            pixel_values=empty,
+            image_grid_thw=grid.clone(),
             serialized_prompt=text,
             prompt_sha256=hashlib.sha256(text.encode()).hexdigest(),
         )

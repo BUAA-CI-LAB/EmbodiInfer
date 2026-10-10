@@ -347,17 +347,11 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 raise ValueError("batch memories must already be on the model device")
         if host_turns is None:
             host_turns = self.prepare_host(observations, [memory is None for memory in memories])
-        uint8_turns = [host for host in host_turns if host.rgb is not None]
-        pixels = iter(self.policy.device_pixels(uint8_turns) if uint8_turns else ())
-        turns = []
-        for host, memory in zip(host_turns, memories, strict=True):
-            turn = self.policy.prepare_device(
-                host, memory, pixel_values=None if host.rgb is None else next(pixels)
-            )
+        turns = self.policy.prepare_devices(host_turns, memories)
+        for turn, memory in zip(turns, memories, strict=True):
             past = 0 if memory is None else memory.seq_len
             if past + turn.turn.input_ids.shape[1] > self.policy.max_context:
                 raise ValueError("batched turn exceeds the model context limit")
-            turns.append(turn)
         return PreparedActiveVLNBatch(tuple(turns))
 
     def _query_bucket(self, length: int) -> int:
