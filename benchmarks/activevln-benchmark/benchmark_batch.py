@@ -86,8 +86,6 @@ def run(config: dict[str, Any], output: Path) -> int:
     batch_size = config["batch_size"]
     if type(batch_size) is not int or batch_size not in (1, 2, 4, 8):
         raise ValueError("batch_size must be 1, 2, 4 or 8 (8 is a local lane extension)")
-    if config.get("do_sample", False):
-        raise ValueError("tensor batching currently requires greedy decoding")
     spec = config["datasets"][0]
     episodes = load_navigation(spec)
     limit = config.get("max_steps_per_episode")
@@ -135,6 +133,8 @@ def run(config: dict[str, Any], output: Path) -> int:
             max_new_tokens=config["max_new_tokens"],
             max_context=config["max_context"],
             do_sample=config.get("do_sample", False),
+            temperature=config.get("temperature", 0.2),
+            top_p=config.get("top_p", 0.8),
             repetition_penalty=config["repetition_penalty"],
             action_space=config.get("action_space", "r2r"),
         )
@@ -154,6 +154,11 @@ def run(config: dict[str, Any], output: Path) -> int:
                 tree_fp32_projection=config.get("tree_fp32_projection", False),
                 tree_repeat_actions=config.get("tree_repeat_actions", 1),
                 kv_pool_tokens=config.get("kv_pool_tokens"),
+                grammar_tree_budget=config.get("grammar_tree_budget", 0),
+                grammar_prefix_weight=config.get("grammar_prefix_weight", 1.0),
+                grammar_local_weight=config.get("grammar_local_weight", 1.0),
+                grammar_refresh=config.get("grammar_refresh", 64),
+                sampling_seed=config.get("sampling_seed", 0),
             )
             report["phase"] = "graph_capture"
             save_report(output, report)
