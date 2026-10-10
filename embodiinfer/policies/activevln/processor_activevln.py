@@ -85,21 +85,39 @@ class ActiveVLNProcessor:
         return ActiveVLNBatch(list(observations), list(request_ids))
 
     @staticmethod
-    def _pil_image(observation: Observation):
-        from PIL import Image
-
+    def rgb_uint8(observation: Observation) -> np.ndarray:
+        """The HxWx3 uint8 frame handed to the Qwen image processor."""
         if observation.images.shape[0] != 1:
             raise ValueError("ActiveVLN R2R currently expects one first-person image")
+        # Callers that built ``images`` as uint8/255 may pass that exact source;
+        # the float round trip below reproduces it bit for bit.
+        source = observation.metadata.get("rgb_uint8")
+        if source is not None:
+            if (
+                not isinstance(source, np.ndarray)
+                or source.dtype != np.uint8
+                or source.shape != (*observation.images.shape[2:], 3)
+            ):
+                raise ValueError("metadata rgb_uint8 must be the HxWx3 uint8 source of images")
+            return source
         image = observation.images[0].detach().cpu().clamp(0, 1)
-        array = (image.permute(1, 2, 0).numpy() * 255.0).round().astype(np.uint8)
-        return Image.fromarray(array, mode="RGB")
+        return (image.permute(1, 2, 0).numpy() * 255.0).round().astype(np.uint8)
 
-    def process_turn(self, observation: Observation, *, initial: bool) -> ProcessedTurn:
+    @classmethod
+    def _pil_image(cls, observation: Observation):
+        from PIL import Image
+
+        return Image.fromarray(cls.rgb_uint8(observation), mode="RGB")
+
+    def turn_text(self, observation: Observation, *, initial: bool) -> str:
         if not observation.instruction:
             raise ValueError("ActiveVLN requires Observation.instruction")
-        text = render_turn_text(
+        return render_turn_text(
             self._processor, observation.instruction, initial=initial, action_space=self.action_space
         )
+
+    def process_turn(self, observation: Observation, *, initial: bool) -> ProcessedTurn:
+        text = self.turn_text(observation, initial=initial)
         encoded = self._processor(
             text=[text],
             images=[self._pil_image(observation)],
