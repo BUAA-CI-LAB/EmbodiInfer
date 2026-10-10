@@ -103,9 +103,12 @@ class ActiveVLNGraphRuntime:
         tree_repeat_actions: int = 1,
         workspace_tokens: int | None = None,
         batch_size: int = 1,
+        vision_kernel: str = "hf",
     ) -> None:
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive Python integer")
+        if vision_kernel not in ("hf", "segmented", "fused"):
+            raise ValueError("vision_kernel must be 'hf', 'segmented' or 'fused'")
         if query_bucket_size < 1:
             raise ValueError("query_bucket_size must be positive")
         if type(tree_repeat_actions) is not int or not 1 <= tree_repeat_actions <= 3:
@@ -127,6 +130,7 @@ class ActiveVLNGraphRuntime:
         self.query_bucket_size = query_bucket_size
         self.fused_ops = fused_ops
         self.split_attention = split_attention
+        self.vision_kernel = vision_kernel
         self.tree_fp32_projection = tree_fp32_projection
         if tree_fp32_projection and not tree_decode:
             raise ValueError("tree_fp32_projection requires tree_decode")
@@ -201,6 +205,7 @@ class ActiveVLNGraphRuntime:
             "query_bucket_size": self.query_bucket_size,
             "fused_ops": self.fused_ops,
             "split_attention": self.split_attention,
+            "vision_kernel": self.vision_kernel,
             "workspace_mib": self.storage.numel() * self.storage.element_size() / 2**20,
             "workspace_tokens": self.storage.shape[-2],
             "model_max_context": self.policy.max_context,
@@ -280,25 +285,90 @@ class ActiveVLNGraphRuntime:
             cu_full = (grid[:, 1] * grid[:, 2]).repeat_interleave(grid[:, 0]).cumsum(0, dtype=torch.int32)
             cu_full = torch.nn.functional.pad(cu_full, (1, 0))
             pixels = turn.pixel_values.clone()
+            if self.vision_kernel == "hf":
+                offsets = ()
+
+                def run_block(index: int, block: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
+                    bounds = cu_full if index in visual.fullatt_block_indexes else cu_window
+                    return block(hidden, cu_seqlens=bounds, position_embeddings=(cos, sin))
+
+            else:
+                run_block, offsets = self._segmented_vision_block(cos, sin, cu_window, cu_full)
 
             def forward() -> torch.Tensor:
                 hidden = visual.patch_embed(pixels)
                 hidden = hidden.reshape(size // unit, unit, -1)[window_index].reshape(size, -1)
                 for index, block in enumerate(visual.blocks):
-                    bounds = cu_full if index in visual.fullatt_block_indexes else cu_window
-                    hidden = block(hidden, cu_seqlens=bounds, position_embeddings=(cos, sin))
+                    hidden = run_block(index, block, hidden)
                 return visual.merger(hidden)[reverse]
 
             graph, output = self._capture(forward, self.device, self.pool)
             # CUDA Graph records addresses, not Python ownership of inputs
             # allocated outside capture. Keep all layout/rotary buffers alive.
-            entry = _VisionGraph(graph, pixels, output, (window_index, reverse, cos, sin, cu_window, cu_full))
+            entry = _VisionGraph(
+                graph, pixels, output, (window_index, reverse, cos, sin, cu_window, cu_full, *offsets)
+            )
             self.vision_graphs[key] = entry
         entry.pixels.copy_(turn.pixel_values)
         entry.graph.replay()
         self.counters["vision_replays"] += 1
         # Text graphs share a graph pool, so consume an independent output.
         return entry.output.clone()
+
+    def _segmented_vision_block(
+        self, cos: torch.Tensor, sin: torch.Tensor, cu_window: torch.Tensor, cu_full: torch.Tensor
+    ):
+        """Vision block attending inside each window/image instead of under a dense mask.
+
+        The dense-mask SDPA rounds probabilities to BF16 before multiplying V;
+        segment attention keeps them FP32-faithful, so features differ only at
+        rounding level and no longer depend on an image's batch position.
+        ``fused`` swaps RMSNorm, RoPE and SwiGLU for kernels that reproduce
+        eager rounding bit for bit.
+        """
+        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import apply_rotary_pos_emb_vision
+
+        from ...backend.triton.rounded_ops import rounded_rms_norm, rounded_swiglu
+        from ...backend.triton.vision_attention import segment_attention
+        from ...backend.triton.vision_rope import vision_qkv_rope
+
+        visual = self.policy._visual
+        fused = self.vision_kernel == "fused"
+        if fused and visual.config.hidden_act not in ("silu", "swish"):
+            raise ValueError("fused vision blocks require a SiLU MLP")
+        heads = visual.blocks[0].attn.num_heads
+        scale = (visual.blocks[0].attn.qkv.in_features // heads) ** -0.5
+        full_blocks = set(visual.fullatt_block_indexes)
+        bounds = {
+            full: (offsets.to(self.device), int((offsets[1:] - offsets[:-1]).max()))
+            for full, offsets in ((False, cu_window), (True, cu_full))
+        }
+
+        def norm(module: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
+            return rounded_rms_norm(x, module.weight, module.variance_epsilon) if fused else module(x)
+
+        def attend(module: torch.nn.Module, x: torch.Tensor, full: bool) -> torch.Tensor:
+            offsets, longest = bounds[full]
+            qkv = module.qkv(x)
+            if fused:
+                q, k, v = vision_qkv_rope(qkv, cos, sin, heads)
+            else:
+                q, k, v = qkv.reshape(len(x), 3, heads, -1).permute(1, 0, 2, 3).unbind(0)
+                q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+                q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+            out = segment_attention(q, k, v, offsets, longest, scale=scale, block_m=32)
+            return module.proj(out.reshape(len(x), -1))
+
+        def mlp(module: torch.nn.Module, x: torch.Tensor) -> torch.Tensor:
+            if fused:
+                return module.down_proj(rounded_swiglu(module.gate_proj(x), module.up_proj(x)))
+            return module(x)
+
+        def run_block(index: int, block: torch.nn.Module, hidden: torch.Tensor) -> torch.Tensor:
+            hidden = hidden + attend(block.attn, norm(block.norm1, hidden), index in full_blocks)
+            return hidden + mlp(block.mlp, norm(block.norm2, hidden))
+
+        return run_block, tuple(offsets for offsets, _ in bounds.values())
 
     def _text_forward(
         self,
@@ -407,7 +477,16 @@ class ActiveVLNGraphRuntime:
                     key_cache[slot, :, base + offset : base + offset + count].copy_(k[row, :, :count])
                     value_cache[slot, :, base + offset : base + offset + count].copy_(v[row, :, :count])
             if self.split_attention:
-                from ...backend.triton.split_attention import split_kv_attention
+                extra = {}
+                if getattr(self, "attention_kernel", "split") == "gqa":
+                    from ...backend.triton.gqa_split_attention import (
+                        gqa_split_kv_attention as split_kv_attention,
+                    )
+
+                    if getattr(self, "skip_padded_queries", False):
+                        extra["query_lengths"] = write_lengths
+                else:
+                    from ...backend.triton.split_attention import split_kv_attention
 
                 out = split_kv_attention(
                     q,
@@ -418,6 +497,7 @@ class ActiveVLNGraphRuntime:
                     ancestors=ancestors,
                     cache_starts=None if layout is None else layout[0],
                     cache_capacities=None if layout is None else layout[1],
+                    **extra,
                 )
             else:
                 if layout is not None:
