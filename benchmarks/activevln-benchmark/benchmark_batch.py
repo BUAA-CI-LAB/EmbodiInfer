@@ -172,6 +172,8 @@ def run(config: dict[str, Any], output: Path) -> int:
                 incremental_kv_commit=config.get("incremental_kv_commit", False),
                 vision_kernel=config.get("vision_kernel", "hf"),
                 skip_padded_queries=config.get("skip_padded_queries", False),
+                packed_prefill=config.get("packed_prefill", False),
+                packed_prefill_bucket=config.get("packed_prefill_bucket", 64),
             )
             report["phase"] = "graph_capture"
             save_report(output, report)
