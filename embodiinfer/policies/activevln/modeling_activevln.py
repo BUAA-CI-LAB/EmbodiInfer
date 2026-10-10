@@ -183,6 +183,17 @@ def _top_p_filter(logits: torch.Tensor, top_p: float) -> torch.Tensor:
     return torch.full_like(logits, float("-inf")).scatter(1, sorted_indices, sorted_logits)
 
 
+def _to_device(tensors: Sequence[torch.Tensor], device: torch.device) -> list[torch.Tensor]:
+    """Device copies of CPU tensors; same-dtype tensors share one pinned, non-blocking transfer."""
+    if device.type != "cuda" or len({tensor.dtype for tensor in tensors}) != 1:
+        return [tensor.to(device) for tensor in tensors]
+    sizes = [tensor.numel() for tensor in tensors]
+    staged = torch.empty(sum(sizes), dtype=tensors[0].dtype, pin_memory=True)
+    torch.cat([tensor.reshape(-1) for tensor in tensors], out=staged)
+    parts = staged.to(device, non_blocking=True).split(sizes)
+    return [part.view(tensor.shape) for part, tensor in zip(parts, tensors, strict=True)]
+
+
 @dataclass
 class PreparedActiveVLNTurn:
     """Device-ready turn, with CPU image/token processing completed."""
@@ -864,8 +875,8 @@ class ActiveVLNPolicy(VLAPolicy):
         """CPU image/token processing only; safe to run off the inference thread.
 
         With GPU preprocessing the frame stays uint8. Tokens and positions
-        depend only on the prompt text and frame size, so the reference
-        processor computes them once per prompt.
+        depend only on the prompt text and frame size, so they are computed
+        once per prompt.
         """
         if self.gpu_image_transform is None:
             turn = self._processor.process_turn(observation, initial=initial)
@@ -874,9 +885,8 @@ class ActiveVLNPolicy(VLAPolicy):
         key = (self._processor.turn_text(observation, initial=initial), rgb.shape, initial)
         cached = self._host_turns.get(key)
         if cached is None:
-            turn = self._processor.process_turn(observation, initial=initial)
-            empty = turn.pixel_values.new_empty((0, turn.pixel_values.shape[-1]))
-            cached = (replace(turn, pixel_values=empty), *self._positions(turn))
+            turn = self._processor.process_turn_tokens(observation, initial=initial)
+            cached = (turn, *self._positions(turn))
             if len(self._host_turns) >= 4096:
                 self._host_turns.clear()
             self._host_turns[key] = cached
@@ -891,7 +901,12 @@ class ActiveVLNPolicy(VLAPolicy):
         for index, host in enumerate(hosts):
             sizes.setdefault(tuple(host.rgb.shape), []).append(index)
         for indices in sizes.values():
-            frames = torch.stack([hosts[index].rgb for index in indices]).to(parameter.device)
+            first = hosts[indices[0]].rgb
+            frames = torch.empty(
+                (len(indices), *first.shape), dtype=first.dtype, pin_memory=parameter.device.type == "cuda"
+            )
+            torch.stack([hosts[index].rgb for index in indices], out=frames)
+            frames = frames.to(parameter.device, non_blocking=True)
             patches = self.gpu_image_transform(frames).to(parameter.dtype)
             for index, chunk in zip(indices, patches.chunk(len(indices)), strict=True):
                 pixels[index] = chunk
@@ -908,21 +923,55 @@ class ActiveVLNPolicy(VLAPolicy):
 
         ``pixel_values`` supplies device patches already computed for a uint8 turn.
         """
-        if host.initial != (memory is None):
-            raise ValueError("initial turns require no memory and later turns require one")
+        return self.prepare_devices([host], [memory], [pixel_values])[0]
+
+    def prepare_devices(
+        self,
+        hosts: Sequence[HostActiveVLNTurn],
+        memories: Sequence[ActiveVLNMemory | None],
+        pixel_values: Sequence[torch.Tensor | None] | None = None,
+    ) -> list[PreparedActiveVLNTurn]:
+        """``prepare_device`` for several turns; their token tensors move in one transfer."""
+        pixel_values = [None] * len(hosts) if pixel_values is None else list(pixel_values)
+        if not len(hosts) == len(memories) == len(pixel_values):
+            raise ValueError("hosts, memories and pixel values must align")
+        for host, memory in zip(hosts, memories, strict=True):
+            if host.initial != (memory is None):
+                raise ValueError("initial turns require no memory and later turns require one")
         parameter = next(self.parameters())
-        offset = 0 if memory is None else memory.next_position
-        turn = host.turn.to(parameter.device, parameter.dtype)
-        if host.rgb is not None:
-            if pixel_values is None:
-                pixel_values = self.device_pixels([host])[0]
-            turn = replace(turn, pixel_values=pixel_values)
-        return PreparedActiveVLNTurn(
-            turn,
-            (host.positions + offset).to(parameter.device),
-            memory,
-            host.next_position + offset,
+        offsets = [0 if memory is None else memory.next_position for memory in memories]
+        moved = _to_device(
+            [
+                tensor
+                for host, offset in zip(hosts, offsets, strict=True)
+                for tensor in (
+                    host.turn.input_ids,
+                    host.turn.attention_mask,
+                    host.turn.image_grid_thw,
+                    host.positions + offset,
+                )
+            ],
+            parameter.device,
         )
+        missing = [
+            host
+            for host, pixels in zip(hosts, pixel_values, strict=True)
+            if host.rgb is not None and pixels is None
+        ]
+        computed = iter(self.device_pixels(missing) if missing else ())
+        prepared = []
+        for index, (host, memory, offset) in enumerate(zip(hosts, memories, offsets, strict=True)):
+            pixels = pixel_values[index]
+            if host.rgb is None:
+                pixels = host.turn.pixel_values.to(parameter.device, parameter.dtype)
+            elif pixels is None:
+                pixels = next(computed)
+            ids, mask, grid, positions = moved[4 * index : 4 * index + 4]
+            turn = replace(
+                host.turn, input_ids=ids, attention_mask=mask, pixel_values=pixels, image_grid_thw=grid
+            )
+            prepared.append(PreparedActiveVLNTurn(turn, positions, memory, host.next_position + offset))
+        return prepared
 
     def encode_prepared_prefix(self, prepared: PreparedActiveVLNTurn) -> ActiveVLNPrefix:
         """Execute vision and text prefill without CPU observation preprocessing."""
