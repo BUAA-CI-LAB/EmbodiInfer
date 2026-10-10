@@ -8,6 +8,7 @@ from threading import RLock
 from typing import TYPE_CHECKING
 from weakref import ref
 
+import numpy as np
 import torch
 
 from ...exceptions import SessionCancelledError
@@ -135,10 +136,16 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         self._pending_generation: int | None = None
         self.capacity_growths = 0
         self.grammar_tree_budget = grammar_tree_budget
-        self.grammar_drafter = None
+        self.grammar_drafter = self.grammar_stops = None
         if grammar_tree_budget:
-            from .grammar_tree_activevln import ActionGrammar, GrammarDrafter, prompt_action_phrases
+            from .grammar_tree_activevln import (
+                ActionGrammar,
+                GrammarDrafter,
+                StopReasons,
+                prompt_action_phrases,
+            )
 
+            self.grammar_stops = StopReasons(policy)
             self.grammar_drafter = GrammarDrafter(
                 ActionGrammar(policy.tokenizer, policy.eos_token_ids[0]),
                 prefix_weight=grammar_prefix_weight,
@@ -214,7 +221,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 torch.full((batch_size,), allocated_tokens, device=self.device, dtype=torch.long),
             )
         self._resident_rows = [None] * batch_size
-        self._owned_rows: list[tuple[torch.Tensor, object] | None] = [None] * batch_size
+        self._owned_rows: list[tuple[torch.Tensor, object, list] | None] = [None] * batch_size
 
     def reset_stats(self) -> None:
         """Reset graph/tree and cache reuse counts without dropping prepared graphs."""
@@ -395,6 +402,40 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             return self.storage[:, :, :, :, base + start : base + end]
         return self.storage[:, :, row : row + 1, :, start:end]
 
+    def _upload(self, *arrays: np.ndarray) -> list[torch.Tensor]:
+        """Device copies of same-dtype host arrays, through one non-blocking transfer.
+
+        The pinned staging block stays reserved until the copy has run, so the
+        caller may reuse its arrays at once.
+        """
+        host = torch.from_numpy(np.concatenate([array.ravel() for array in arrays]))
+        if self.device.type == "cuda":
+            host = host.pin_memory()
+        flat = host.to(self.device, non_blocking=True)
+        parts = flat.split([array.size for array in arrays])
+        return [part.view(array.shape) for part, array in zip(parts, arrays, strict=True)]
+
+    def _keep_tree_nodes(self, kept: Sequence[tuple[int, int, Sequence[int]]]) -> None:
+        """Move accepted tree nodes into linear history order.
+
+        Each entry is (row, start, nodes): the KV of slots start + nodes[i]
+        moves to start + i. Every slot is read before any is written.
+        """
+        if not kept:
+            return
+        if self.pooled_kv:
+            sources = [self._row_starts[row] + start + np.asarray(nodes) for row, start, nodes in kept]
+            targets = [self._row_starts[row] + start + np.arange(len(nodes)) for row, start, nodes in kept]
+            source, target = self._upload(
+                np.concatenate(sources).astype(np.int64), np.concatenate(targets).astype(np.int64)
+            )
+            self.storage.index_copy_(-2, target, self.storage.index_select(-2, source))
+            return
+        for row, start, nodes in kept:
+            (index,) = self._upload(np.asarray(nodes, dtype=np.int64))
+            moved = self._row_kv(row, start, start + max(nodes) + 1).index_select(-2, index)
+            self._row_kv(row, start, start + len(nodes)).copy_(moved)
+
     def _capture_batch(self, query: int, key_bucket: int, *, tree: bool = False) -> _TextGraph:
         buffers = self._graph_buffers.get((query, tree))
         if buffers is None:
@@ -512,12 +553,9 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         extent = max(past) + query
         limit = self.policy.max_context if self.pooled_kv else self.storage.shape[-2]
         key_bucket = min(limit, max(512, 1 << (extent - 1).bit_length()))
-        offsets = torch.tensor(past, device=self.device, dtype=torch.long)
-        self._write_lengths.copy_(
-            torch.tensor(
-                [query] * self.batch_size if write_lengths is None else write_lengths, device=self.device
-            )
-        )
+        written = [query] * self.batch_size if write_lengths is None else write_lengths
+        offsets, lengths = self._upload(np.asarray(past, dtype=np.int64), np.asarray(written, dtype=np.int64))
+        self._write_lengths.copy_(lengths)
         stage = "tree" if ancestors is not None else "decode" if query == 1 else "prefill"
         graphs = self.tree_graphs if ancestors is not None else self.text_graphs
         entry = graphs.get((query, key_bucket)) if self.use_cuda_graph else None
@@ -725,7 +763,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         source = self._row_kv(row, 0, length)
         entry = self._owned_rows[row]
         if entry is not None:
-            owned, owner = entry
+            owned, owner, _ = entry
             holder = owner()
             reusable = owned.shape[-2] >= length and (
                 (memory is not None and holder is memory) or (memory is None and holder is None)
@@ -752,11 +790,14 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         return owned
 
     def _finish_generation(self, prefix, tokens, scores, lengths, coordinates, reasons):
+        """Commit each row; tokens and scores are 1-D tensors or lists of scalar tensors per row."""
         count = len(prefix.prepared.turns)
         generations = []
         for row in range(count):
-            response = torch.stack(tokens[row])
-            response_scores = torch.stack(scores[row])[None]
+            response, response_scores = (
+                values if isinstance(values, torch.Tensor) else torch.stack(values)
+                for values in (tokens[row], scores[row])
+            )
             ids = torch.cat((prefix.token_history[row], response))
             positions = torch.cat(
                 (
@@ -769,8 +810,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             )
             old = prefix.prepared.turns[row].memory
             packed = self._commit_row_kv(row, lengths[row], old)
+            entry = self._owned_rows[row]
+            layers = list(entry[2]) if entry is not None and entry[0] is packed else _layer_views(packed)
             memory = ActiveVLNMemory(
-                layers=_layer_views(packed),
+                layers=layers,
                 token_ids_buffer=ids,
                 attention_buffer=torch.ones_like(ids),
                 position_buffer=positions,
@@ -781,7 +824,9 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 _next_position=coordinates[row],
                 _packed_kv=packed,
             )
-            self._owned_rows[row] = (packed, ref(memory))
+            self._owned_rows[row] = (packed, ref(memory), layers)
             self._resident_rows[row] = (ref(memory), memory.seq_len)
-            generations.append(ActiveVLNGeneration(memory, response[None], response_scores, reasons[row]))
+            generations.append(
+                ActiveVLNGeneration(memory, response[None], response_scores[None], reasons[row])
+            )
         return tuple(generations)
