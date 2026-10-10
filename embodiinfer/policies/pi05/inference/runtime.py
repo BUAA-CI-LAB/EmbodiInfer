@@ -1,6 +1,6 @@
 """PI0.5 inference caches and graphs.
 
-The engine keeps its public FlowDecoder contract. Schedule-specific AdaRMS
+The engine keeps its public ActionDecoder contract. Schedule-specific AdaRMS
 projections and compact camera/text layouts remain local to this policy.
 """
 
@@ -8,17 +8,18 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
 import torch
 
-from ...models.schedulers.flow import euler_step
-from ..decoder import FlowDecoder
-from .processor_pi05 import Pi05Batch
+from ....models.schedulers.flow import euler_step
+from ...decoder import FlowActionDecoder
+from ..processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
-    from ...engine.graph import GraphManager
-    from .modeling_pi05 import Pi05Policy, Pi05Prefix
+    from ....engine.graph import GraphManager
+    from ..modeling_pi05 import Pi05Policy, Pi05Prefix
 
 
 def _compact_layout(batch: Pi05Batch) -> tuple[Pi05Batch, bool]:
@@ -74,6 +75,20 @@ def compact_batch(batch: Pi05Batch) -> Pi05Batch:
     return _compact_layout(batch)[0]
 
 
+def _compact_all_valid(batch: Pi05Batch) -> Pi05Batch:
+    """Gather B1 valid prompt tokens before mask-free FlashAttention capture."""
+    if batch.batch_size != 1:
+        raise ValueError("Mask-free Pi05 prefix compaction requires B1")
+    columns = batch.masks[0].nonzero().flatten()
+    return Pi05Batch(
+        batch.images,
+        batch.img_masks,
+        batch.tokens.index_select(1, columns),
+        batch.masks.index_select(1, columns),
+        batch.request_ids,
+    )
+
+
 def _tensor_key(tensor: torch.Tensor) -> tuple:
     return tensor.shape, tensor.dtype, tensor.device, tensor.stride()
 
@@ -83,7 +98,7 @@ def _stream_key(device: torch.device) -> int:
 
 
 def _clone_prefix(prefix: Pi05Prefix) -> Pi05Prefix:
-    from .modeling_pi05 import Pi05Prefix
+    from ..modeling_pi05 import Pi05Prefix
 
     return Pi05Prefix(
         [(k.clone(), v.clone()) for k, v in prefix.kv],
@@ -104,12 +119,26 @@ class _PrefixGraph:
         self.graph = torch.cuda.CUDAGraph()
         stream = torch.cuda.Stream(device=batch.tokens.device)
         stream.wait_stream(torch.cuda.current_stream(batch.tokens.device))
-        with torch.cuda.stream(stream):
-            for _ in range(3):
-                policy._encode_prefix_impl(self.batch, all_valid=all_valid)
-        torch.cuda.current_stream(batch.tokens.device).wait_stream(stream)
-        with torch.cuda.graph(self.graph, stream=stream, capture_error_mode="thread_local"):
-            self.output = policy._encode_prefix_impl(self.batch, all_valid=all_valid)
+        getter = getattr(policy, "_get_optimizations", None)
+        self.operators = getter() if getter is not None else None
+        self.scope = object()
+        self.device = batch.tokens.device
+        context = nullcontext() if self.operators is None else self.operators.execution_scope(self.scope)
+        try:
+            with context:
+                with torch.cuda.stream(stream):
+                    for _ in range(3):
+                        policy._encode_prefix_impl(self.batch, all_valid=all_valid)
+                torch.cuda.current_stream(batch.tokens.device).wait_stream(stream)
+                with torch.cuda.graph(self.graph, stream=stream, capture_error_mode="thread_local"):
+                    self.output = policy._encode_prefix_impl(self.batch, all_valid=all_valid)
+
+        except BaseException:
+            if self.operators is not None:
+                torch.cuda.synchronize(self.device)
+                self.graph.reset()
+                self.operators.release_scope(self.scope)
+            raise
 
     def run(self, batch: Pi05Batch) -> Pi05Prefix:
         for dst, src in zip(
@@ -130,12 +159,26 @@ class _LoopGraph:
         self.state.copy_(state)
         stream = torch.cuda.Stream(device=state.device)
         stream.wait_stream(torch.cuda.current_stream(state.device))
-        with torch.cuda.stream(stream):
-            for _ in range(3):
-                runtime.integrate(self.state, self.prefix, steps)
-        torch.cuda.current_stream(state.device).wait_stream(stream)
-        with torch.cuda.graph(self.graph, stream=stream, capture_error_mode="thread_local"):
-            self.output = runtime.integrate(self.state, self.prefix, steps)
+        getter = getattr(runtime.policy, "_get_optimizations", None)
+        self.operators = getter() if getter is not None else None
+        self.scope = object()
+        self.device = state.device
+        context = nullcontext() if self.operators is None else self.operators.execution_scope(self.scope)
+        try:
+            with context:
+                with torch.cuda.stream(stream):
+                    for _ in range(3):
+                        runtime.integrate(self.state, self.prefix, steps)
+                torch.cuda.current_stream(state.device).wait_stream(stream)
+                with torch.cuda.graph(self.graph, stream=stream, capture_error_mode="thread_local"):
+                    self.output = runtime.integrate(self.state, self.prefix, steps)
+
+        except BaseException:
+            if self.operators is not None:
+                torch.cuda.synchronize(self.device)
+                self.graph.reset()
+                self.operators.release_scope(self.scope)
+            raise
 
     def run(self, state: torch.Tensor, prefix: Pi05Prefix) -> torch.Tensor:
         self.state.copy_(state)
@@ -145,6 +188,16 @@ class _LoopGraph:
             dv.copy_(sv)
         self.graph.replay()
         return self.output.clone()
+
+
+def _close_graph(graph: Any, *, synchronize: bool = True) -> None:
+    operators = getattr(graph, "operators", None)
+    if operators is None:
+        return
+    if synchronize:
+        torch.cuda.synchronize(graph.device)
+    graph.graph.reset()
+    operators.release_scope(graph.scope)
 
 
 class Pi05Runtime:
@@ -161,6 +214,12 @@ class Pi05Runtime:
     def clear(self) -> None:
         """Discard weight-derived schedules and graphs after refit or migration."""
         with self.lock:
+            operators = getattr(self.policy, "_fused_ops", None)
+            if operators is not None:
+                # ctypes launches do not participate in Torch's stream recording.
+                torch.cuda.synchronize(self.policy._m.action_in_proj.weight.device)
+            for graph in (*self.prefix_graphs.values(), *self.loop_graphs.values()):
+                _close_graph(graph, synchronize=False)
             self.prefix_graphs.clear()
             self.loop_graphs.clear()
             self.schedules.clear()
@@ -170,13 +229,31 @@ class Pi05Runtime:
         cache[key] = value
         cache.move_to_end(key)
         if len(cache) > limit:
-            cache.popitem(last=False)
+            _, evicted = cache.popitem(last=False)
+            _close_graph(evicted)
         return value
 
     def encode(self, batch: Pi05Batch, return_hidden: bool) -> Pi05Prefix:
         """Encode the compact valid layout, optionally through a prefix graph."""
         with self.lock:
             batch, all_valid = _compact_layout(batch)
+            config = getattr(self.policy, "_optimization_config", None)
+            if (
+                config is not None
+                and (config.compact_prefix or config.attention == "folded_flash")
+                and not return_hidden
+            ):
+                columns = batch.masks.any(dim=0).nonzero().flatten()
+                batch = Pi05Batch(
+                    batch.images,
+                    batch.img_masks,
+                    batch.tokens.index_select(1, columns),
+                    batch.masks.index_select(1, columns),
+                    batch.request_ids,
+                )
+                all_valid = bool(batch.masks.all()) and all(bool(mask.all()) for mask in batch.img_masks)
+                if config.attention == "folded_flash" and not all_valid:
+                    raise ValueError("Folded FlashAttention requires all-valid compact prefix masks")
             if not self.policy.prefix_cuda_graph or return_hidden or batch.tokens.device.type != "cuda":
                 return self.policy._encode_prefix_impl(batch, return_hidden, all_valid=all_valid)
             key = (
@@ -216,10 +293,17 @@ class Pi05Runtime:
 
     def integrate(self, state: torch.Tensor, prefix: Pi05Prefix, steps: int) -> torch.Tensor:
         """Run every Euler step with immutable, step-indexed AdaRMS projections."""
+        getter = getattr(self.policy, "_get_optimizations", None)
+        operators = getter() if getter is not None else None
+        if operators is not None:
+            operators.validate_request(state.shape[0], steps)
+        context = nullcontext() if operators is None else operators.decode_context(prefix)
         x = state
-        for t, dt, modulations in self.schedule(state, steps):
-            velocity = self.policy._denoise_step_impl(x, t, prefix, modulations)
-            x = euler_step(x, velocity, dt)
+        device_context = torch.cuda.device(state.device) if state.is_cuda else nullcontext()
+        with device_context, context:
+            for t, dt, modulations in self.schedule(state, steps):
+                velocity = self.policy._denoise_step_impl(x, t, prefix, modulations)
+                x = euler_step(x, velocity, dt)
         return x
 
     def decode(self, state: torch.Tensor, prefix: Pi05Prefix, steps: int, use_graph: bool) -> torch.Tensor:
@@ -250,8 +334,8 @@ class Pi05Runtime:
         )
 
 
-class Pi05FlowDecoder(FlowDecoder):
-    """Specialize deterministic inference while inheriting the public RL paths."""
+class Pi05FlowDecoder(FlowActionDecoder):
+    """Expose deterministic inference without the policy-gradient rollout capability."""
 
     def integrate(
         self,

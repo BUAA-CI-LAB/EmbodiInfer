@@ -147,6 +147,10 @@ vvla-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
 [tool.setuptools.packages.find]
 include = ["embodiinfer*", "vvla"]
 
+[tool.setuptools.package-data]
+"embodiinfer.backend.cuda" = ["csrc/*.cu"]
+"embodiinfer.policies.pi05.inference" = ["calibration/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

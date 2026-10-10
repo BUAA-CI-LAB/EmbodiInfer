@@ -15,5 +15,5 @@ def pytest_collection_modifyitems(config, items):
         return
     skip_no_cuda = pytest.mark.skip(reason="requires CUDA (run on a GPU host)")
     for item in items:
-        if "gpu" in item.keywords or "pi05" in item.keywords:
+        if item.get_closest_marker("gpu") is not None or item.get_closest_marker("pi05") is not None:
             item.add_marker(skip_no_cuda)

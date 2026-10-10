@@ -50,3 +50,25 @@ def rope_tables(
         cos = angles.cos() * rotary.attention_scaling
         sin = angles.sin() * rotary.attention_scaling
     return cos.to(x.dtype), sin.to(x.dtype)
+
+
+def openpi_rlinf_time_embedding(
+    time: torch.Tensor,
+    dimension: int,
+    min_period: float,
+    max_period: float,
+    device: torch.device,
+) -> torch.Tensor:
+    """Preserve RLinf's FP32 linspace, period and einsum ordering."""
+    fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=torch.float32, device=device)
+    period = min_period * (max_period / min_period) ** fraction
+    angles = torch.einsum("i,j->ij", time.float(), 1.0 / period * 2 * torch.pi)
+    return torch.cat((torch.sin(angles), torch.cos(angles)), dim=-1).to(time.dtype)
+
+
+def openpi_rlinf_rope_tables(positions: torch.Tensor, width: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return half-width FP32 cosine/sine in RLinf's original arithmetic order."""
+    exponents = (2.0 / width) * torch.arange(width // 2, dtype=torch.float32, device=positions.device)
+    timescale = 10_000.0**exponents
+    radians = positions[..., None].float() / timescale[None, None, :]
+    return torch.cos(radians[..., None, :]), torch.sin(radians[..., None, :])

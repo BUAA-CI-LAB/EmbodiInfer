@@ -216,9 +216,10 @@ class VLAPolicy(abc.ABC, torch.nn.Module):
     def decoder(self) -> ActionDecoder:
         """The strategy that turns a prefix into an action chunk.
 
-        Flow policies return a ``FlowDecoder`` (N-step denoise loop); a single-pass
-        policy (OpenVLA-OFT) returns a ``ParallelDecoder``. The engine and the RL
-        rollout surface depend only on this — never on whether the model denoises."""
+        Flow policies use ``FlowActionDecoder`` for inference or ``FlowDecoder``
+        when policy-gradient rollout is supported. A single-pass policy
+        (OpenVLA-OFT) returns ``ParallelDecoder``. The engine depends on this
+        contract, with RL rollout requiring the additional ``RLDecoder`` capability."""
 
     # ---- batch construction (default: the dense BatchedObservation layout) ---
     def collate(self, observations: list[Observation], request_ids: list[str]) -> PolicyBatch:

@@ -94,6 +94,9 @@ StreamVLN 使用原生 W8A8 FP8。Thor 使用原生 W8A8 FP8 和原生 NVFP4。
 请使用
 [适配器 JSON](serving.md#adapter-json)配置相机名称和状态字段，再通过 `--max-batch` 设置批次上限。
 
+原生 Pi05 decoder 只提供确定性推理接口，不声明 `RLDecoder` 的采样或可微
+对数概率重算能力。
+
 对于 PI0.5，`attention="eager"` 还会选择参考投影布局：各相机
 视角单独编码，Q/K/V 与 gate/up 投影保持分离。
 融合后端则保留批处理与融合路径。这一区别对

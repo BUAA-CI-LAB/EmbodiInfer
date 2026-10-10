@@ -18,10 +18,12 @@ from embodiinfer.engine.config import EngineConfig
 from embodiinfer.engine.core import EngineCore
 from embodiinfer.policies.config import VLAPolicyConfig
 from embodiinfer.policies.pi05.checkpoints.lerobot import load_lerobot_checkpoint
+from embodiinfer.policies.pi05.inference.config import Pi05OptimizationConfig
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
 MODES = ("lerobot", "vvla_eager", "vvla_eager_graph", "vvla_sdpa", "vvla_sdpa_graph")
+FUSED_MODE = "vvla_fused_graph"
 
 
 def read_observation(path: Path) -> dict[str, Any]:
@@ -47,13 +49,17 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True, help="New output directory")
     parser.add_argument("--seeds", type=int, nargs="+", default=[1000, 0, 2026])
     parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--modes", choices=MODES, nargs="+", default=list(MODES))
+    parser.add_argument("--modes", choices=(*MODES, FUSED_MODE), nargs="+", default=list(MODES))
+    parser.add_argument("--optimizations", type=Path, help="Standalone recipe required for vvla_fused_graph")
     parser.add_argument("--matmul-precision", choices=("highest", "high", "medium"), default="highest")
     args = parser.parse_args()
     if not torch.cuda.is_available():
         parser.error("this measurement requires CUDA")
     if args.warmup < 1 or args.modes[0] != "lerobot" or len(args.modes) != len(set(args.modes)):
         parser.error("use at least one warmup and unique modes with lerobot first")
+    if (FUSED_MODE in args.modes) != (args.optimizations is not None):
+        parser.error("select vvla_fused_graph together with --optimizations")
+    optimizations = Pi05OptimizationConfig.from_json(args.optimizations) if args.optimizations else None
     args.out.mkdir(parents=True, exist_ok=False)
     torch.set_float32_matmul_precision(args.matmul_precision)
 
@@ -106,6 +112,7 @@ def main() -> None:
         "action_dim": dim,
         "parameter_dtypes": sorted({str(p.dtype) for p in reference.parameters()}),
         "placement": "all parameters on CUDA; no CPU embedding offload",
+        "optimizations": json.loads(args.optimizations.read_text()) if args.optimizations else None,
     }
     (args.out / "conditions.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
@@ -113,8 +120,15 @@ def main() -> None:
         engine = None
         if mode != "lerobot":
             policy = Pi05Policy(
-                cfg, reference, attention="eager" if "eager" in mode else "sdpa", native_embeddings=True
+                cfg,
+                reference,
+                attention="eager" if "eager" in mode else "sdpa",
+                native_embeddings=True,
+                native_inference=mode == FUSED_MODE,
+                prefix_cuda_graph=mode == FUSED_MODE,
+                optimizations=optimizations if mode == FUSED_MODE else None,
             )
+            policy.checkpoint = args.checkpoint
             before = {name: p.dtype for name, p in policy.named_parameters()}
             graph = mode.endswith("_graph")
             engine = EngineCore(
@@ -212,6 +226,7 @@ def main() -> None:
             )
         del run, engine
         if mode != "lerobot":
+            policy._clear_inference_caches()
             del policy
         gc.collect()
         torch.cuda.empty_cache()

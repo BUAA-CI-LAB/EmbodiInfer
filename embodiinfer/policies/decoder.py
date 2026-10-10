@@ -13,6 +13,8 @@ Two capability tiers keep the abstraction honest across paradigms:
 
 The concrete decoders, one per paradigm:
 
+  * :class:`FlowActionDecoder` (plain ``ActionDecoder``) — deterministic flow
+    integration without the policy-gradient contract.
   * :class:`FlowDecoder` (``RLDecoder``) — the N-step flow-matching Euler loop (pi0.5,
     GR00T, LingBot-VLA); wraps a :class:`~embodiinfer.policies.base.FlowVLAPolicy`'s
     ``denoise_step``/``flow_schedule`` + the flow-SDE rollout log-prob.
@@ -39,6 +41,7 @@ from ..models.schedulers.flow import euler_step
 from ..types import DecodeTrace
 
 if TYPE_CHECKING:
+    from ..engine.graph import GraphManager
     from .base import FlowVLAPolicy, MemoryState, PrefixState
 
 
@@ -163,14 +166,11 @@ class AutoregressiveDecoder(ActionDecoder):
         return self.decode(state, prefix, num_steps, bucket, graphs).actions
 
 
-class FlowDecoder(RLDecoder):
-    """N-step flow-matching Euler loop + flow-SDE rollout log-prob (pi0.5, GR00T).
+class FlowActionDecoder(ActionDecoder):
+    """Deterministic flow integration with policy-owned state and output conversion."""
 
-    Policies own the internal state shape, output conversion, and optional
-    likelihood mask. Integration and stochastic trajectory scoring are shared.
-    """
-
-    def __init__(self, policy: FlowVLAPolicy):
+    def __init__(self, policy: FlowVLAPolicy) -> None:
+        """Use the policy's flow schedule, denoiser, and action transforms."""
         self.policy = policy
 
     def state_shape(self, batch_size: int) -> tuple[int, int, int]:
@@ -181,13 +181,23 @@ class FlowDecoder(RLDecoder):
         return self.policy.new_noise(batch_size, generator=generator)
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs: GraphManager | None,
     ) -> torch.Tensor:
         """Integrate the flow field, then restore the policy's public action representation."""
         return self.policy.finalize_actions(self.integrate(state, prefix, num_steps, bucket, graphs), prefix)
 
     def integrate(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs: GraphManager | None,
     ) -> torch.Tensor:
         """Run all flow steps and return model-space actions before output transforms.
 
@@ -212,6 +222,10 @@ class FlowDecoder(RLDecoder):
                 velocity = graph.run(x, t) if graph is not None else policy.denoise_step(x, t, prefix)
                 x = euler_step(x, velocity, dt)
         return x
+
+
+class FlowDecoder(FlowActionDecoder, RLDecoder):
+    """Flow integration plus stochastic rollout and differentiable trajectory scoring."""
 
     def sample_with_logprob(
         self, prefix: PrefixState, num_steps: int, sigma, generator: torch.Generator | None = None

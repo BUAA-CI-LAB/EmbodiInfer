@@ -108,6 +108,101 @@ Fused backends retain the batched and fused routes. This distinction matters for
 rollout/actor log-probability comparisons on selectively cast checkpoints: changing
 GEMM shapes can change rounding even with the same attention formula.
 
+#### Opt-in fused operators
+
+Deployment selects a device and a complete preset:
+
+```python
+policy = make_policy(
+    "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
+    device_type="thor", preset="nvfp4-fp8",
+)
+```
+
+| Preset | Devices | Prefix / action MLP | Numerical contract |
+|---|---|---|---|
+| `strict` | Thor, Spark, Orin, RTX 4090 | BF16 / BF16 | LeRobot |
+| `bf16` | Thor, Spark | BF16 / BF16 | `openpi_rlinf` |
+| `bf16-fp8` | Thor, Spark | BF16 / protected FP8 | `openpi_rlinf` |
+| `nvfp4-bf16` | Thor, Spark | NVFP4 / BF16 | `openpi_rlinf` |
+| `nvfp4-fp8` | Thor, Spark | NVFP4 / protected FP8 | `openpi_rlinf` |
+
+These presets include execution choices, numerical semantics and calibration
+selection. The factory supplies required native policy options; deployment does
+not assemble individual operator switches. CUDA Graph decoding remains an engine
+setting. `prefix_cuda_graph=False` explicitly disables policy prefix capture.
+
+The strict preset enables RMSNorm/residual fusion and prefix/suffix K/V storage
+reuse while retaining reference attention and separate BF16 gate/up computation.
+It has no fixed B1/H10 requirement. Passing no preset or optimization
+configuration retains the original route.
+Device selection validates GPU capability at execution; unsupported combinations
+fail explicitly. Low precision is an independent, explicitly approximate choice.
+
+The optimized presets select paired BF16 gate/up GEMMs, camera batching, prefix
+compaction, last-prefix-block K/V-only execution and action context reuse.
+They are available on Thor/Spark and require standard 18-layer towers, B1, inference horizon 10
+and ten denoise steps. Thor uses folded FlashAttention and a lookup GELU
+encoder with the `openpi_rlinf` contract; Spark uses query-major attention and
+its CUDA prefix softmax launch.
+Query-major attention requires `torch.bmm(out_dtype=torch.float32)`.
+
+There is no ambiguous `mixed` precision option. Pair names explicitly order
+prefix then action: for example, `bf16-nvfp4` and `fp8-nvfp4` express other
+combinations and require separately calibrated data.
+These formats apply to MLP projections; attention, vision and FP32 boundaries
+follow the numerical contract. Calibration retains any per-layer BF16 protection.
+The packaged `rlinf_libero` data covers only prefix NVFP4 and protected action FP8
+on Thor/Spark for RLinf-Pi05-LIBERO-SFT under `openpi_rlinf`. It can supply either
+selection or both; other tower/format pairs require their own calibration.
+The name identifies the checkpoint, not an optimization preset.
+
+Calibration is keyed by device, tower and format, and is loaded only when low
+precision is requested. Missing ranges fail explicitly; the checkpoint SHA256
+is checked before weight packing. Use `calibration="/path/to/calibration.json"`
+for independently calibrated weights or formats. Orin supports BF16 on this path;
+RTX 4090 supports BF16/FP8 hardware, and NVFP4 requires Blackwell. The optimized
+presets currently cover Thor/Spark; other devices use `strict` or explicitly
+constructed operator configurations. Quantized GEMMs require the Torch API
+tested in 2.13.
+
+The `openpi_rlinf` numerical contract follows the inference code in RLinf's
+`openpi_rlinf` package: BF16 vision encoder/projector, FP32
+patch/position/time/rotary math, BF16 query prescaling, separate Q/K/V,
+and contiguous BF16 down matrices. GELU uses the exact rather than tanh formula.
+The factory supplies `native_embeddings=True`, `native_inference=True`,
+`action_horizon=10` and `default_num_steps=10` for optimized presets.
+The checkpoint retains its nominal horizon metadata.
+CUDA Graph configuration belongs to `EngineConfig`; prefix capture remains a
+policy option. Inductor, global quantization and TP are rejected in combination
+with these operator plans. `openpi_rlinf` requires CUDA eval/no-grad inference.
+The native Pi05 decoder exposes deterministic generation only; it does not
+implement the `RLDecoder` sampling or differentiable log-probability contract.
+
+For ablations, construct `Pi05OptimizationConfig` directly or use
+`dataclasses.replace` on a resolved preset. `MlpLayerPrecision` selects gate/up
+and down precision independently in `prefix_layers` and `action_layers`.
+`OperatorBackends` selects registered normalization, quantization, GELU/product,
+rotary and projection implementations; `norm_quant=None` chooses separate
+normalization and encoding. Torch references support FP8; separate NVFP4
+comparisons retain the CUDA encoder/native GEMM. `from_json`/`to_json` import
+and export resolved configurations for reproducible experiments.
+
+Policy-specific configuration, presets, plans and graph runtime live together
+under `policies/pi05/inference/`; reusable operators remain under `layers/` and
+`backend/`. Preset resolution imports no optional kernels and does not probe CUDA.
+
+Strict pointwise parity does not establish task quality. Paired GEMMs and
+alternative attention can change accumulation; `openpi_rlinf` also changes numerical
+boundaries relative to LeRobot. Existing Thor/Spark measurements cover the four
+optimized presets listed above; they do not establish performance for separately
+calibrated combinations. Validation covers prefix K/V, ten
+velocities, full actions and changed-noise graph replay against frozen,
+matching-format references. Low precision changes outputs relative to BF16.
+See the [measurement conditions and results](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md),
+[API example](api.md#pi05-fused-operator-configuration) and
+[toolkit requirements](installation.md#pi05-fused-cuda-operators).
+
 ### DM0.5
 
 Provide a DM0.5 checkpoint and its `norm_stats.json`; see
