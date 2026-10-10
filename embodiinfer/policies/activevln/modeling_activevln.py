@@ -613,6 +613,8 @@ class ActiveVLNPolicy(VLAPolicy):
         incremental_kv_commit: bool = False,
         vision_kernel: str = "hf",
         skip_padded_queries: bool = False,
+        packed_prefill: bool = False,
+        packed_prefill_bucket: int = 64,
     ) -> ActiveVLNBatchedRuntime:
         """Create true tensor batching with explicit per-row memory inputs.
 
@@ -646,6 +648,8 @@ class ActiveVLNPolicy(VLAPolicy):
             incremental_kv_commit=incremental_kv_commit,
             vision_kernel=vision_kernel,
             skip_padded_queries=skip_padded_queries,
+            packed_prefill=packed_prefill,
+            packed_prefill_bucket=packed_prefill_bucket,
         )
 
     @contextmanager

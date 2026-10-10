@@ -52,6 +52,20 @@ class _BatchGraphBuffers:
     ancestors: torch.Tensor | None
 
 
+@dataclass
+class _PackedGraphBuffers:
+    """Inputs of every packed prefill graph; each graph uses leading slices."""
+
+    hidden: torch.Tensor
+    positions: torch.Tensor
+    offsets: torch.Tensor
+    starts: torch.Tensor
+    extent: torch.Tensor
+    slots: torch.Tensor
+    blocks: torch.Tensor
+    output: torch.Tensor
+
+
 class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
     """Share weights and execute vision/text/decode across independent batch rows.
 
@@ -85,9 +99,15 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         incremental_kv_commit: bool = False,
         vision_kernel: str = "hf",
         skip_padded_queries: bool = False,
+        packed_prefill: bool = False,
+        packed_prefill_bucket: int = 64,
     ) -> None:
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive Python integer")
+        if packed_prefill and (kv_pool_tokens is None or attention_kernel != "gqa" or not cuda_graph):
+            raise ValueError("packed prefill requires CUDA graphs, a shared KV pool and the GQA kernel")
+        if type(packed_prefill_bucket) is not int or packed_prefill_bucket < 1:
+            raise ValueError("packed_prefill_bucket must be a positive Python integer")
         if attention_kernel not in ("split", "gqa"):
             raise ValueError("attention_kernel must be 'split' or 'gqa'")
         if attention_kernel == "gqa" and not split_attention:
@@ -123,11 +143,19 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         self.pooled_kv = kv_pool_tokens is not None
         self.attention_kernel = attention_kernel
         self.skip_padded_queries = skip_padded_queries
+        self.packed_prefill = packed_prefill
+        self.packed_prefill_bucket = packed_prefill_bucket
+        self.packed_graphs: dict[tuple[int, int], _TextGraph] = {}
+        self._packed_keys: dict[int, int] = {}
+        self._packed_buffers: _PackedGraphBuffers | None = None
         self.incremental_kv_commit = incremental_kv_commit
         self.gpu_preprocess = gpu_preprocess
         policy.set_gpu_preprocess(gpu_preprocess)
         self.workspace_limit = workspace_tokens
-        allocated_tokens = workspace_tokens if kv_pool_tokens is None else kv_pool_tokens
+        # Packed prefill writes bucket-padding tokens' KV to slots no row reads.
+        self._spare_tokens = packed_prefill_bucket if packed_prefill else 0
+        self._spare_start = 0
+        allocated_tokens = workspace_tokens if kv_pool_tokens is None else kv_pool_tokens + self._spare_tokens
         self.batch_size = batch_size
         self.ragged_batch = True
         self.use_cuda_graph = cuda_graph
@@ -236,6 +264,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             tree_padding_nodes=0,
             prefill_actual_tokens=0,
             prefill_padding_tokens=0,
+            prefill_packed=0,
         )
 
     def _validate(self) -> None:
@@ -269,10 +298,13 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             "shared_graph_buffers": True,
             "attention_kernel": self.attention_kernel,
             "skip_padded_queries": self.skip_padded_queries,
+            "packed_prefill": self.packed_prefill,
+            "packed_prefill_bucket": self.packed_prefill_bucket if self.packed_prefill else None,
             "incremental_kv_commit": self.incremental_kv_commit,
             "gpu_preprocess": self.gpu_preprocess,
             "text_graph_executables": len({id(entry.graph) for entry in self.text_graphs.values()}),
             "tree_graph_executables": len({id(entry.graph) for entry in self.tree_graphs.values()}),
+            "packed_graph_executables": len(self.packed_graphs),
         }
 
     def prepare_host(
@@ -346,12 +378,17 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
     def _ensure_capacity(self, required: int) -> None:
         if required <= self.storage.shape[-2]:
             return
-        limit = self.batch_size * self.policy.max_context if self.pooled_kv else self.policy.max_context
+        limit = (
+            self.batch_size * self.policy.max_context + self._spare_tokens
+            if self.pooled_kv
+            else self.policy.max_context
+        )
         if required > limit:
             raise ValueError("batched query exceeds the model context limit")
         capacity = min(limit, 1 << (required - 1).bit_length())
         self.text_graphs.clear()
         self.tree_graphs.clear()
+        self.packed_graphs.clear()
         self._graph_buffers.clear()
         self._resident_rows = [None] * self.batch_size
         self._replace_storage(capacity)
@@ -385,12 +422,13 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         capacities = [
             min(self.policy.max_context, (n + alignment - 1) // alignment * alignment) for n in required
         ]
-        self._ensure_capacity(sum(capacities))
+        self._ensure_capacity(sum(capacities) + self._spare_tokens)
         starts, offset = [], 0
         for capacity in capacities:
             starts.append(offset)
             offset += capacity
         self._row_starts, self._row_capacities = starts, capacities
+        self._spare_start = offset
         self._cache_layout[0].copy_(torch.tensor(starts, device=self.device))
         self._cache_layout[1].copy_(torch.tensor(capacities, device=self.device))
         self._resident_rows = [None] * self.batch_size
@@ -466,6 +504,127 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         graph, output = self._capture(forward, self.device, self.pool)
         return _TextGraph(graph, buffers.hidden, buffers.positions, buffers.offsets, output)
 
+    def _query_group(self) -> int:
+        attention = self.policy._text.layers[0].self_attn
+        return attention.q_proj.out_features // attention.k_proj.out_features
+
+    def _packs(self, query: int) -> bool:
+        """Whether prefills padded to ``query`` run packed, matching the padded attention plan."""
+        from ...backend.triton.gqa_split_attention import PACKED_MIN_ROWS
+
+        return self.packed_prefill and query * self._query_group() >= PACKED_MIN_ROWS
+
+    def _packed_programs(self, tokens: int) -> int:
+        from ...backend.triton.gqa_split_attention import PACKED_BLOCK_M
+
+        return -(-tokens // (PACKED_BLOCK_M // self._query_group())) + self.batch_size
+
+    def _capture_packed(self, tokens: int, key_bucket: int) -> _TextGraph:
+        buffers = self._packed_buffers
+        hidden, positions = buffers.hidden[:, :tokens], buffers.positions[:, :, :tokens]
+        output = buffers.output[:, :tokens]
+        layout = (
+            buffers.blocks[: self._packed_programs(tokens)],
+            buffers.starts,
+            buffers.extent,
+            buffers.slots[:tokens],
+        )
+        self._write_lengths.zero_()
+
+        def forward():
+            output.copy_(self._text_forward(hidden, positions, buffers.offsets, key_bucket, packed=layout))
+            return output
+
+        graph, output = self._capture(forward, self.device, self.pool)
+        return _TextGraph(graph, hidden, positions, buffers.offsets, output)
+
+    def _capture_packed_contexts(self, longest: int, context_buckets: Sequence[int]) -> None:
+        """Packed prefill graphs for every bucketed token count up to B turns of ``longest``.
+
+        Graphs with the same KV partition count share the largest key bound:
+        a sufficient bound never enters a packed launch's partitions.
+        """
+        from ...backend.triton.gqa_split_attention import PACKED_MIN_ROWS, gqa_launch_config
+
+        bucket = self.packed_prefill_bucket
+        most = -(-self.batch_size * longest // bucket) * bucket
+        if self._packed_buffers is None or self._packed_buffers.hidden.shape[1] < most:
+            self.packed_graphs.clear()
+            hidden = next(self.policy.parameters()).new_zeros(
+                1, most, self.policy._text.embed_tokens.weight.shape[1]
+            )
+            rows = torch.zeros(self.batch_size, device=self.device, dtype=torch.long)
+            self._packed_buffers = _PackedGraphBuffers(
+                hidden,
+                torch.zeros(3, 1, most, device=self.device, dtype=torch.long),
+                rows,
+                torch.zeros_like(rows),
+                torch.zeros(1, device=self.device, dtype=torch.long),
+                torch.zeros(most, device=self.device, dtype=torch.long),
+                torch.full((self._packed_programs(most),), -1, device=self.device, dtype=torch.long),
+                torch.empty_like(hidden),
+            )
+        for key in context_buckets:
+            splits = gqa_launch_config(PACKED_MIN_ROWS, key)[4]
+            self._packed_keys[splits] = max(key, self._packed_keys.get(splits, 0))
+        for key in self._packed_keys.values():
+            for tokens in range(bucket, most + 1, bucket):
+                if (tokens, key) not in self.packed_graphs:
+                    self.packed_graphs[(tokens, key)] = self._capture_packed(tokens, key)
+
+    def _packed_graph(self, sizes: Sequence[int], query: int, past: Sequence[int]) -> _TextGraph | None:
+        if not self._packs(query):
+            return None
+        from ...backend.triton.gqa_split_attention import PACKED_MIN_ROWS, gqa_launch_config
+
+        key_bucket = min(self.policy.max_context, max(512, 1 << (max(past) + query - 1).bit_length()))
+        key = self._packed_keys.get(gqa_launch_config(PACKED_MIN_ROWS, key_bucket)[4], 0)
+        bucket = self.packed_prefill_bucket
+        tokens = -(-sum(sizes) // bucket) * bucket
+        return self.packed_graphs.get((tokens, key)) if key >= key_bucket else None
+
+    def _packed_forward(
+        self,
+        entry: _TextGraph,
+        hidden: torch.Tensor,
+        positions: torch.Tensor,
+        past: Sequence[int],
+        sizes: Sequence[int],
+        query: int,
+    ) -> torch.Tensor:
+        """Replay a packed prefill graph on back-to-back turns; returns each row's last hidden state."""
+        from ...backend.triton.gqa_split_attention import packed_query_blocks
+
+        tokens, total = entry.hidden.shape[1], hidden.shape[0]
+        programs = self._packed_programs(tokens)
+        bounds = np.cumsum([0, *sizes])
+        pad = [0] * (self.batch_size - len(sizes))
+        slots = [self._row_starts[row] + past[row] + np.arange(size) for row, size in enumerate(sizes)]
+        slots.append(self._spare_start + np.arange(tokens - total))
+        offsets, lengths, starts, extent, slots, blocks, ends = self._upload(
+            np.asarray(past, dtype=np.int64),
+            np.asarray([*sizes, *pad], dtype=np.int64),
+            np.asarray([*bounds[:-1], *pad], dtype=np.int64),
+            np.asarray([query], dtype=np.int64),
+            np.concatenate(slots).astype(np.int64),
+            np.asarray(packed_query_blocks(sizes, self._query_group(), programs), dtype=np.int64),
+            bounds[1:].astype(np.int64) - 1,
+        )
+        buffers = self._packed_buffers
+        self._write_lengths.copy_(lengths)
+        buffers.offsets.copy_(offsets)
+        buffers.starts.copy_(starts)
+        buffers.extent.copy_(extent)
+        buffers.slots[:tokens].copy_(slots)
+        buffers.blocks[:programs].copy_(blocks)
+        entry.hidden[0, :total].copy_(hidden)
+        entry.positions[:, 0, :total].copy_(positions)
+        entry.graph.replay()
+        self.counters["prefill_replays"] += 1
+        self.counters["prefill_packed"] += 1
+        self.counters["prefill_padding_tokens"] += tokens - total
+        return entry.output[0].index_select(0, ends)
+
     def prewarm(self, observations: Sequence[Observation], *, context_buckets: Sequence[int]) -> None:
         """Capture supplied input shapes before measurement, without retaining answers."""
         self._validate()
@@ -508,7 +667,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                             ).to(self.device, dtype)
                             self.vision(packed)
                 for query in sorted(queries):
-                    self._capture_contexts(query, context_buckets)
+                    if not self._packs(query):
+                        self._capture_contexts(query, context_buckets)
+                if any(self._packs(query) for query in queries):
+                    self._capture_packed_contexts(max(queries), context_buckets)
                 for query in self._tree_query_sizes():
                     self._capture_contexts(query, context_buckets, tree=True)
             finally:
@@ -580,17 +742,24 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             rows = prepared.turns
             if not 1 <= len(rows) <= self.batch_size:
                 raise ValueError("prepared batch does not fit this runtime")
-            query = self._query_bucket(max(row.turn.input_ids.shape[1] for row in rows))
+            sizes = [row.turn.input_ids.shape[1] for row in rows]
+            query = self._query_bucket(max(sizes))
             past = [0 if row.memory is None else row.memory.seq_len for row in rows]
             past += [0] * (self.batch_size - len(rows))
             self._plan_rows(past, query, len(rows))
-            token_ids = torch.zeros(self.batch_size, query, device=self.device, dtype=torch.long)
-            positions = torch.zeros(3, self.batch_size, query, device=self.device, dtype=torch.long)
+            packed = self._packed_graph(sizes, query, past)
+            if packed is None:
+                token_ids = torch.zeros(self.batch_size, query, device=self.device, dtype=torch.long)
+                positions = torch.zeros(3, self.batch_size, query, device=self.device, dtype=torch.long)
+            else:
+                token_ids = torch.cat([row.turn.input_ids[0] for row in rows])
+                positions = torch.cat([row.positions[:, 0] for row in rows], dim=1)
             lengths, next_positions, histories, position_histories = [], [], [], []
             for index, row in enumerate(rows):
-                size = row.turn.input_ids.shape[1]
-                token_ids[index, :size] = row.turn.input_ids[0]
-                positions[:, index, :size] = row.positions[:, 0]
+                size = sizes[index]
+                if packed is None:
+                    token_ids[index, :size] = row.turn.input_ids[0]
+                    positions[:, index, :size] = row.positions[:, 0]
                 memory = row.memory
                 ids, pos = row.turn.input_ids[0], row.positions[:, 0]
                 if memory is not None:
@@ -634,18 +803,15 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             hidden = hidden.masked_scatter(
                 image_mask.unsqueeze(-1).expand_as(hidden), image_features.to(hidden)
             )
-            hidden = self._forward(
-                hidden,
-                positions,
-                past,
-                write_lengths=[row.turn.input_ids.shape[1] for row in rows]
-                + [0] * (self.batch_size - len(rows)),
-            )
-            actual_tokens = sum(row.turn.input_ids.shape[1] for row in rows)
-            self.counters["prefill_actual_tokens"] += actual_tokens
-            self.counters["prefill_padding_tokens"] += self.batch_size * query - actual_tokens
-            final_indices = [row.turn.input_ids.shape[1] - 1 for row in rows]
-            selected = hidden[torch.arange(len(rows), device=self.device), final_indices]
+            self.counters["prefill_actual_tokens"] += sum(sizes)
+            if packed is None:
+                hidden = self._forward(
+                    hidden, positions, past, write_lengths=sizes + [0] * (self.batch_size - len(rows))
+                )
+                self.counters["prefill_padding_tokens"] += self.batch_size * query - sum(sizes)
+                selected = hidden[torch.arange(len(rows), device=self.device), [size - 1 for size in sizes]]
+            else:
+                selected = self._packed_forward(packed, hidden, positions, past, sizes, query)
             logits = self.policy._lm_head(selected)
             self._pending_generation = self._generation
             return ActiveVLNBatchPrefix(
