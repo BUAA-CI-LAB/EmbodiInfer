@@ -101,9 +101,12 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         skip_padded_queries: bool = False,
         packed_prefill: bool = False,
         packed_prefill_bucket: int = 64,
+        decode_linear: bool = False,
     ) -> None:
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive Python integer")
+        if decode_linear and tree_fp32_projection:
+            raise ValueError("decode_linear and tree_fp32_projection are alternative projections")
         if packed_prefill and (kv_pool_tokens is None or attention_kernel != "gqa" or not cuda_graph):
             raise ValueError("packed prefill requires CUDA graphs, a shared KV pool and the GQA kernel")
         if type(packed_prefill_bucket) is not int or packed_prefill_bucket < 1:
@@ -140,6 +143,11 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             raise ValueError("tree_fp32_projection requires tree_decode")
         if gpu_preprocess and not parameter.is_cuda:
             raise ValueError("gpu_preprocess requires a CUDA policy")
+        if decode_linear and parameter.is_cuda:
+            from ...backend.triton.capability import require_triton
+
+            require_triton(parameter.device)
+        self.decode_linear = decode_linear
         self.pooled_kv = kv_pool_tokens is not None
         self.attention_kernel = attention_kernel
         self.skip_padded_queries = skip_padded_queries
@@ -200,7 +208,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             if allocated_tokens > self.storage.shape[-2]:
                 self._replace_storage(allocated_tokens)
         else:
-            if cuda_graph or fused_ops or split_attention or vision_kernel != "hf":
+            if cuda_graph or fused_ops or split_attention or decode_linear or vision_kernel != "hf":
                 raise ValueError("graph/fused/split batch execution requires CUDA BF16")
             self.policy, self.device = policy, parameter.device
             self.vision_kernel = vision_kernel
@@ -300,6 +308,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             "skip_padded_queries": self.skip_padded_queries,
             "packed_prefill": self.packed_prefill,
             "packed_prefill_bucket": self.packed_prefill_bucket if self.packed_prefill else None,
+            "decode_linear": self.decode_linear,
             "incremental_kv_commit": self.incremental_kv_commit,
             "gpu_preprocess": self.gpu_preprocess,
             "text_graph_executables": len({id(entry.graph) for entry in self.text_graphs.values()}),

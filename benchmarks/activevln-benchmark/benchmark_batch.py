@@ -174,6 +174,7 @@ def run(config: dict[str, Any], output: Path) -> int:
                 skip_padded_queries=config.get("skip_padded_queries", False),
                 packed_prefill=config.get("packed_prefill", False),
                 packed_prefill_bucket=config.get("packed_prefill_bucket", 64),
+                decode_linear=config.get("decode_linear", False),
             )
             report["phase"] = "graph_capture"
             save_report(output, report)

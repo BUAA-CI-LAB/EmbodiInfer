@@ -626,6 +626,7 @@ class ActiveVLNPolicy(VLAPolicy):
         skip_padded_queries: bool = False,
         packed_prefill: bool = False,
         packed_prefill_bucket: int = 64,
+        decode_linear: bool = False,
     ) -> ActiveVLNBatchedRuntime:
         """Create true tensor batching with explicit per-row memory inputs.
 
@@ -661,6 +662,7 @@ class ActiveVLNPolicy(VLAPolicy):
             skip_padded_queries=skip_padded_queries,
             packed_prefill=packed_prefill,
             packed_prefill_bucket=packed_prefill_bucket,
+            decode_linear=decode_linear,
         )
 
     @contextmanager
