@@ -551,9 +551,7 @@ class ActiveVLNPolicy(VLAPolicy):
         return DEFAULT_TURN_ANGLE[self.action_space]
 
     def parse_actions(self, text: str):
-        return parse_navigation_actions(
-            text, default_turn_angle=DEFAULT_TURN_ANGLE[self.action_space]
-        )
+        return parse_navigation_actions(text, default_turn_angle=DEFAULT_TURN_ANGLE[self.action_space])
 
     @property
     def _inference_graphs(self) -> ActiveVLNGraphRuntime | None:
