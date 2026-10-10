@@ -56,12 +56,12 @@ from .embeddings import (
     rope_tables,
     time_embedding,
 )
-from .optimization_config import Pi05OptimizationConfig
+from .inference import Pi05OptimizationConfig
 from .processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
     from ...engine.core import EngineCore
-    from .optimization import Pi05Optimizations
+    from .inference.operators import Pi05OperatorPlans
 
 _INSTALL = "pi0.5 requires lerobot: run `uv sync --frozen --no-dev --group pi05`"
 _COMPILED_IMAGE_ENCODERS: dict[int, Any] = {}
@@ -490,19 +490,20 @@ class Pi05Policy(FlowVLAPolicy):
         self.prefix_cuda_graph = prefix_cuda_graph
         self.denoise_attention = denoise_attention
         self.prefix_attention = prefix_attention
-        try:
-            from lerobot.policies.pi05.modeling_pi05 import (
-                create_sinusoidal_pos_embedding,
-                make_att_2d_masks,
-            )
-        except ImportError as exc:  # pragma: no cover - install-time guard
-            raise ImportError(_INSTALL) from exc
-
         self.attention = attention
         self._attn = get_attention_backend(attention)
         self._native_attention = None
-        self._make_att_2d_masks = make_attention_mask if native_embeddings else make_att_2d_masks
-        self._sinusoidal = time_embedding if native_embeddings else create_sinusoidal_pos_embedding
+        if native_embeddings:
+            self._make_att_2d_masks, self._sinusoidal = make_attention_mask, time_embedding
+        else:
+            try:
+                from lerobot.policies.pi05.modeling_pi05 import (
+                    create_sinusoidal_pos_embedding,
+                    make_att_2d_masks,
+                )
+            except ImportError as exc:  # pragma: no cover - install-time guard
+                raise ImportError(_INSTALL) from exc
+            self._make_att_2d_masks, self._sinusoidal = make_att_2d_masks, create_sinusoidal_pos_embedding
         if optimizations is not None and optimizations.numerics == "rlinf":
             self._sinusoidal = rlinf_time_embedding
         # cached static suffix att-mask ([1, 0, ..., 0], input-independent) so the
@@ -549,7 +550,7 @@ class Pi05Policy(FlowVLAPolicy):
         # ``allocate_static_prefix`` size the CUDA-graph buffer without hardcoding
         # the tokenizer's padded language length. Set on the first encode_prefix.
         self._cached_prefix_meta: tuple[int, torch.dtype, torch.dtype] | None = None
-        from .runtime import Pi05FlowDecoder, Pi05Runtime
+        from .inference.runtime import Pi05FlowDecoder, Pi05Runtime
 
         self._runtime = Pi05Runtime(self)
         if native_inference:
@@ -621,7 +622,7 @@ class Pi05Policy(FlowVLAPolicy):
         if self._native_attention is None and "triton" in (self.denoise_attention, self.prefix_attention):
             self._native_attention = get_split_kv_attention_backend("triton_split_kv")
 
-    def _get_optimizations(self) -> Pi05Optimizations | None:
+    def _get_optimizations(self) -> Pi05OperatorPlans | None:
         """Prepare instance-local CUDA operators lazily after engine placement."""
         config = getattr(self, "_optimization_config", None)
         if config is None:
@@ -635,10 +636,10 @@ class Pi05Policy(FlowVLAPolicy):
                 "Mixed precision calibration is stale after refit; load a newly calibrated recipe"
             )
         if self._fused_ops is None:
-            from .optimization import Pi05Optimizations
+            from .inference.operators import Pi05OperatorPlans
 
             with torch.cuda.device(self._m.action_in_proj.weight.device):
-                self._fused_ops = Pi05Optimizations(self, config)
+                self._fused_ops = Pi05OperatorPlans(self, config)
         return self._fused_ops
 
     def _clear_inference_caches(self) -> None:

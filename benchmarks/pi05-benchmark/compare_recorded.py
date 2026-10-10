@@ -18,8 +18,8 @@ from embodiinfer.engine.config import EngineConfig
 from embodiinfer.engine.core import EngineCore
 from embodiinfer.policies.config import VLAPolicyConfig
 from embodiinfer.policies.pi05.checkpoints.lerobot import load_lerobot_checkpoint
+from embodiinfer.policies.pi05.inference.config import Pi05OptimizationConfig
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
-from embodiinfer.policies.pi05.optimization_config import Pi05OptimizationConfig
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
 MODES = ("lerobot", "vvla_eager", "vvla_eager_graph", "vvla_sdpa", "vvla_sdpa_graph")

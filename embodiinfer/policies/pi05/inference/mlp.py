@@ -7,18 +7,18 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch.nn import functional as F
 
-from ...layers.quantization import EncodedActivation, WorkspaceKey
-from .optimization_config import ActionLayerPrecision
+from ....layers.quantization import EncodedActivation, WorkspaceKey
+from .config import MlpLayerPrecision
 
 if TYPE_CHECKING:
-    from .optimization import Pi05Optimizations
+    from .operators import Pi05OperatorPlans
 
 
 class MlpPlan:
     """Keep original projection parameters and stream-specific activation buffers."""
 
     def __init__(
-        self, runtime: Pi05Optimizations, module: Any, layer: ActionLayerPrecision, *, prefix: bool
+        self, runtime: Pi05OperatorPlans, module: Any, layer: MlpLayerPrecision, *, prefix: bool
     ) -> None:
         """Pack only selected formats and preserve the declared GELU contract."""
         self.runtime, self.module, self.layer, self.prefix = runtime, module, layer, prefix

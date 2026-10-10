@@ -83,7 +83,7 @@ Inductor、Triton attention、prefix/full-loop CUDA Graph 和缓存优化。使�
 拒绝包含新增优化实现的 baseline 目录，保存完整动作、实际配方、源码/权重/input 摘要
 和每次分段计时。B1/H10/完整十步，六条核验观测逐条预热三次，roundrobin 两轮
 各 30 次；`highest` 和允许 TF32 的 `high` 分别运行。两种角色使用同一 Python
-环境，示例中的 recipe 是随仓库提供的硬件对应配方：
+环境，候选通过设备 preset 展开并记录完整配置：
 
 ```bash
 python benchmarks/pi05-benchmark/compare_optimizations.py \
@@ -94,7 +94,7 @@ python benchmarks/pi05-benchmark/compare_optimizations.py \
 
 python benchmarks/pi05-benchmark/compare_optimizations.py \
   --role candidate --source /workspace/EmbodiInfer \
-  --recipe configs/pi05/rlinf_libero_thor_nvfp4_prefix_fp8_action.json \
+  --device thor \
   --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
   --matmul-precision highest --out runs/optimized-highest
 ```
@@ -153,11 +153,16 @@ action arithmetic / prefix lookup GEGLU，并启用 active-camera batching、pre
 compaction、末层仅生成 K/V、action context 复用。仅设置 `numerics` 不会自动启用
 所有优化开关；完整配方明确选择各项优化。既有 LeRobot 默认语义保持不变。
 
-完整部署配方位于 `configs/pi05/rlinf_libero_*`，通过
-`Pi05OptimizationConfig.from_json(path)` 加载。`from_runtime_json(path)` 用于
-只含 hardware/action_layers/checkpoint_sha256/schema_version 的紧凑 action 配方，
-选择同一 RLinf profile，并保持所提供的激活范围。配方与 checkpoint、硬件和
-数值语义绑定；不能把 exact-GELU 的范围用于默认 tanh-GELU profile。
+部署使用 `Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="mixed")`，
+Spark 使用对应设备名称。`fp8` 选择受保护 action MLP，`nvfp4` 选择 prefix MLP，
+`mixed` 组合两者，`bf16` 不加载校准。设备/preset 决定算子和执行组合；
+`inference/calibration/rlinf_libero.json` 只保存 checkpoint identity、数值语义、
+各设备的保护选择和激活范围，不再为每个组合重复保存一份部署 JSON。
+
+自定义权重通过 `calibration` 传入独立校准数据路径。`from_json`/`to_json` 保留完整
+配置导入导出，供消融和记录实验使用。默认 `strict` preset 保持 LeRobot tanh-GELU
+及 dtype 语义，支持 Thor/Spark/Orin/4090 的严格融合与 K/V 复用；其余实验中的
+精细开关可以直接构造配置。校准与 checkpoint、硬件和数值语义绑定，不能混用。
 
 Thor/Spark 使用相同权重、fixture、noise、B1/H10/完整十步与 `highest` 进行冻结
 参考核验。四种精度配置分别为 BF16、受保护 action FP8、prefix NVFP4，以及

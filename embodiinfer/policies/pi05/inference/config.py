@@ -8,8 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from ...layers.config import OperatorBackends
-from ...layers.quantization import Precision
+from ....layers.config import OperatorBackends
+from ....layers.quantization import Precision
 
 
 @dataclass(frozen=True)
@@ -32,23 +32,19 @@ class MlpLayerPrecision:
             raise ValueError("Activation maxima must be finite and positive")
 
 
-# Keep the original public name for existing action-only recipes and callers.
-ActionLayerPrecision = MlpLayerPrecision
-
-
 @dataclass(frozen=True)
 class Pi05OptimizationConfig:
     """Immutable selection of opt-in inference operators.
 
     The default enables strict pointwise RMSNorm/residual fusion and K/V storage
     reuse. Paired GEMMs and alternative attention require explicit selection;
-    they change floating-point accumulation. Hardware profiles cover
+    they change floating-point accumulation. Paired-GEMM profiles cover
     B1/horizon10/10steps; benchmark results apply only to their measured settings.
-    The default LeRobot contract uses tanh GELU. ``from_runtime_json`` explicitly
-    selects the complete RLinf inference contract, retaining its original scales.
+    Use ``from_preset`` for deployment; individual fields support operator
+    ablations and custom backends. The default preserves LeRobot numerics.
     """
 
-    hardware: Literal["thor", "spark"] | None = None
+    hardware: Literal["thor", "spark", "orin", "4090"] | None = None
     norm_fusion: bool = True
     kv_workspace: bool = True
     fused_mlp: bool = False
@@ -70,7 +66,7 @@ class Pi05OptimizationConfig:
         if (
             type(self.schema_version) is not int
             or self.schema_version != 1
-            or self.hardware not in (None, "thor", "spark")
+            or self.hardware not in (None, "thor", "spark", "orin", "4090")
         ):
             raise ValueError("Unsupported Pi05 optimization schema or hardware profile")
         expected = {"lerobot": "gelu_pytorch_tanh", "rlinf": "gelu_pytorch_exact"}.get(self.numerics)
@@ -101,7 +97,7 @@ class Pi05OptimizationConfig:
                 raise ValueError(f"{name} must be a tuple of MlpLayerPrecision values")
         if (
             self.fused_mlp
-            and self.hardware is None
+            and self.hardware not in ("thor", "spark")
             and self.operators.paired_gelu in ("triton_lookup", "triton_exact")
         ):
             raise ValueError("Paired GEMMs require an explicit Thor or Spark launch profile")
@@ -125,7 +121,7 @@ class Pi05OptimizationConfig:
     @property
     def capability(self) -> tuple[int, int] | None:
         """Return the selected profile's capability, or allow generic BF16 fusion."""
-        return {"thor": (11, 0), "spark": (12, 1)}.get(self.hardware)
+        return {"thor": (11, 0), "spark": (12, 1), "orin": (8, 7), "4090": (8, 9)}.get(self.hardware)
 
     @classmethod
     def from_json(cls, path: str | Path) -> Pi05OptimizationConfig:
@@ -146,38 +142,26 @@ class Pi05OptimizationConfig:
         return cls(**values)
 
     @classmethod
-    def from_runtime_json(cls, path: str | Path) -> Pi05OptimizationConfig:
-        """Load a compact action-precision recipe with the RLinf inference contract.
+    def from_preset(
+        cls,
+        device: Literal["thor", "spark", "orin", "4090"],
+        preset: Literal["strict", "rlinf"] = "strict",
+        *,
+        precision: Literal["bf16", "fp8", "nvfp4", "mixed"] = "bf16",
+        calibration: str | Path = "rlinf_libero",
+    ) -> Pi05OptimizationConfig:
+        """Resolve a device preset without importing kernels or probing CUDA.
 
-        This selects the original activation, precision, layout and hardware
-        operators. Scales are retained only for this matching contract; use
-        `from_json` for separately calibrated LeRobot recipes.
+        ``strict`` preserves LeRobot numerics and supports all listed devices.
+        ``rlinf`` selects the optimized B1/H10/10-step Thor/Spark profile.
+        FP8 selects protected action projections; NVFP4 selects prefix MLPs;
+        mixed combines both. Low precision requires matching calibration data;
+        the bundled ranges belong exclusively to RLinf-Pi05-LIBERO-SFT.
+        Engine graph configuration and request shapes remain caller-owned.
         """
-        values = json.loads(Path(path).read_text())
-        allowed = {"hardware", "action_layers", "checkpoint_sha256", "schema_version"}
-        if not isinstance(values, dict) or set(values) - allowed:
-            raise ValueError("Expected a standalone runtime recipe")
-        hardware = values.get("hardware")
-        if hardware not in ("thor", "spark"):
-            raise ValueError("A runtime recipe must select Thor or Spark")
-        values["action_layers"] = tuple(MlpLayerPrecision(**row) for row in values.get("action_layers", ()))
-        return cls(
-            **values,
-            numerics="rlinf",
-            activation="gelu_pytorch_exact",
-            fused_mlp=True,
-            batch_cameras=True,
-            compact_prefix=True,
-            prefix_kv_only=True,
-            reuse_action_context=True,
-            attention="folded_flash" if hardware == "thor" else "query_major",
-            operators=OperatorBackends(
-                paired_gelu="triton_exact",
-                projection="torch_matmul",
-                rotary="cuda",
-                gelu_mul="cuda_lookup" if hardware == "thor" else "cuda",
-            ),
-        )
+        from .presets import resolve_preset
+
+        return resolve_preset(device, preset, precision=precision, calibration=calibration)
 
     def to_json(self, path: str | Path) -> None:
         """Export deployment settings without benchmark or calibration dependencies."""

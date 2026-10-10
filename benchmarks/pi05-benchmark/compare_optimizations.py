@@ -52,6 +52,8 @@ def main() -> None:
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--recipe", type=Path, help="Optimized combined NVFP4-prefix/FP8-action recipe")
+    parser.add_argument("--device", choices=("thor", "spark"), help="Candidate preset device")
+    parser.add_argument("--calibration", default="rlinf_libero", help="Calibration name or data path")
     parser.add_argument("--baseline-revision", help="Recorded immutable revision of the baseline export")
     parser.add_argument("--matmul-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--warmup", type=int, default=3)
@@ -60,10 +62,12 @@ def main() -> None:
     args = parser.parse_args()
     if min(args.warmup, args.iterations, args.rounds) < 1:
         parser.error("warmup, iterations and rounds must be positive")
-    if args.role == "candidate" and args.recipe is None:
-        parser.error("candidate requires --recipe")
-    if args.role == "baseline" and (args.recipe is not None or args.baseline_revision is None):
-        parser.error("baseline requires --baseline-revision and forbids --recipe")
+    if args.role == "candidate" and (args.recipe is None) == (args.device is None):
+        parser.error("candidate requires either --device or a custom --recipe")
+    if args.role == "baseline" and (
+        args.recipe is not None or args.device is not None or args.baseline_revision is None
+    ):
+        parser.error("baseline requires --baseline-revision and forbids candidate settings")
     args.out.mkdir(parents=True, exist_ok=True)
     source = args.source.resolve()
     sys.path.insert(0, str(source))
@@ -78,7 +82,9 @@ def main() -> None:
 
     if Path(embodiinfer.__file__).resolve().parent != source / "embodiinfer":
         raise RuntimeError("Imported package does not belong to the requested isolated checkout")
-    if args.role == "baseline" and (source / "embodiinfer/policies/pi05/optimization.py").exists():
+    if args.role == "baseline" and hasattr(
+        sys.modules["embodiinfer.policies.pi05"], "Pi05OptimizationConfig"
+    ):
         raise RuntimeError("Baseline checkout contains the new optimization implementation")
     torch.set_float32_matmul_precision(args.matmul_precision)
     torch.manual_seed(42)
@@ -102,7 +108,13 @@ def main() -> None:
     if args.role == "candidate":
         from embodiinfer.policies.pi05 import Pi05OptimizationConfig
 
-        combined = Pi05OptimizationConfig.from_json(args.recipe)
+        combined = (
+            Pi05OptimizationConfig.from_json(args.recipe)
+            if args.recipe is not None
+            else Pi05OptimizationConfig.from_preset(
+                args.device, "rlinf", precision="mixed", calibration=args.calibration
+            )
+        )
         recipes = {
             "optimized_compat_bf16": Pi05OptimizationConfig(
                 hardware=combined.hardware, fused_mlp=True, attention="folded_flash"
@@ -252,7 +264,10 @@ def main() -> None:
         for path in report["imported_package_files"].values()
     ):
         raise RuntimeError("A package import escaped the isolated source tree")
-    if args.role == "baseline" and any(".pi05.optimization" in name for name in sys.modules):
+    if args.role == "baseline" and any(
+        name.startswith(("embodiinfer.policies.pi05.inference", "embodiinfer.policies.pi05.optimization"))
+        for name in sys.modules
+    ):
         raise RuntimeError("Baseline imported new optimization modules")
     (args.out / "measurement.json").write_text(json.dumps(report, indent=2) + "\n")
 

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 import torch.nn.functional as F
 
-from ...layers import (
+from ....layers import (
     OperatorRequest,
     gelu_mul_backends,
     get_attention_backend,
@@ -22,21 +22,21 @@ from ...layers import (
     quantization_backends,
     rotary_backends,
 )
-from ...layers.activation import GeluMulBackend, PairedGeluBackend
-from ...layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
-from ...layers.quantization import ActivationQuantizer, ProjectionBackend
-from .embeddings import rlinf_rope_tables, rope_tables
-from .optimization_config import MlpLayerPrecision, Pi05OptimizationConfig
+from ....layers.activation import GeluMulBackend, PairedGeluBackend
+from ....layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
+from ....layers.quantization import ActivationQuantizer, ProjectionBackend
+from ..embeddings import rlinf_rope_tables, rope_tables
+from .config import MlpLayerPrecision, Pi05OptimizationConfig
 
 if TYPE_CHECKING:
-    from .modeling_pi05 import Pi05Policy, Pi05Prefix
+    from ..modeling_pi05 import Pi05Policy, Pi05Prefix
 
 
 def _stream_key(device: torch.device) -> int:
     return torch.cuda.current_stream(device).cuda_stream
 
 
-class Pi05Optimizations:
+class Pi05OperatorPlans:
     """Own weight packs and stream-specific tensor storage without replacing modules.
 
     Construct outside capture after the engine has placed the model. Storage is
@@ -77,7 +77,7 @@ class Pi05Optimizations:
             torch.cuda.get_device_capability(device)[0] < 10
         ):
             raise ValueError("NVFP4 MLP projections require a Blackwell CUDA device")
-        if config.hardware is not None:
+        if config.fused_mlp and config.hardware in ("thor", "spark"):
             for tower, width, intermediate in (
                 (policy._prefix_tower, 2048, 16384),
                 (policy._expert_tower, 1024, 4096),
@@ -218,8 +218,10 @@ class Pi05Optimizations:
 
     def validate_request(self, batch_size: int, steps: int | None = None) -> None:
         """Reject shapes outside measured profiles before graph creation."""
-        if self.config.hardware is not None and (
-            batch_size != 1 or self.policy.config.action_horizon != 10 or steps not in (None, 10)
+        if (
+            self.config.fused_mlp
+            and self.config.hardware in ("thor", "spark")
+            and (batch_size != 1 or self.policy.config.action_horizon != 10 or steps not in (None, 10))
         ):
             raise ValueError("Thor/Spark Pi05 launch profiles require B1, horizon10 and 10 denoise steps")
         if self.config.attention == "folded_flash" and batch_size != 1:
@@ -238,7 +240,7 @@ class Pi05Optimizations:
     ) -> tuple:
         """Apply the original FP32 mean and affine operations with BF16 outputs."""
         if self.norm is None:
-            from .modeling_pi05 import _rmsnorm
+            from ..modeling_pi05 import _rmsnorm
 
             return _rmsnorm(norm, inputs, None, False, modulation, native)
         return self._norm_plan(norm, inputs).normalize(
@@ -257,7 +259,7 @@ class Pi05Optimizations:
     ) -> tuple:
         """Fuse rounded attention residual, squared values and the following norm."""
         if self.norm is None:
-            from .modeling_pi05 import _gated_residual
+            from ..modeling_pi05 import _gated_residual
 
             residual = _gated_residual(inputs, update, gate, False, native)
             normalized, next_gate = self.normalize(norm, residual, modulation, native=native)
@@ -271,7 +273,7 @@ class Pi05Optimizations:
         )
 
     def _mlp_plan(self, module: Any, *, expert: bool) -> Any:
-        from .optimization_mlp import MlpPlan
+        from .mlp import MlpPlan
 
         if id(module) not in self.mlp_plans:
             if torch.cuda.is_current_stream_capturing():
@@ -337,7 +339,7 @@ class Pi05Optimizations:
         cache_only: bool = False,
     ) -> tuple[torch.Tensor, list | None]:
         """Run the existing tower equations through selected operator plans."""
-        from .modeling_pi05 import _gated_residual, _mlp
+        from ..modeling_pi05 import _gated_residual, _mlp
 
         expert = tower is self.policy._expert_tower
         collected = [] if collect else None
@@ -357,7 +359,7 @@ class Pi05Optimizations:
                 layer.input_layernorm, hidden, affine(layer.input_layernorm, 2 * index), native=fused
             )
             if cache_only and collect and not expert and index == len(tower.layers) - 1:
-                from .modeling_pi05 import _apply_rope, _fused_qkv
+                from ..modeling_pi05 import _apply_rope, _fused_qkv
 
                 attn = layer.self_attn
                 if self.config.numerics == "rlinf" or self.policy.attention == "eager":

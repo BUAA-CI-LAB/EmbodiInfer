@@ -116,7 +116,7 @@ policy = make_policy(
     checkpoint="/models/pi05",
     native_inference=True,
     prefix_cuda_graph=True,
-    optimizations=Pi05OptimizationConfig(),
+    optimizations=Pi05OptimizationConfig.from_preset("4090"),
 )
 engine = EngineCore(
     policy,
@@ -130,8 +130,8 @@ paired GEMMs or calibrated per-layer precision through the configuration; see
 [supported profiles and precision contracts](models.md#opt-in-fused-operators).
 `Pi05OptimizationConfig.from_json(path)` loads a standalone recipe;
 `config.to_json(path)` exports one. JSON must explicitly identify its
-matching GELU/numerics contract. The existing demo accepts
-`--optimizations /path/to/recipe.json`; use `--envs 1` for B1 profiles.
+matching GELU/numerics contract. Resolved JSON is an advanced experiment interface;
+deployment normally uses presets.
 Full-checkpoint parity and task quality remain deployment gates, including for
 the strict operator route; component parity alone does not establish them.
 
@@ -141,7 +141,7 @@ For the RLinf inference profile on Thor:
 import torch
 
 torch.set_float32_matmul_precision("highest")
-options = Pi05OptimizationConfig.from_json("configs/pi05/rlinf_libero_thor_fp8.json")
+options = Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="fp8")
 policy = make_policy(
     "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
     native_embeddings=True, native_inference=True, prefix_cuda_graph=True,
@@ -149,15 +149,29 @@ policy = make_policy(
     optimizations=options,
 )
 engine = EngineCore(
-    policy, EngineConfig(device="cuda", dtype="auto", use_cuda_graph=True, capture_full_loop=True),
+    policy, EngineConfig(device="cuda", dtype="auto", max_batch_size=1, use_cuda_graph=True, capture_full_loop=True),
 )
 ```
 
-Use the Spark recipe on SM121. The `nvfp4_prefix` and
-`nvfp4_prefix_fp8_action` recipe variants reproduce the experimental mixed formats.
-`from_runtime_json(path)` loads a compact action-precision recipe and selects the
-complete inference profile without changing scales. These are explicitly RLinf
-inference semantics; they do not replace LeRobot's default or its rollout contract.
+Choose `device="spark"` on SM121. Precision `nvfp4` selects prefix MLPs;
+`mixed` combines prefix NVFP4 with protected action FP8. The default calibration
+is bundled for RLinf-Pi05-LIBERO-SFT; a different checkpoint requires its own
+`calibration` data path. These are explicit RLinf inference semantics.
+
+The demo accepts the same deployment choices:
+
+```bash
+python examples/pi05_inference.py --ckpt /models/RLinf-Pi05-LIBERO-SFT \
+  --device-type thor --preset rlinf --precision mixed --envs 1 --horizon 10 --steps 10
+```
+
+A custom calibration JSON identifies `schema_version`, `numerics`, `activation`,
+`checkpoint_sha256`, and `devices`. Each device entry contains the required
+`action_layers` and/or `prefix_layers`, using the `MlpLayerPrecision` fields.
+Preset composition supplies execution switches; calibration supplies only ranges
+and protected formats. Export the resolved configuration with `to_json` to record
+an experiment. Internal inference imports moved to `pi05.inference`; callers use
+the public `embodiinfer.policies.pi05` exports.
 
 Select or extend an implementation through the shared operator layer:
 

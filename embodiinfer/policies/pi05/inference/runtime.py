@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from ...models.schedulers.flow import euler_step
-from ..decoder import FlowDecoder
-from .processor_pi05 import Pi05Batch
+from ....models.schedulers.flow import euler_step
+from ...decoder import FlowDecoder
+from ..processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
-    from ...engine.graph import GraphManager
-    from .modeling_pi05 import Pi05Policy, Pi05Prefix
+    from ....engine.graph import GraphManager
+    from ..modeling_pi05 import Pi05Policy, Pi05Prefix
 
 
 def _compact_layout(batch: Pi05Batch) -> tuple[Pi05Batch, bool]:
@@ -98,7 +98,7 @@ def _stream_key(device: torch.device) -> int:
 
 
 def _clone_prefix(prefix: Pi05Prefix) -> Pi05Prefix:
-    from .modeling_pi05 import Pi05Prefix
+    from ..modeling_pi05 import Pi05Prefix
 
     return Pi05Prefix(
         [(k.clone(), v.clone()) for k, v in prefix.kv],

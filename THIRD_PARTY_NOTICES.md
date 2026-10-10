@@ -12,7 +12,7 @@ EmbodiInfer is licensed under the Apache License, Version 2.0 (see
 | `embodiinfer/models/video_vae/wan.py` | Cosmos-Policy / Wan2.1 VAE | Apache-2.0 |
 | `embodiinfer/models/video_vae/base.py` | Diffusers VAE conventions | Apache-2.0 |
 | `embodiinfer/policies/lingbot_vla/modules_lingbot_vla.py` | LingBot-VLA action expert | Apache-2.0 (see upstream) |
-| Pi05 RLinf numerical profile (`embeddings.py`, `vision.py`, optimization plans) | RLinf OpenPI/Gemma/SigLIP inference arithmetic | Apache-2.0 |
+| Pi05 RLinf numerical profile (`embeddings.py`, `inference/vision.py`, operator plans) | RLinf OpenPI/Gemma/SigLIP inference arithmetic | Apache-2.0 |
 
 The RLinf-derived numerical profile retains attribution to Copyright 2026 The
 RLinf Authors, from `RLinf/RLinf` revision

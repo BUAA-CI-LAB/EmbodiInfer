@@ -24,7 +24,7 @@ from embodiinfer.engine.core import EngineCore
 from embodiinfer.layers import OperatorBackends, paired_gelu_backends, projection_backends
 from embodiinfer.layers.attention import attention_backend_capability
 from embodiinfer.policies.config import VLAPolicyConfig
-from embodiinfer.policies.pi05 import ActionLayerPrecision, Pi05OptimizationConfig
+from embodiinfer.policies.pi05 import MlpLayerPrecision, Pi05OptimizationConfig
 from embodiinfer.policies.pi05.checkpoints.lerobot import load_lerobot_checkpoint
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
@@ -444,7 +444,7 @@ def main() -> None:
                                 f"Precision map {mode} requires one calibrated {name} entry per layer"
                             )
                         values[name] = tuple(
-                            ActionLayerPrecision(**row, gate_up_max=gate, down_max=down)
+                            MlpLayerPrecision(**row, gate_up_max=gate, down_max=down)
                             for row, (gate, down) in zip(values[name], ranges, strict=True)
                         )
                 if "operators" in values:
@@ -474,7 +474,7 @@ def main() -> None:
                 else:
                     config = Pi05OptimizationConfig(
                         action_layers=tuple(
-                            ActionLayerPrecision(mode, mode, gate, down) for gate, down in maxima
+                            MlpLayerPrecision(mode, mode, gate, down) for gate, down in maxima
                         ),
                         checkpoint_sha256=sha,
                     )

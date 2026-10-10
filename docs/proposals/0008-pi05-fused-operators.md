@@ -54,11 +54,24 @@ cameras, compacts globally invalid prefix columns, stops the final prefix block
 after K/V, and prepares action masks/positions/rotary factors outside denoising.
 CUDA rotary and the Thor FP4 lookup epilogue use the reusable registries.
 
-`from_json(path)` loads a complete deployment recipe.
-`from_runtime_json(path)` loads a compact action-precision recipe and selects the
-RLinf inference profile. Activation ranges are checkpoint-bound and profile-bound;
-the loader preserves supplied scales. `prefix_layers` and `action_layers` select
-gate/up and down precision independently. An empty tower configuration stays BF16.
+Deployment calls `Pi05OptimizationConfig.from_preset(device, preset, precision=...)`.
+The `strict` preset preserves LeRobot numerics on Thor, Spark, Orin and RTX 4090.
+The `rlinf` preset selects the measured Thor/Spark B1/H10/ten-step execution
+combination. Precision selects BF16, protected action FP8, prefix NVFP4, or both.
+Unknown combinations fail explicitly. Device profiles and precision selection
+compose in code instead of duplicating a deployment JSON for each combination.
+
+Checkpoint calibration is separate packaged data under `inference/calibration/`.
+It identifies numerical semantics, checkpoint SHA256, per-device layer formats
+and ranges. Presets load it only for low precision; scales are retained exactly.
+A custom data path supports separately calibrated checkpoints. `from_json` and
+`to_json` retain the resolved configuration interface for experiments and ablations.
+
+Configuration, presets, operator plans, MLP/vision plans and graph runtime are
+cohesive modules under `policies/pi05/inference/`. Reusable backends stay outside
+the policy. Public configuration imports remain under `policies.pi05`; the
+intermediate action-only precision alias and compact runtime-recipe loader are
+removed from the unmerged API in favor of `MlpLayerPrecision` and `from_preset`.
 
 A separate model-specific runner was considered. It would duplicate graph and
 execution ownership; policy-local plans reuse the existing model-neutral engine.
@@ -100,11 +113,14 @@ tested Torch `scaled_mm` API; dependencies remain optional.
 
 ## 8. Test plan
 
-CPU tests cover import safety, configuration and recipe validation, activation
+CPU tests under `tests/pi05/` cover preset composition, calibration validation,
+normal policy construction, import safety, configuration serialization, activation
 semantics, workspace ownership, unchanged parameter keys/identity, unsupported
 combinations and invalidation. CUDA tests cover strict norm/GELU, FP8/NVFP4
 encoding, paired GEMMs, registered attention and full ten-step graph replay with
 changed inputs. Eviction, capture failure and refit tests check storage lifetime.
+Model-independent fusion checks live in `tests/test_fused_operators.py`.
+Small graph fixtures use the public policy constructor and clean up after each test.
 Torch reference operators exercise the same buffer and rounding contracts.
 
 Real-weight validation uses recorded RLinf-Pi05-LIBERO-SFT observations and fixed

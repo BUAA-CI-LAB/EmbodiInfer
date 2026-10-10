@@ -110,74 +110,66 @@ GEMM shapes can change rounding even with the same attention formula.
 
 #### Opt-in fused operators
 
-`Pi05OptimizationConfig` selects EmbodiInfer's opt-in inference operators. The default
-configuration enables RMSNorm/residual fusion with Torch's FP32 mean and reusable
-prefix/suffix K/V storage. Passing no configuration retains the existing route.
-Set `norm_fusion=False` to test K/V storage alone using the existing normalization.
+Deployment selects a device, a preset and precision through
+`Pi05OptimizationConfig.from_preset(device, preset, precision=...)`.
 
-The Triton paired BF16 gate/up GEMMs (`fused_mlp=True`) require an explicit
-`hardware="thor"` or `"spark"` profile. These profiles require the matching SM110/SM121 device,
-standard 18-layer towers, B1, an inference horizon of 10, and 10 denoise steps.
-These launch profiles have scoped measurements in the
-[benchmark documentation](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
-`attention="query_major"` removes group-major Q/probability copies;
-it requires `torch.bmm(out_dtype=torch.float32)` and reports unavailable when
-the installed Torch lacks that API.
-`"folded_flash"` compacts the B1 prefix and folds small MQA queries for Flash SDPA.
-Both attention variants and paired GEMMs change accumulation and require a
-same-noise full-action comparison before deployment.
+| Preset | Devices | Precision | Numerical contract |
+|---|---|---|---|
+| `strict` (default) | `thor`, `spark`, `orin`, `4090` | `bf16` | Existing LeRobot tanh GELU and dtype boundaries |
+| `rlinf` | `thor`, `spark` | `bf16`, `fp8`, `nvfp4`, `mixed` | Exact GELU and RLinf inference precision/layout |
 
-The `prefix_layers` and `action_layers` recipes can choose BF16, FP8 or NVFP4
-independently for gate/up and down in each tower. Each populated tuple contains
-one `MlpLayerPrecision` per layer; an empty tuple keeps that tower in BF16.
-`ActionLayerPrecision` remains a compatibility alias. This supports NVFP4 prefix
-with BF16 action, or separately protected FP8 action groups. It uses fixed
-calibrated activation scales, shared gate/up encoding, residual/RMSNorm/encoding
-fusion, and a fused GELU × up ×
-encoding epilogue. Keep attention and action/time projections in their original
-precision. NVFP4 requires Blackwell; mixed GEMMs require the PyTorch 2.13 API.
+The strict preset enables RMSNorm/residual fusion and prefix/suffix K/V storage
+reuse while retaining existing attention and MLP computation. It has no fixed
+B1/H10 requirement. Passing no optimization configuration retains the original
+route. Device selection validates GPU capability at execution; unsupported
+combinations fail explicitly.
 
-The default `numerics="lerobot"` identifies `activation="gelu_pytorch_tanh"`;
-recipes bind scales to the SHA256 of a local `model.safetensors`.
-This default retains LeRobot's existing activation, RoPE and vision precision.
-Refit clears derived weights/workspaces/graphs and rejects
-stale mixed precision calibration. These plans require native inference, TP=1,
-`compile_backend="none"`, no global quantization, and `EngineConfig(dtype="auto")`
-to preserve FP32 norm/action/time parameters. CUDA Graphs remain supported.
-The nested `operators: OperatorBackends` configuration selects registered norm,
-quantization, GELU epilogue, paired projection, projection and rotary implementations.
-Torch reference implementations are available; choose `norm_quant=None` when
-using reference norm/quantization because the CUDA composite needs CUDA dependencies.
-The Torch quantizer supports FP8 only. For an NVFP4 pointwise reference, select
-Torch normalization/GELU with `quantization="cuda"` and `norm_quant=None`;
-the encoder and GEMM remain native CUDA.
-The Torch paired projection reference does not require a Thor/Spark launch profile.
-See [the API example](api.md#pi05-fused-operator-configuration) and
+The RLinf preset selects paired BF16 gate/up GEMMs, camera batching, prefix
+compaction, last-prefix-block K/V-only execution and action context reuse.
+Its device profiles require standard 18-layer towers, B1, inference horizon 10
+and ten denoise steps. Thor uses folded FlashAttention and a lookup GELU
+encoder; Spark uses query-major attention and its CUDA prefix softmax launch.
+Query-major attention requires `torch.bmm(out_dtype=torch.float32)`.
+
+`fp8` selects protected action MLP projections, `nvfp4` selects prefix MLPs with
+BF16 actions, and `mixed` combines them. These are selective precision recipes;
+vision remains BF16. The packaged `rlinf_libero` calibration contains only
+checkpoint identity, numerical semantics and per-device layer ranges. Execution
+switches and operator choices come from the preset. Calibration is loaded only
+for low precision and its checkpoint SHA256 is checked before weight packing.
+Use `calibration="/path/to/calibration.json"` for independently calibrated weights.
+NVFP4 requires Blackwell and mixed GEMMs require the Torch API tested in 2.13.
+
+The RLinf numerical contract uses BF16 vision encoder/projector, FP32
+patch/position/time/rotary math, BF16 query prescaling, separate Q/K/V,
+arithmetic action GEGLU, lookup prefix GEGLU and contiguous BF16 down matrices.
+Set `native_embeddings=True`, `native_inference=True`, `action_horizon=10` and
+`default_num_steps=10`. The checkpoint retains its nominal horizon metadata.
+CUDA Graph configuration belongs to `EngineConfig`; prefix capture remains a
+policy option. Inductor, global quantization and TP are rejected in combination
+with these operator plans. RLinf requires CUDA eval/no-grad inference.
+
+For ablations, construct `Pi05OptimizationConfig` directly or use
+`dataclasses.replace` on a resolved preset. `MlpLayerPrecision` selects gate/up
+and down precision independently in `prefix_layers` and `action_layers`.
+`OperatorBackends` selects registered normalization, quantization, GELU/product,
+rotary and projection implementations; `norm_quant=None` chooses separate
+normalization and encoding. Torch references support FP8; separate NVFP4
+comparisons retain the CUDA encoder/native GEMM. `from_json`/`to_json` import
+and export resolved configurations for reproducible experiments.
+
+Policy-specific configuration, presets, plans and graph runtime live together
+under `policies/pi05/inference/`; reusable operators remain under `layers/` and
+`backend/`. Preset resolution imports no optional kernels and does not probe CUDA.
+
+Strict pointwise parity does not establish task quality. Paired GEMMs and
+alternative attention can change accumulation; RLinf also changes numerical
+boundaries relative to LeRobot. Thor/Spark validation covers prefix K/V, ten
+velocities, full actions and changed-noise graph replay against frozen,
+matching-format references. Low precision changes outputs relative to BF16.
+See the [measurement conditions and results](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md),
+[API example](api.md#pi05-fused-operator-configuration) and
 [toolkit requirements](installation.md#pi05-fused-cuda-operators).
-
-**RLinf inference profile.** Explicitly select `numerics="rlinf"`
-with `activation="gelu_pytorch_exact"`. This uses BF16 vision
-encoder/projector, FP32 patch/position/time/rotary math, BF16 query prescaling,
-separate Q/K/V, arithmetic action GEGLU, lookup prefix GEGLU and contiguous BF16
-down-projection layouts. It also enables camera batching, prefix compaction,
-last-prefix-block K/V-only execution, and shared action mask/position/rotary work.
-Select these switches through a complete recipe; `numerics` alone changes the
-numerical contract without automatically enabling every optimization.
-
-`Pi05OptimizationConfig.from_runtime_json(path)` loads a compact action-precision
-recipe with unchanged scales and selects the complete profile. Standalone deployment
-recipes live in `configs/pi05/rlinf_libero_{thor,spark}_fp8.json` and load with
-`from_json`. The `nvfp4_prefix` and `nvfp4_prefix_fp8_action` variants retain frozen
-experimental prefix scales. Each recipe requires its matching hardware and
-RLinf-Pi05-LIBERO-SFT weight hash. Set `native_embeddings=True`,
-`native_inference=True`, `prefix_cuda_graph=True`, `action_horizon=10` and
-`default_num_steps=10`; the factory allows this explicit shorter inference horizon
-while retaining checkpoint metadata (50 actions). Use CUDA eval/no-grad inference;
-training, logprob/hidden-state workflows and Inductor are outside this profile.
-Thor and Spark validation covers prefix K/V, ten velocities, full actions and
-changed-noise graph replay against frozen, matching-format reference records.
-Low precision still changes outputs relative to BF16. See the
-[measurement conditions and results](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
 
 ### DM0.5
 

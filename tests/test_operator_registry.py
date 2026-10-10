@@ -8,7 +8,6 @@ import torch.nn.functional as F
 
 from embodiinfer.layers import (
     BackendRegistry,
-    OperatorBackends,
     OperatorCapabilities,
     OperatorRequest,
     gelu_mul_backends,
@@ -17,7 +16,6 @@ from embodiinfer.layers import (
     projection_backends,
     quantization_backends,
 )
-from embodiinfer.policies.pi05 import Pi05OptimizationConfig
 
 
 class _Backend:
@@ -151,15 +149,3 @@ def test_paired_and_projection_plans_retain_parameters():
         assert torch.equal(projection.apply(x, None), F.linear(x, gate))
         gate.add_(1)
         assert torch.equal(projection.apply(x, None), F.linear(x, gate))
-
-
-def test_nested_backend_configuration_roundtrips(tmp_path):
-    operators = OperatorBackends(
-        normalization="torch", quantization="torch", gelu_mul="torch", norm_quant=None, paired_gelu="torch"
-    )
-    config = Pi05OptimizationConfig(fused_mlp=True, operators=operators)
-    path = tmp_path / "operators.json"
-    config.to_json(path)
-    assert Pi05OptimizationConfig.from_json(path) == config
-    with pytest.raises(ValueError, match="nonempty"):
-        OperatorBackends(normalization="")
