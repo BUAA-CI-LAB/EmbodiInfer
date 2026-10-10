@@ -128,7 +128,9 @@ if triton is not None:
         begin = split * chunk
         end = tl.minimum(begin + chunk, extent)
         if ROW_LENGTHS:
-            end = tl.where(first // G < rows, end, begin)
+            # Slots past a row's live queries may hold stale NaN, which masked
+            # keys would still carry into P @ V as 0 * NaN.
+            end = tl.where(first // G < rows, tl.minimum(end, past + rows), begin)
         if PACKED:
             q = tl.load(
                 Q + (token + query[:, None]) * sqm + head[:, None] * sqh + dim[None, :], live[:, None], 0
@@ -297,7 +299,8 @@ def gqa_split_kv_attention(
     The result is a BHQD view of BQHD storage, so the caller's transpose and
     head merge need no copy. With ``query_lengths`` (one count per row),
     queries at or past a row's count return zeros and skip work in whole
-    blocks; every other output is bitwise unchanged.
+    blocks, and KV slots at or past position + count are never read; every
+    other output is bitwise unchanged.
 
     ``packed`` = (blocks, starts, extent) lays the rows' queries back to back
     in one [1, heads, tokens, width] query: ``blocks`` is the program table of

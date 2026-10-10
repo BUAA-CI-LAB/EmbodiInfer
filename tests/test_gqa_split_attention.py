@@ -43,6 +43,13 @@ def _inputs(batch: int, length: int, key_bucket: int, tree: bool, seed: int):
     return query, key, value, position, layout, lengths.cuda()
 
 
+def _poison_unwritten_slots(key, value, position, layout, lengths) -> None:
+    rows = zip(layout["cache_starts"].tolist(), position.tolist(), lengths.tolist(), strict=True)
+    for start, past, count in rows:
+        key[:, :, start + past + count : start + CAPACITY] = float("nan")
+        value[:, :, start + past + count : start + CAPACITY] = float("nan")
+
+
 def test_gqa_attention_rejects_cpu_inputs():
     query = torch.zeros(1, HEADS, 1, WIDTH, dtype=torch.bfloat16)
     cache = torch.zeros(1, KV_HEADS, 8, WIDTH, dtype=torch.bfloat16)
@@ -86,6 +93,21 @@ def test_query_lengths_skip_padding_without_changing_live_rows(batch, length, ke
         assert not skipped[row, :, count:].any()
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    ("batch", "length", "key_bucket", "tree"), [(8, 400, 1024, False), (4, 33, 4096, True)]
+)
+@torch.inference_mode()
+def test_query_lengths_never_read_slots_past_live_queries(batch, length, key_bucket, tree):
+    query, key, value, position, layout, lengths = _inputs(batch, length, key_bucket, tree, seed=length + 3)
+    expected = gqa_split_kv_attention(
+        query, key, value, position, key_bucket, query_lengths=lengths, **layout
+    )
+    _poison_unwritten_slots(key, value, position, layout, lengths)
+    actual = gqa_split_kv_attention(query, key, value, position, key_bucket, query_lengths=lengths, **layout)
+    assert torch.equal(actual, expected)
+
+
 def test_packed_program_table_lists_each_rows_query_blocks():
     per_block = PACKED_BLOCK_M // 8
     blocks = packed_query_blocks([per_block + 1, 0, per_block], 8, capacity=6)
@@ -102,6 +124,7 @@ def test_packed_program_table_lists_each_rows_query_blocks():
 def test_packed_queries_match_padded_live_rows_bitwise(batch, length, key_bucket):
     query, key, value, position, layout, lengths = _inputs(batch, length, key_bucket, False, seed=length + 2)
     lengths[-1] = 0
+    _poison_unwritten_slots(key, value, position, layout, lengths)
     padded = gqa_split_kv_attention(query, key, value, position, key_bucket, query_lengths=lengths, **layout)
     sizes = lengths.tolist()
     starts = [0, *itertools.accumulate(sizes)][:-1]
