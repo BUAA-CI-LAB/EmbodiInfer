@@ -92,8 +92,8 @@ def run(config: dict[str, Any], output: Path) -> int:
     if len(config["datasets"]) != 1:
         raise ValueError("batch memory measurement requires exactly one split per fresh process")
     batch_size = config["batch_size"]
-    if type(batch_size) is not int or batch_size not in (1, 2, 4, 8):
-        raise ValueError("batch_size must be 1, 2, 4 or 8 (8 is a local lane extension)")
+    if type(batch_size) is not int or batch_size not in (1, 2, 4, 8, 12, 16):
+        raise ValueError("batch_size must be 1, 2, 4, 8, 12 or 16 (8+ are local lane extensions)")
     spec = config["datasets"][0]
     episodes = load_navigation(spec)
     limit = config.get("max_steps_per_episode")
