@@ -575,12 +575,19 @@ class ActiveVLNPolicy(VLAPolicy):
         tree_fp32_projection: bool = False,
         tree_repeat_actions: int = 1,
         kv_pool_tokens: int | None = None,
+        grammar_tree_budget: int = 0,
+        grammar_prefix_weight: float = 1.0,
+        grammar_local_weight: float = 1.0,
+        grammar_refresh: int = 64,
+        sampling_seed: int = 0,
     ) -> ActiveVLNBatchedRuntime:
-        """Create true greedy tensor batching with explicit per-row memory inputs.
+        """Create true tensor batching with explicit per-row memory inputs.
 
         Use the runtime's prepare/prefill/generate methods for separate timing
         scopes. Generic engine session batching and sampled rollout branches
         retain their existing contracts; this is an inference-only policy API.
+        Sampled decoding follows the policy's temperature/top-p; phrase trees
+        stay greedy-only, grammar trees verify either rule exactly.
         """
         from .batching_activevln import ActiveVLNBatchedRuntime
 
@@ -596,6 +603,11 @@ class ActiveVLNPolicy(VLAPolicy):
             tree_fp32_projection=tree_fp32_projection,
             tree_repeat_actions=tree_repeat_actions,
             kv_pool_tokens=kv_pool_tokens,
+            grammar_tree_budget=grammar_tree_budget,
+            grammar_prefix_weight=grammar_prefix_weight,
+            grammar_local_weight=grammar_local_weight,
+            grammar_refresh=grammar_refresh,
+            sampling_seed=sampling_seed,
         )
 
     @contextmanager

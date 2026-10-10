@@ -216,7 +216,7 @@ def test_batched_runtime_rejects_training_and_sampling():
     with torch.inference_mode():
         policy.do_sample = True
         with pytest.raises(ValueError, match="greedy"):
-            policy.create_batched_runtime(batch_size=2, workspace_tokens=64)
+            policy.create_batched_runtime(batch_size=2, workspace_tokens=64, tree_decode=True)
 
 
 @pytest.mark.parametrize("batch_size", [2, 4])
