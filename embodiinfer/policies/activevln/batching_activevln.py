@@ -74,6 +74,11 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         tree_fp32_projection: bool = False,
         tree_repeat_actions: int = 1,
         kv_pool_tokens: int | None = None,
+        grammar_tree_budget: int = 0,
+        grammar_prefix_weight: float = 1.0,
+        grammar_local_weight: float = 1.0,
+        grammar_refresh: int = 64,
+        sampling_seed: int = 0,
     ) -> None:
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive Python integer")
@@ -81,8 +86,14 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             raise ValueError("query_bucket_size must be a positive Python integer")
         if type(workspace_tokens) is not int or not 1 <= workspace_tokens <= policy.max_context:
             raise ValueError("workspace_tokens must fit the model context limit")
-        if policy.training or torch.is_grad_enabled() or policy.do_sample:
-            raise ValueError("batched ActiveVLN requires greedy eval() in inference_mode()/no_grad()")
+        if policy.training or torch.is_grad_enabled():
+            raise ValueError("batched ActiveVLN requires eval() in inference_mode()/no_grad()")
+        if type(grammar_tree_budget) is not int or grammar_tree_budget < 0:
+            raise ValueError("grammar_tree_budget must be a nonnegative Python integer")
+        if grammar_tree_budget and tree_decode:
+            raise ValueError("phrase trees and grammar trees are alternative tree modes")
+        if policy.do_sample and tree_decode:
+            raise ValueError("phrase-tree verification is greedy-only; sampled decoding uses grammar trees")
         if policy._inference_runtime is not None:
             raise ValueError("clear the single-row graph runtime before creating a batched runtime")
         parameter = next(policy.parameters())
@@ -105,6 +116,21 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         self._owner = object()
         self._pending_generation: int | None = None
         self.capacity_growths = 0
+        self.grammar_tree_budget = grammar_tree_budget
+        self.grammar_drafter = None
+        if grammar_tree_budget:
+            from .grammar_tree_activevln import ActionGrammar, GrammarDrafter, prompt_action_phrases
+
+            self.grammar_drafter = GrammarDrafter(
+                ActionGrammar(policy.tokenizer, policy.eos_token_ids[0]),
+                prefix_weight=grammar_prefix_weight,
+                local_weight=grammar_local_weight,
+                refresh=grammar_refresh,
+                seed_phrases=[
+                    policy.tokenizer.encode(phrase, add_special_tokens=False)
+                    for phrase in prompt_action_phrases(policy.action_space)
+                ],
+            )
         if parameter.device.type == "cuda":
             super().__init__(
                 policy,
@@ -155,6 +181,8 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 attention.head_dim,
             )
             self.reset_stats()
+        self.sampling_generator = torch.Generator(device=self.device)
+        self.sampling_generator.manual_seed(sampling_seed)
         self._graph_buffers: dict[tuple[int, bool], _BatchGraphBuffers] = {}
         self._write_lengths = torch.zeros(batch_size, device=self.device, dtype=torch.long)
         self._row_starts = [0] * batch_size
@@ -185,8 +213,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
 
     def _validate(self) -> None:
         parameter = next(self.policy.parameters())
-        if self.policy.training or torch.is_grad_enabled() or self.policy.do_sample:
-            raise RuntimeError("batched ActiveVLN execution requires greedy inference mode")
+        if self.policy.training or torch.is_grad_enabled():
+            raise RuntimeError("batched ActiveVLN execution requires inference mode")
+        if self.policy.do_sample and self.action_trees:
+            raise RuntimeError("phrase-tree verification is greedy-only")
         if parameter.device != self.device or parameter.data_ptr() != self.weight_pointer:
             raise RuntimeError("batched ActiveVLN weights moved; rebuild the runtime")
         if self.device.type == "cuda" and torch.cuda.current_stream(self.device) != self.stream:
@@ -201,6 +231,12 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             "cuda_graph_requested": self.use_cuda_graph,
             "capacity_growths": self.capacity_growths,
             "tree_decode": bool(self.action_trees),
+            "grammar_tree_budget": self.grammar_tree_budget,
+            "grammar_prior": None if self.grammar_drafter is None else self.grammar_drafter.stats(),
+            "tree_query_sizes": list(self._tree_query_sizes()),
+            "do_sample": self.policy.do_sample,
+            "temperature": self.policy.temperature if self.policy.do_sample else None,
+            "top_p": self.policy.top_p if self.policy.do_sample else None,
             "workspace_tokens": self.workspace_limit if self.pooled_kv else self.storage.shape[-2],
             "kv_pool_tokens": self.storage.shape[-2] if self.pooled_kv else None,
             "shared_graph_buffers": True,
@@ -263,8 +299,17 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             self._row_capacities = [capacity] * self.batch_size
         self.capacity_growths += 1
 
+    def _tree_query_sizes(self) -> tuple[int, ...]:
+        """Tree forward widths with captured graphs; smaller trees pad to the next one."""
+        if self.grammar_tree_budget:
+            budget = self.grammar_tree_budget
+            return tuple(
+                sorted({1 + min(budget, n) for n in (2, 8, 32, 128, 512) if n < budget} | {1 + budget})
+            )
+        return tuple(sorted({t.token_ids.shape[1] for t in self.action_trees}))
+
     def _plan_rows(self, past: Sequence[int], query: int, count: int) -> None:
-        tree_size = max((t.token_ids.shape[1] for t in self.action_trees), default=0)
+        tree_size = max(self._tree_query_sizes(), default=0)
         required = [
             min(self.policy.max_context, n + query + self.policy.max_new_tokens + tree_size)
             if row < count
@@ -370,7 +415,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                             self.vision(packed)
                 for query in sorted(queries):
                     self._capture_contexts(query, context_buckets)
-                for query in sorted({t.token_ids.shape[1] for t in self.action_trees}):
+                for query in self._tree_query_sizes():
                     self._capture_contexts(query, context_buckets, tree=True)
             finally:
                 self.capture_enabled = False
@@ -532,6 +577,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             if prefix.owner is not self._owner or self._pending_generation != prefix.generation:
                 raise RuntimeError("batched prefix is stale or already consumed")
             try:
+                if self.grammar_tree_budget:
+                    from .grammar_tree_activevln import generate_batched_grammar_tokens
+
+                    return generate_batched_grammar_tokens(self, prefix, cancelled=cancelled)
                 if self.action_trees:
                     from .speculation_activevln import generate_batched_tree_tokens
 
@@ -563,8 +612,14 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 raise ValueError("batched generation exceeds the model context limit")
             penalty = self.policy.repetition_penalty
             effective = torch.where(seen, torch.where(logits < 0, logits * penalty, logits / penalty), logits)
-            token = effective.argmax(-1, keepdim=True)
-            logprob = torch.log_softmax(effective, -1).gather(1, token)
+            if self.policy.do_sample:
+                from .grammar_tree_activevln import select_tokens
+
+                token, logprob = select_tokens(effective, self.policy, self.sampling_generator)
+                token, logprob = token[:, None], logprob[:, None]
+            else:
+                token = effective.argmax(-1, keepdim=True)
+                logprob = torch.log_softmax(effective, -1).gather(1, token)
             seen.scatter_(1, token, True)
             ids = torch.zeros(self.batch_size, 1, device=self.device, dtype=torch.long)
             ids[:count] = token
