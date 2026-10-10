@@ -55,21 +55,21 @@ class Pi05OptimizationConfig:
     schema_version: int = 1
     operators: OperatorBackends = field(default_factory=OperatorBackends)
     prefix_layers: tuple[MlpLayerPrecision, ...] = ()
-    numerics: Literal["lerobot", "rlinf"] = "lerobot"
+    numerics: Literal["lerobot", "openpi_rlinf"] = "lerobot"
     batch_cameras: bool = False
     compact_prefix: bool = False
     prefix_kv_only: bool = False
     reuse_action_context: bool = False
 
     def __post_init__(self) -> None:
-        """Validate semantics and require a checkpoint-bound mixed precision recipe."""
+        """Validate semantics and bind quantized MLPs to a calibrated checkpoint."""
         if (
             type(self.schema_version) is not int
             or self.schema_version != 1
             or self.hardware not in (None, "thor", "spark", "orin", "4090")
         ):
             raise ValueError("Unsupported Pi05 optimization schema or hardware profile")
-        expected = {"lerobot": "gelu_pytorch_tanh", "rlinf": "gelu_pytorch_exact"}.get(self.numerics)
+        expected = {"lerobot": "gelu_pytorch_tanh", "openpi_rlinf": "gelu_pytorch_exact"}.get(self.numerics)
         if expected is None or self.activation != expected:
             raise ValueError("Pi05 numerics require the matching exact or tanh GELU contract")
         if not isinstance(self.operators, OperatorBackends):
@@ -101,8 +101,8 @@ class Pi05OptimizationConfig:
             and self.operators.paired_gelu in ("triton_lookup", "triton_exact")
         ):
             raise ValueError("Paired GEMMs require an explicit Thor or Spark launch profile")
-        if self.mixed_precision and self.checkpoint_sha256 is None:
-            raise ValueError("Mixed precision requires a calibration checkpoint SHA256")
+        if self.has_quantized_mlp and self.checkpoint_sha256 is None:
+            raise ValueError("Quantized MLPs require a calibration checkpoint SHA256")
         if self.checkpoint_sha256 is not None and (
             not isinstance(self.checkpoint_sha256, str)
             or len(self.checkpoint_sha256) != 64
@@ -111,8 +111,8 @@ class Pi05OptimizationConfig:
             raise ValueError("checkpoint_sha256 must contain 64 lowercase hexadecimal characters")
 
     @property
-    def mixed_precision(self) -> bool:
-        """Whether either tower uses a calibrated low precision MLP format."""
+    def has_quantized_mlp(self) -> bool:
+        """Whether any MLP projection requires calibrated activation encoding."""
         return any(
             layer.gate_up != "bf16" or layer.down != "bf16"
             for layer in (*self.action_layers, *self.prefix_layers)
@@ -145,23 +145,33 @@ class Pi05OptimizationConfig:
     def from_preset(
         cls,
         device: Literal["thor", "spark", "orin", "4090"],
-        preset: Literal["strict", "rlinf"] = "strict",
+        preset: Literal["strict", "optimized"] = "strict",
         *,
-        precision: Literal["bf16", "fp8", "nvfp4", "mixed"] = "bf16",
-        calibration: str | Path = "rlinf_libero",
+        numerics: Literal["lerobot", "openpi_rlinf"] = "lerobot",
+        prefix_mlp: Precision = "bf16",
+        action_mlp: Precision = "bf16",
+        calibration: str | Path | None = None,
     ) -> Pi05OptimizationConfig:
-        """Resolve a device preset without importing kernels or probing CUDA.
+        """Resolve optimization, numerical semantics and MLP formats independently.
 
-        ``strict`` preserves LeRobot numerics and supports all listed devices.
-        ``rlinf`` selects the optimized B1/H10/10-step Thor/Spark profile.
-        FP8 selects protected action projections; NVFP4 selects prefix MLPs;
-        mixed combines both. Low precision requires matching calibration data;
-        the bundled ranges belong exclusively to RLinf-Pi05-LIBERO-SFT.
-        Engine graph configuration and request shapes remain caller-owned.
+        ``strict`` selects pointwise fusion and K/V reuse. ``optimized`` adds
+        measured B1/H10/10-step Thor/Spark execution choices. Neither changes
+        the selected numerical contract. MLP formats apply to projections only;
+        calibrated BF16 protection is retained. Low precision requires ranges
+        for the requested device, tower and format. The bundled calibration
+        belongs exclusively to RLinf-Pi05-LIBERO-SFT with openpi_rlinf numerics.
+        Resolution imports no kernels and does not probe CUDA.
         """
         from .presets import resolve_preset
 
-        return resolve_preset(device, preset, precision=precision, calibration=calibration)
+        return resolve_preset(
+            device,
+            preset,
+            numerics=numerics,
+            prefix_mlp=prefix_mlp,
+            action_mlp=action_mlp,
+            calibration=calibration,
+        )
 
     def to_json(self, path: str | Path) -> None:
         """Export deployment settings without benchmark or calibration dependencies."""

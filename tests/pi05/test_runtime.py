@@ -14,9 +14,9 @@ from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy, Pi05Prefix
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
 
-def test_rlinf_profile_rejects_silent_eager_fallback():
+def test_openpi_rlinf_numerics_reject_silent_eager_fallback():
     policy = SimpleNamespace(
-        _optimization_config=Pi05OptimizationConfig(numerics="rlinf", activation="gelu_pytorch_exact"),
+        _optimization_config=Pi05OptimizationConfig(numerics="openpi_rlinf", activation="gelu_pytorch_exact"),
         _native_enabled=lambda: False,
     )
     with pytest.raises(RuntimeError, match="CUDA native inference"):
@@ -98,15 +98,15 @@ def test_workspace_failure_unwinds_context(monkeypatch):
 
 
 @pytest.mark.gpu
-def test_rlinf_rotary_registry_preserves_reference_bytes():
+def test_openpi_rlinf_rotary_registry_preserves_reference_bytes():
     from embodiinfer.layers import rotary_backends
-    from embodiinfer.policies.pi05.embeddings import rlinf_rope_tables
+    from embodiinfer.policies.pi05.embeddings import openpi_rlinf_rope_tables
 
     request = OperatorRequest("cuda", torch.bfloat16, cuda_graph=True)
     reference = rotary_backends.get("torch", request)
     migrated = rotary_backends.get("cuda", request)
     inputs = torch.randn(2, 4, 10, 256, device="cuda", dtype=torch.bfloat16).transpose(1, 2)
-    cosine, sine = rlinf_rope_tables(torch.arange(10, device="cuda")[None].expand(2, -1), 256)
+    cosine, sine = openpi_rlinf_rope_tables(torch.arange(10, device="cuda")[None].expand(2, -1), 256)
     expected = reference(inputs, sine, cosine)
     actual = migrated(inputs, sine, cosine)
     assert torch.equal(actual.view(torch.uint8), expected.contiguous().view(torch.uint8))

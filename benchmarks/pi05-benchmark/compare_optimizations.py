@@ -112,7 +112,12 @@ def main() -> None:
             Pi05OptimizationConfig.from_json(args.recipe)
             if args.recipe is not None
             else Pi05OptimizationConfig.from_preset(
-                args.device, "rlinf", precision="mixed", calibration=args.calibration
+                args.device,
+                "optimized",
+                numerics="openpi_rlinf",
+                prefix_mlp="nvfp4",
+                action_mlp="fp8",
+                calibration=args.calibration,
             )
         )
         recipes = {

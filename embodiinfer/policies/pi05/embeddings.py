@@ -52,7 +52,7 @@ def rope_tables(
     return cos.to(x.dtype), sin.to(x.dtype)
 
 
-def rlinf_time_embedding(
+def openpi_rlinf_time_embedding(
     time: torch.Tensor,
     dimension: int,
     min_period: float,
@@ -66,7 +66,7 @@ def rlinf_time_embedding(
     return torch.cat((torch.sin(angles), torch.cos(angles)), dim=-1).to(time.dtype)
 
 
-def rlinf_rope_tables(positions: torch.Tensor, width: int) -> tuple[torch.Tensor, torch.Tensor]:
+def openpi_rlinf_rope_tables(positions: torch.Tensor, width: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Return half-width FP32 cosine/sine in RLinf's original arithmetic order."""
     exponents = (2.0 / width) * torch.arange(width // 2, dtype=torch.float32, device=positions.device)
     timescale = 10_000.0**exponents

@@ -110,44 +110,62 @@ GEMM shapes can change rounding even with the same attention formula.
 
 #### Opt-in fused operators
 
-Deployment selects a device, a preset and precision through
-`Pi05OptimizationConfig.from_preset(device, preset, precision=...)`.
+Deployment selects optimization, numerical semantics and precision independently:
 
-| Preset | Devices | Precision | Numerical contract |
-|---|---|---|---|
-| `strict` (default) | `thor`, `spark`, `orin`, `4090` | `bf16` | Existing LeRobot tanh GELU and dtype boundaries |
-| `rlinf` | `thor`, `spark` | `bf16`, `fp8`, `nvfp4`, `mixed` | Exact GELU and RLinf inference precision/layout |
+```python
+Pi05OptimizationConfig.from_preset(
+    "thor", "optimized", numerics="openpi_rlinf",
+    prefix_mlp="nvfp4", action_mlp="fp8",
+)
+```
+
+| Selector | Choices | Meaning |
+|---|---|---|
+| `device` | `thor`, `spark`, `orin`, `4090` | Hardware capability and launch profile |
+| `preset` | `strict` (default), `optimized` | Execution and operator optimizations |
+| `numerics` | `lerobot` (default), `openpi_rlinf` | Reference arithmetic and dtype boundaries |
+| `prefix_mlp`, `action_mlp` | Each independently `bf16`, `fp8`, `nvfp4` | Projection formats in each transformer tower |
 
 The strict preset enables RMSNorm/residual fusion and prefix/suffix K/V storage
-reuse while retaining existing attention and MLP computation. It has no fixed
-B1/H10 requirement. Passing no optimization configuration retains the original
-route. Device selection validates GPU capability at execution; unsupported
-combinations fail explicitly.
+reuse while retaining reference attention and separate BF16 gate/up computation.
+It has no fixed B1/H10 requirement. Neither preset changes the selected numerical
+contract. Passing no optimization configuration retains the original route.
+Device selection validates GPU capability at execution; unsupported combinations
+fail explicitly. Low precision is an independent, explicitly approximate choice.
 
-The RLinf preset selects paired BF16 gate/up GEMMs, camera batching, prefix
+The optimized preset selects paired BF16 gate/up GEMMs, camera batching, prefix
 compaction, last-prefix-block K/V-only execution and action context reuse.
-Its device profiles require standard 18-layer towers, B1, inference horizon 10
+It is available on Thor/Spark and requires standard 18-layer towers, B1, inference horizon 10
 and ten denoise steps. Thor uses folded FlashAttention and a lookup GELU
-encoder; Spark uses query-major attention and its CUDA prefix softmax launch.
+encoder with the `openpi_rlinf` contract; Spark uses query-major attention and
+its CUDA prefix softmax launch.
 Query-major attention requires `torch.bmm(out_dtype=torch.float32)`.
 
-`fp8` selects protected action MLP projections, `nvfp4` selects prefix MLPs with
-BF16 actions, and `mixed` combines them. These are selective precision recipes;
-vision remains BF16. The packaged `rlinf_libero` calibration contains only
-checkpoint identity, numerical semantics and per-device layer ranges. Execution
-switches and operator choices come from the preset. Calibration is loaded only
-for low precision and its checkpoint SHA256 is checked before weight packing.
-Use `calibration="/path/to/calibration.json"` for independently calibrated weights.
-NVFP4 requires Blackwell and mixed GEMMs require the Torch API tested in 2.13.
+There is no ambiguous `mixed` precision option. For example, BF16/FP8,
+BF16/NVFP4 and FP8/NVFP4 are expressed by setting the two MLP selectors directly.
+These formats apply to MLP projections; attention, vision and FP32 boundaries
+follow the numerical contract. Calibration retains any per-layer BF16 protection.
+The packaged `rlinf_libero` data covers only prefix NVFP4 and protected action FP8
+on Thor/Spark for RLinf-Pi05-LIBERO-SFT under `openpi_rlinf`. It can supply either
+selection or both; other tower/format pairs require their own calibration.
+The name identifies the checkpoint, not an optimization preset.
 
-The RLinf numerical contract uses BF16 vision encoder/projector, FP32
+Calibration is keyed by device, tower and format, and is loaded only when low
+precision is requested. Missing ranges fail explicitly; the checkpoint SHA256
+is checked before weight packing. Use `calibration="/path/to/calibration.json"`
+for independently calibrated weights or formats. Orin supports BF16 on this path;
+RTX 4090 supports BF16/FP8, and NVFP4 requires Blackwell. Quantized GEMMs require
+the Torch API tested in 2.13.
+
+The `openpi_rlinf` numerical contract follows the inference code in RLinf's
+`openpi_rlinf` package: BF16 vision encoder/projector, FP32
 patch/position/time/rotary math, BF16 query prescaling, separate Q/K/V,
-arithmetic action GEGLU, lookup prefix GEGLU and contiguous BF16 down matrices.
+and contiguous BF16 down matrices. GELU uses the exact rather than tanh formula.
 Set `native_embeddings=True`, `native_inference=True`, `action_horizon=10` and
 `default_num_steps=10`. The checkpoint retains its nominal horizon metadata.
 CUDA Graph configuration belongs to `EngineConfig`; prefix capture remains a
 policy option. Inductor, global quantization and TP are rejected in combination
-with these operator plans. RLinf requires CUDA eval/no-grad inference.
+with these operator plans. `openpi_rlinf` requires CUDA eval/no-grad inference.
 
 For ablations, construct `Pi05OptimizationConfig` directly or use
 `dataclasses.replace` on a resolved preset. `MlpLayerPrecision` selects gate/up
@@ -163,8 +181,10 @@ under `policies/pi05/inference/`; reusable operators remain under `layers/` and
 `backend/`. Preset resolution imports no optional kernels and does not probe CUDA.
 
 Strict pointwise parity does not establish task quality. Paired GEMMs and
-alternative attention can change accumulation; RLinf also changes numerical
-boundaries relative to LeRobot. Thor/Spark validation covers prefix K/V, ten
+alternative attention can change accumulation; `openpi_rlinf` also changes numerical
+boundaries relative to LeRobot. Existing Thor/Spark measurements use `optimized`
+with `openpi_rlinf`; they do not establish performance for every independently
+selectable combination. Validation covers prefix K/V, ten
 velocities, full actions and changed-noise graph replay against frozen,
 matching-format references. Low precision changes outputs relative to BF16.
 See the [measurement conditions and results](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md),

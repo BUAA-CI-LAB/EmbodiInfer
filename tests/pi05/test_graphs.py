@@ -182,16 +182,16 @@ def test_failed_capture_releases_new_scopes_and_can_retry(make_pi05_policy, monk
         policy._clear_inference_caches()
 
 
-def test_rlinf_cache_only_and_shared_context_preserve_graph_actions(make_pi05_policy, monkeypatch):
+def test_openpi_rlinf_cache_only_and_shared_context_preserve_graph_actions(make_pi05_policy, monkeypatch):
     from dataclasses import replace
 
-    from embodiinfer.policies.pi05.embeddings import rlinf_time_embedding
+    from embodiinfer.policies.pi05.embeddings import openpi_rlinf_time_embedding
 
     base = Pi05OptimizationConfig(
-        numerics="rlinf", activation="gelu_pytorch_exact", operators=OperatorBackends(rotary="cuda")
+        numerics="openpi_rlinf", activation="gelu_pytorch_exact", operators=OperatorBackends(rotary="cuda")
     )
     policy = make_pi05_policy(base)
-    policy._sinusoidal = rlinf_time_embedding
+    policy._sinusoidal = openpi_rlinf_time_embedding
     policy.prefix_cuda_graph = False
     batch = Pi05Batch(
         [torch.randn(1, 3, 8, 8, device="cuda")],

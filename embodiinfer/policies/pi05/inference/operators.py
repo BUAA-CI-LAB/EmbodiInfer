@@ -25,7 +25,7 @@ from ....layers import (
 from ....layers.activation import GeluMulBackend, PairedGeluBackend
 from ....layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
 from ....layers.quantization import ActivationQuantizer, ProjectionBackend
-from ..embeddings import rlinf_rope_tables, rope_tables
+from ..embeddings import openpi_rlinf_rope_tables, rope_tables
 from .config import MlpLayerPrecision, Pi05OptimizationConfig
 
 if TYPE_CHECKING:
@@ -97,11 +97,13 @@ class Pi05OperatorPlans:
                     digest.update(chunk)
             if digest.hexdigest() != config.checkpoint_sha256:
                 raise ValueError("Activation calibration belongs to a different checkpoint")
-        if config.mixed_precision and not all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
+        if config.has_quantized_mlp and not all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
             raise RuntimeError("Calibrated mixed precision requires the scaled_mm API tested in PyTorch 2.13")
         selected = config.operators
         request = OperatorRequest(device, torch.bfloat16, cuda_graph=True)
-        self.rotary = rotary_backends.get(selected.rotary, request) if config.numerics == "rlinf" else None
+        self.rotary = (
+            rotary_backends.get(selected.rotary, request) if config.numerics == "openpi_rlinf" else None
+        )
         self.norm: NormalizationBackend | None = (
             normalization_backends.get(selected.normalization, request) if config.norm_fusion else None
         )
@@ -112,9 +114,9 @@ class Pi05OperatorPlans:
         self.paired: dict[bool, PairedGeluBackend] = {}
         if self.norm is not None and self.norm.capabilities.arithmetic != "torch_rmsnorm_bf16_rounding":
             raise ValueError("Pi05 requires the strict Torch RMSNorm rounding contract")
-        if config.fused_mlp or config.mixed_precision:
+        if config.fused_mlp or config.has_quantized_mlp:
             self.projection = projection_backends.get(selected.projection, request)
-        if config.mixed_precision:
+        if config.has_quantized_mlp:
             bits = 4 if any("nvfp4" in (layer.gate_up, layer.down) for layer in precision_layers) else 8
             encoding_request = OperatorRequest(device, torch.bfloat16, bits=bits, cuda_graph=True)
             self.quantizer = quantization_backends.get(selected.quantization, encoding_request)
@@ -167,7 +169,7 @@ class Pi05OperatorPlans:
 
     def rotary_tables(self, positions: torch.Tensor, width: int) -> tuple:
         """Prepare the original half-width FP32 RLinf factors once per context."""
-        return rlinf_rope_tables(positions, width)
+        return openpi_rlinf_rope_tables(positions, width)
 
     def rotate(self, inputs: torch.Tensor, cosine: torch.Tensor, sine: torch.Tensor) -> torch.Tensor:
         """Adapt BHSD storage to the reusable BTNH rotary contract."""
@@ -362,7 +364,7 @@ class Pi05OperatorPlans:
                 from ..modeling_pi05 import _apply_rope, _fused_qkv
 
                 attn = layer.self_attn
-                if self.config.numerics == "rlinf" or self.policy.attention == "eager":
+                if self.config.numerics == "openpi_rlinf" or self.policy.attention == "eager":
                     key, value = attn.k_proj(normalized), attn.v_proj(normalized)
                 else:
                     _, key, value = _fused_qkv(attn, normalized)
@@ -370,7 +372,7 @@ class Pi05OperatorPlans:
                 key, value = (x.view(batch, length, -1, attn.head_dim).transpose(1, 2) for x in (key, value))
                 key = (
                     self.rotate(key, cos, sin)
-                    if self.config.numerics == "rlinf"
+                    if self.config.numerics == "openpi_rlinf"
                     else _apply_rope(key, key, cos, sin, False)[0]
                 )
                 collected.append((key, value))
@@ -412,7 +414,8 @@ class Pi05OperatorPlans:
                         normalized,
                         False,
                         fused,
-                        fuse_projections=self.policy.attention != "eager" and self.config.numerics != "rlinf",
+                        fuse_projections=self.policy.attention != "eager"
+                        and self.config.numerics != "openpi_rlinf",
                         approximate=self.approximate,
                     )
             hidden = _gated_residual(hidden, update, gate, False, fused)
@@ -432,7 +435,7 @@ class Pi05OperatorPlans:
             )
             positions, mask = self.policy._action_context(prefix, pad, groups)
             tower = self.policy._expert_tower
-            if self.config.numerics == "rlinf":
+            if self.config.numerics == "openpi_rlinf":
                 cosine, sine = self.rotary_tables(positions, tower.layers[0].self_attn.head_dim)
             else:
                 cosine, sine = rope_tables(tower.rotary_emb, prefix.kv[0][0], positions)

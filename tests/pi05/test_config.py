@@ -20,11 +20,69 @@ def test_strict_preset_preserves_default_numerics_without_fixed_request_shape(de
     assert config.numerics == "lerobot" and not config.fused_mlp
 
 
+@pytest.mark.parametrize("preset", ["strict", "optimized"])
+@pytest.mark.parametrize("numerics", ["lerobot", "openpi_rlinf"])
+def test_optimization_preset_does_not_select_numerical_contract(preset, numerics):
+    config = Pi05OptimizationConfig.from_preset("thor", preset, numerics=numerics)
+    assert config.numerics == numerics
+    assert config.activation == ("gelu_pytorch_tanh" if numerics == "lerobot" else "gelu_pytorch_exact")
+    assert config.fused_mlp == (preset == "optimized")
+    assert not config.has_quantized_mlp
+
+
+@pytest.mark.parametrize("prefix_mlp,action_mlp", [("fp8", "bf16"), ("bf16", "nvfp4"), ("fp8", "nvfp4")])
+@pytest.mark.parametrize("numerics", ["lerobot", "openpi_rlinf"])
+def test_custom_calibration_supports_other_tower_format_combinations(
+    tmp_path, prefix_mlp, action_mlp, numerics
+):
+    activation = "gelu_pytorch_tanh" if numerics == "lerobot" else "gelu_pytorch_exact"
+    ranges = {
+        "prefix": {"fp8": [asdict(MlpLayerPrecision("fp8", "bf16", 2.5, 8.75))] * 18},
+        "action": {"nvfp4": [asdict(MlpLayerPrecision("nvfp4", "nvfp4", 4.5, 9.25))] * 18},
+    }
+    path = tmp_path / "calibration.json"
+    path.write_text(
+        json.dumps(
+            dict(
+                schema_version=2,
+                numerics=numerics,
+                activation=activation,
+                checkpoint_sha256="a" * 64,
+                devices={"thor": ranges},
+            )
+        )
+    )
+    config = Pi05OptimizationConfig.from_preset(
+        "thor",
+        "optimized",
+        numerics=numerics,
+        prefix_mlp=prefix_mlp,
+        action_mlp=action_mlp,
+        calibration=path,
+    )
+    assert config.checkpoint_sha256 == "a" * 64
+    assert config.prefix_layers == (
+        (MlpLayerPrecision("fp8", "bf16", 2.5, 8.75),) * 18 if prefix_mlp == "fp8" else ()
+    )
+    assert config.action_layers == (
+        (MlpLayerPrecision("nvfp4", "nvfp4", 4.5, 9.25),) * 18 if action_mlp == "nvfp4" else ()
+    )
+
+
+@pytest.mark.parametrize("formats", [dict(prefix_mlp="fp8"), dict(action_mlp="nvfp4")])
+def test_bundled_calibration_rejects_unmeasured_formats(formats):
+    with pytest.raises(ValueError, match="18 .* MLP layer ranges"):
+        Pi05OptimizationConfig.from_preset("thor", "optimized", numerics="openpi_rlinf", **formats)
+
+
 @pytest.mark.parametrize("device", ["thor", "spark"])
-@pytest.mark.parametrize("precision", ["bf16", "fp8", "nvfp4", "mixed"])
-def test_rlinf_presets_compose_independent_tower_precision(device, precision, tmp_path):
-    config = Pi05OptimizationConfig.from_preset(device, "rlinf", precision=precision)
-    assert config.numerics == "rlinf" and config.activation == "gelu_pytorch_exact"
+@pytest.mark.parametrize("prefix_mlp", ["bf16", "nvfp4"])
+@pytest.mark.parametrize("action_mlp", ["bf16", "fp8"])
+def test_optimized_presets_compose_independent_tower_precision(device, prefix_mlp, action_mlp, tmp_path):
+    config = Pi05OptimizationConfig.from_preset(
+        device, "optimized", numerics="openpi_rlinf", prefix_mlp=prefix_mlp, action_mlp=action_mlp
+    )
+    assert config.numerics == "openpi_rlinf" and config.activation == "gelu_pytorch_exact"
     assert all(
         (config.batch_cameras, config.compact_prefix, config.prefix_kv_only, config.reuse_action_context)
     )
@@ -32,37 +90,41 @@ def test_rlinf_presets_compose_independent_tower_precision(device, precision, tm
     assert config.operators.gelu_mul == ("cuda_lookup" if device == "thor" else "cuda")
     assert config.operators.paired_gelu == "triton_exact"
     assert config.operators.projection == "torch_matmul" and config.operators.rotary == "cuda"
-    if precision in ("fp8", "mixed"):
+    if action_mlp == "fp8":
         assert len(config.action_layers) == 18
         formats = [value for layer in config.action_layers for value in (layer.gate_up, layer.down)]
         assert formats.count("fp8") == 28 and formats.count("bf16") == 8
     else:
         assert not config.action_layers
-    if precision in ("nvfp4", "mixed"):
+    if prefix_mlp == "nvfp4":
         assert len(config.prefix_layers) == 18
         assert all(layer.gate_up == layer.down == "nvfp4" for layer in config.prefix_layers)
     else:
         assert not config.prefix_layers
-    assert config.mixed_precision == (precision != "bf16")
+    assert config.has_quantized_mlp == (prefix_mlp != "bf16" or action_mlp != "bf16")
     path = tmp_path / "resolved.json"
     config.to_json(path)
     assert Pi05OptimizationConfig.from_json(path) == config
 
 
 @pytest.mark.parametrize(
-    "device,preset,precision",
+    "options",
     [
-        ("cpu", "strict", "bf16"),
-        ("thor", "unknown", "bf16"),
-        ("thor", "strict", "fp8"),
-        ("thor", "rlinf", "int8"),
-        ("4090", "rlinf", "bf16"),
-        ("orin", "rlinf", "nvfp4"),
+        dict(device="cpu"),
+        dict(device="thor", preset="unknown"),
+        dict(device="thor", preset="rlinf"),
+        dict(device="thor", action_mlp="mixed"),
+        dict(device="thor", prefix_mlp="int8"),
+        dict(device="thor", numerics="rlinf"),
+        dict(device="4090", preset="optimized"),
+        dict(device="orin", action_mlp="fp8"),
+        dict(device="4090", prefix_mlp="nvfp4"),
+        dict(device="thor", preset="optimized", action_mlp="fp8"),
     ],
 )
-def test_presets_reject_unsupported_combinations(device, preset, precision):
+def test_presets_reject_unsupported_or_ambiguous_selectors(options):
     with pytest.raises(ValueError):
-        Pi05OptimizationConfig.from_preset(device, preset, precision=precision)
+        Pi05OptimizationConfig.from_preset(**options)
 
 
 def test_preset_resolution_is_cpu_safe_and_does_not_import_kernels(monkeypatch):
@@ -72,7 +134,9 @@ def test_preset_resolution_is_cpu_safe_and_does_not_import_kernels(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", unexpected)
     monkeypatch.setattr(torch.cuda, "get_device_capability", unexpected)
     before = set(sys.modules)
-    Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="mixed")
+    Pi05OptimizationConfig.from_preset(
+        "thor", "optimized", numerics="openpi_rlinf", prefix_mlp="nvfp4", action_mlp="fp8"
+    )
     assert not any(
         name.startswith(("triton", "embodiinfer.backend.cuda", "embodiinfer.backend.triton"))
         for name in set(sys.modules) - before
@@ -82,15 +146,17 @@ def test_preset_resolution_is_cpu_safe_and_does_not_import_kernels(monkeypatch):
 @pytest.mark.parametrize("change", ["contract", "device", "layers", "checkpoint", "format"])
 def test_custom_calibration_is_validated_before_execution(tmp_path, change):
     data = dict(
-        schema_version=1,
-        numerics="rlinf",
+        schema_version=2,
+        numerics="openpi_rlinf",
         activation="gelu_pytorch_exact",
         checkpoint_sha256="a" * 64,
-        devices={"thor": {"action_layers": [asdict(MlpLayerPrecision("fp8", "fp8", 2.5, 8.75))] * 18}},
+        devices={"thor": {"action": {"fp8": [asdict(MlpLayerPrecision("fp8", "fp8", 2.5, 8.75))] * 18}}},
     )
     path = tmp_path / "calibration.json"
     path.write_text(json.dumps(data))
-    config = Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="fp8", calibration=path)
+    config = Pi05OptimizationConfig.from_preset(
+        "thor", "optimized", numerics="openpi_rlinf", action_mlp="fp8", calibration=path
+    )
     assert config.checkpoint_sha256 == "a" * 64
     assert config.action_layers == (MlpLayerPrecision("fp8", "fp8", 2.5, 8.75),) * 18
     if change == "contract":
@@ -98,14 +164,16 @@ def test_custom_calibration_is_validated_before_execution(tmp_path, change):
     elif change == "device":
         data["devices"] = {}
     elif change == "layers":
-        data["devices"]["thor"]["action_layers"].pop()
+        data["devices"]["thor"]["action"]["fp8"].pop()
     elif change == "checkpoint":
         data.pop("checkpoint_sha256")
     else:
-        data["devices"]["thor"]["action_layers"][0]["down"] = "nvfp4"
+        data["devices"]["thor"]["action"]["fp8"][0]["down"] = "nvfp4"
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError):
-        Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="fp8", calibration=path)
+        Pi05OptimizationConfig.from_preset(
+            "thor", "optimized", numerics="openpi_rlinf", action_mlp="fp8", calibration=path
+        )
 
 
 def test_native_wrapped_model_uses_public_constructor_without_lerobot(make_pi05_policy, monkeypatch):
@@ -157,7 +225,7 @@ def test_prefix_precision_is_checkpoint_bound_and_roundtrips(tmp_path):
     with pytest.raises(ValueError, match="checkpoint SHA256"):
         Pi05OptimizationConfig(prefix_layers=layers)
     config = Pi05OptimizationConfig(prefix_layers=layers, checkpoint_sha256="1" * 64)
-    assert config.mixed_precision and not config.action_layers
+    assert config.has_quantized_mlp and not config.action_layers
     path = tmp_path / "prefix.json"
     config.to_json(path)
     assert Pi05OptimizationConfig.from_json(path) == config

@@ -47,24 +47,33 @@ and device changes invalidate derived vision casts, projection packs and graphs.
 Residual/norm/encoding fusion requires compatible operator implementations;
 `norm_quant: null` selects separate execution for reference comparisons.
 
-The RLinf profile selects exact GELU, BF16 vision encoder/projector with FP32
+The `openpi_rlinf` numerical contract follows RLinf's inference implementation:
+exact GELU, BF16 vision encoder/projector with FP32
 patch and position embeddings, FP32 time/RoPE factors, BF16 query prescaling,
-separate Q/K/V, and contiguous BF16 down-projection matrices. It batches active
-cameras, compacts globally invalid prefix columns, stops the final prefix block
-after K/V, and prepares action masks/positions/rotary factors outside denoising.
+separate Q/K/V, and contiguous BF16 down-projection matrices. Execution can
+independently batch active cameras, compact globally invalid prefix columns,
+stop the final prefix block after K/V, and prepare action masks/positions/rotary
+factors outside denoising.
 CUDA rotary and the Thor FP4 lookup epilogue use the reusable registries.
 
-Deployment calls `Pi05OptimizationConfig.from_preset(device, preset, precision=...)`.
-The `strict` preset preserves LeRobot numerics on Thor, Spark, Orin and RTX 4090.
-The `rlinf` preset selects the measured Thor/Spark B1/H10/ten-step execution
-combination. Precision selects BF16, protected action FP8, prefix NVFP4, or both.
-Unknown combinations fail explicitly. Device profiles and precision selection
-compose in code instead of duplicating a deployment JSON for each combination.
+Deployment calls `Pi05OptimizationConfig.from_preset(device, preset, numerics=...,
+prefix_mlp=..., action_mlp=...)`. The `strict` preset selects pointwise fusion and
+K/V reuse on Thor, Spark, Orin and RTX 4090; `optimized` adds the Thor/Spark
+B1/H10/ten-step execution combination. Both preserve the independently selected
+`lerobot` or `openpi_rlinf` numerical contract. Each tower independently selects
+BF16, FP8 or NVFP4, retaining calibrated per-projection BF16 protection. No single
+`mixed` alias conflates distinct combinations. Hardware support and calibration
+are validated explicitly. Existing measurements cover `optimized` with
+`openpi_rlinf`; new combinations require their own accuracy/performance evaluation.
 
 Checkpoint calibration is separate packaged data under `inference/calibration/`.
-It identifies numerical semantics, checkpoint SHA256, per-device layer formats
-and ranges. Presets load it only for low precision; scales are retained exactly.
-A custom data path supports separately calibrated checkpoints. `from_json` and
+Schema 2 identifies numerical semantics and checkpoint SHA256, and maps
+device → tower → requested format → per-layer formats/ranges. Presets load it
+only for low precision; scales are retained exactly. Bundled data covers prefix
+NVFP4 and protected action FP8 on Thor/Spark for RLinf-Pi05-LIBERO-SFT with
+`openpi_rlinf` numerics. Other tower/format pairs require separately calibrated
+data; missing pairs fail explicitly. A custom path supports these pairs and other
+checkpoints or numerical contracts. `from_json` and
 `to_json` retain the resolved configuration interface for experiments and ablations.
 
 Configuration, presets, operator plans, MLP/vision plans and graph runtime are

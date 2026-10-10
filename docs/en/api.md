@@ -135,13 +135,16 @@ deployment normally uses presets.
 Full-checkpoint parity and task quality remain deployment gates, including for
 the strict operator route; component parity alone does not establish them.
 
-For the RLinf inference profile on Thor:
+For the `openpi_rlinf` numerical contract and optimized execution on Thor:
 
 ```python
 import torch
 
 torch.set_float32_matmul_precision("highest")
-options = Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="fp8")
+options = Pi05OptimizationConfig.from_preset(
+    "thor", "optimized", numerics="openpi_rlinf",
+    prefix_mlp="bf16", action_mlp="fp8",
+)
 policy = make_policy(
     "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
     native_embeddings=True, native_inference=True, prefix_cuda_graph=True,
@@ -153,21 +156,31 @@ engine = EngineCore(
 )
 ```
 
-Choose `device="spark"` on SM121. Precision `nvfp4` selects prefix MLPs;
-`mixed` combines prefix NVFP4 with protected action FP8. The default calibration
-is bundled for RLinf-Pi05-LIBERO-SFT; a different checkpoint requires its own
-`calibration` data path. These are explicit RLinf inference semantics.
+Choose `device="spark"` on SM121. `preset` never selects numerical semantics;
+`numerics="openpi_rlinf"` explicitly follows RLinf's `openpi_rlinf` inference
+implementation. `prefix_mlp` and `action_mlp` independently select projection
+formats, retaining any calibrated BF16 protection. For example,
+`prefix_mlp="nvfp4", action_mlp="fp8"` combines those two formats.
+
+The bundled calibration covers prefix NVFP4 and action FP8 for
+RLinf-Pi05-LIBERO-SFT on Thor/Spark with `openpi_rlinf` numerics. Other checkpoints,
+numerical contracts or tower/format pairs need their own `calibration` data path.
+Unsupported formats and missing calibration are rejected explicitly.
 
 The demo accepts the same deployment choices:
 
 ```bash
 python examples/pi05_inference.py --ckpt /models/RLinf-Pi05-LIBERO-SFT \
-  --device-type thor --preset rlinf --precision mixed --envs 1 --horizon 10 --steps 10
+  --device-type thor --preset optimized --numerics openpi_rlinf \
+  --prefix-mlp nvfp4 --action-mlp fp8 --envs 1 --horizon 10 --steps 10
 ```
 
-A custom calibration JSON identifies `schema_version`, `numerics`, `activation`,
-`checkpoint_sha256`, and `devices`. Each device entry contains the required
-`action_layers` and/or `prefix_layers`, using the `MlpLayerPrecision` fields.
+A custom calibration JSON identifies `schema_version: 2`, `numerics`, `activation`,
+`checkpoint_sha256`, and `devices`. Ranges are stored under
+`devices[device]["prefix" or "action"]["fp8" or "nvfp4"]`. Each requested pair
+contains 18 layer records using the `MlpLayerPrecision` fields; records may retain
+BF16 projections for protection. The resolved configuration instead contains
+`prefix_layers` and `action_layers` for execution.
 Preset composition supplies execution switches; calibration supplies only ranges
 and protected formats. Export the resolved configuration with `to_json` to record
 an experiment. Internal inference imports moved to `pi05.inference`; callers use

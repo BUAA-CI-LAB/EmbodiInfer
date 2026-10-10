@@ -397,7 +397,7 @@ def test_pi05_factory_takes_chunk_dimensions_from_loaded_checkpoint(monkeypatch)
         modeling_pi05._build_pi05(checkpoint="test", action_horizon=50)
 
 
-def test_rlinf_factory_accepts_explicit_shorter_inference_horizon(monkeypatch):
+def test_openpi_rlinf_factory_accepts_explicit_shorter_inference_horizon(monkeypatch):
     from embodiinfer.policies.pi05 import Pi05OptimizationConfig, modeling_pi05
 
     class LoadedPolicy:
@@ -408,7 +408,7 @@ def test_rlinf_factory_accepts_explicit_shorter_inference_horizon(monkeypatch):
             )
 
     monkeypatch.setattr(modeling_pi05, "Pi05Policy", LoadedPolicy)
-    options = Pi05OptimizationConfig(numerics="rlinf", activation="gelu_pytorch_exact")
+    options = Pi05OptimizationConfig(numerics="openpi_rlinf", activation="gelu_pytorch_exact")
     policy = modeling_pi05._build_pi05(checkpoint="test", action_horizon=10, optimizations=options)
     assert policy.config.action_horizon == 10
     assert policy._lerobot.config.chunk_size == 50

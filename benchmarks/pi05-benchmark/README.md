@@ -145,24 +145,37 @@ prefix 均值从 153.19 降至 35.79 ms，diffusion 从 35.95 降至 34.03 ms；
 `collect_summary.py` 可重新计算全部对照。两轮在同一进程内连续测量，未据此
 估计独立运行的置信区间，也不将几个百分点的差异解释为稳定加速。
 
-## RLinf 推理 profile 与数值验证（2026-10-10）
+## openpi_rlinf 数值约定与推理验证（2026-10-10）
 
-RLinf 完整配方显式设置 `numerics="rlinf"`，使用 BF16 视觉 encoder/projector、exact GELU、FP32
+完整配方显式设置 `numerics="openpi_rlinf"`，对应 RLinf 的 `openpi_rlinf` 推理实现，使用 BF16 视觉 encoder/projector、exact GELU、FP32
 time/RoPE、BF16 query prescaling、separate Q/K/V、连续 BF16 down 矩阵布局、
 action arithmetic / prefix lookup GEGLU，并启用 active-camera batching、prefix
 compaction、末层仅生成 K/V、action context 复用。仅设置 `numerics` 不会自动启用
 所有优化开关；完整配方明确选择各项优化。既有 LeRobot 默认语义保持不变。
 
-部署使用 `Pi05OptimizationConfig.from_preset("thor", "rlinf", precision="mixed")`，
-Spark 使用对应设备名称。`fp8` 选择受保护 action MLP，`nvfp4` 选择 prefix MLP，
-`mixed` 组合两者，`bf16` 不加载校准。设备/preset 决定算子和执行组合；
-`inference/calibration/rlinf_libero.json` 只保存 checkpoint identity、数值语义、
-各设备的保护选择和激活范围，不再为每个组合重复保存一份部署 JSON。
+部署将优化组合、数值约定和两部分 MLP 精度分开选择：
+
+```python
+Pi05OptimizationConfig.from_preset(
+    "thor", "optimized", numerics="openpi_rlinf",
+    prefix_mlp="nvfp4", action_mlp="fp8",
+)
+```
+
+Spark 使用对应设备名称。`prefix_mlp` 和 `action_mlp` 各自支持 BF16/FP8/NVFP4
+选择，不再用 `mixed` 代指某个固定组合。设备/preset 决定执行优化，`numerics`
+决定数值约定；两者均不隐式选择精度。实际可执行组合仍受硬件和校准数据约束。
+`inference/calibration/rlinf_libero.json` 的 schema 2 按设备、prefix/action、目标
+格式组织保护选择和激活范围，并保存 checkpoint identity 与数值语义。内置数据
+只覆盖已测的 prefix NVFP4、受保护 action FP8；可分别或组合选用。其他部分/格式
+组合需要自己的校准数据，缺失时明确报错。文件名指实际权重来源，不是优化 preset。
 
 自定义权重通过 `calibration` 传入独立校准数据路径。`from_json`/`to_json` 保留完整
-配置导入导出，供消融和记录实验使用。默认 `strict` preset 保持 LeRobot tanh-GELU
-及 dtype 语义，支持 Thor/Spark/Orin/4090 的严格融合与 K/V 复用；其余实验中的
-精细开关可以直接构造配置。校准与 checkpoint、硬件和数值语义绑定，不能混用。
+配置导入导出，供消融和记录实验使用。默认 `numerics="lerobot"` 保持 LeRobot
+tanh-GELU 及 dtype 语义；`strict` preset 支持 Thor/Spark/Orin/4090 的严格融合与
+K/V 复用，`optimized` 在 Thor/Spark 上增加完整优化。两者均保留调用方选择的
+数值约定；更细的开关可以直接构造配置。校准与 checkpoint、硬件、部分、格式
+和数值语义绑定，不能混用。本节性能只覆盖已测组合，没有推及所有可表达配置。
 
 Thor/Spark 使用相同权重、fixture、noise、B1/H10/完整十步与 `highest` 进行冻结
 参考核验。四种精度配置分别为 BF16、受保护 action FP8、prefix NVFP4，以及
