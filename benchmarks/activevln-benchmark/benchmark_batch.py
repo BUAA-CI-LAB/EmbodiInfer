@@ -40,6 +40,14 @@ class ReplaySlot:
     memory: ActiveVLNMemory | None = None
 
 
+def observe(rgb: np.ndarray, instruction: str, uint8_source: bool):
+    """The benchmark observation, optionally carrying its exact uint8 source."""
+    observation = make_observation(rgb, instruction)
+    if uint8_source:
+        observation.metadata["rgb_uint8"] = rgb
+    return observation
+
+
 def save_report(path: Path, report: dict[str, Any]) -> None:
     """Atomically retain completed calls, including when a later batch fails."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,6 +167,11 @@ def run(config: dict[str, Any], output: Path) -> int:
                 grammar_local_weight=config.get("grammar_local_weight", 1.0),
                 grammar_refresh=config.get("grammar_refresh", 64),
                 sampling_seed=config.get("sampling_seed", 0),
+                gpu_preprocess=config.get("gpu_preprocess", False),
+                attention_kernel=config.get("attention_kernel", "split"),
+                incremental_kv_commit=config.get("incremental_kv_commit", False),
+                vision_kernel=config.get("vision_kernel", "hf"),
+                skip_padded_queries=config.get("skip_padded_queries", False),
             )
             report["phase"] = "graph_capture"
             save_report(output, report)
@@ -196,8 +209,14 @@ def run(config: dict[str, Any], output: Path) -> int:
             runtime.reset_stats()
             report["phase"] = "measurement"
             measured = True
+            uint8_source = bool(config.get("uint8_observations", False))
+            report["preprocessing"] = {
+                "uint8_observations": uint8_source,
+                "gpu_preprocess": runtime.gpu_preprocess,
+            }
             pending = iter(episodes)
             slots: list[ReplaySlot] = []
+            measurement_start = time.perf_counter()
             while True:
                 while len(slots) < batch_size:
                     episode = next(pending, None)
@@ -218,17 +237,30 @@ def run(config: dict[str, Any], output: Path) -> int:
                 torch.cuda.synchronize(device)
                 start_ns = time.perf_counter_ns()
                 observations = [
-                    make_observation(image, slot.episode.instruction)
+                    observe(image, slot.episode.instruction, uint8_source)
                     for image, slot in zip(images, slots, strict=True)
                 ]
-                prepared = runtime.prepare(observations, [slot.memory for slot in slots])
+                prepare_ns = time.perf_counter_ns()
+                host_turns = runtime.prepare_host(observations, [slot.memory is None for slot in slots])
+                device_ns = time.perf_counter_ns()
+                prepared = runtime.prepare(None, [slot.memory for slot in slots], host_turns=host_turns)
+                model_ns = time.perf_counter_ns()
                 prefix, generations, timing = timed_model(
                     lambda prepared=prepared: runtime.prefill(prepared), runtime.generate, device
                 )
+                finalize_ns = time.perf_counter_ns()
                 results = [policy.decoder.finalize_generation(generation) for generation in generations]
                 actions = [result.actions[0].detach().float().cpu() for result in results]
                 torch.cuda.synchronize(device)
-                elapsed_ms = (time.perf_counter_ns() - start_ns) / 1e6
+                end_ns = time.perf_counter_ns()
+                elapsed_ms = (end_ns - start_ns) / 1e6
+                timing = {
+                    **timing,
+                    "observe_ms": (prepare_ns - start_ns) / 1e6,
+                    "host_prepare_ms": (device_ns - prepare_ns) / 1e6,
+                    "device_prepare_ms": (model_ns - device_ns) / 1e6,
+                    "finalize_ms": (end_ns - finalize_ns) / 1e6,
+                }
                 batch_index = len(report["batches"])
                 report["batches"].append(
                     {
@@ -279,6 +311,7 @@ def run(config: dict[str, Any], output: Path) -> int:
                         ),
                         flush=True,
                     )
+        report["measurement_wall_seconds"] = time.perf_counter() - measurement_start
         assert len(report["rows"]) == expected_frames
         report["status"] = "complete" if limit is None and len(episodes) == 48 else "partial_probe"
         report["phase"] = "finished"

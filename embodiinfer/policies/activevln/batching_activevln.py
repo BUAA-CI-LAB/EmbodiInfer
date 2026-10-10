@@ -14,7 +14,7 @@ from ...exceptions import SessionCancelledError
 from ...types import Observation
 from .cache_activevln import ActiveVLNMemory, _layer_views
 from .cuda_graph import ActiveVLNGraphRuntime, _TextGraph
-from .modeling_activevln import ActiveVLNGeneration, PreparedActiveVLNTurn
+from .modeling_activevln import ActiveVLNGeneration, HostActiveVLNTurn, PreparedActiveVLNTurn
 from .processor_activevln import ProcessedTurn
 
 if TYPE_CHECKING:
@@ -79,9 +79,20 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         grammar_local_weight: float = 1.0,
         grammar_refresh: int = 64,
         sampling_seed: int = 0,
+        gpu_preprocess: bool = False,
+        attention_kernel: str = "split",
+        incremental_kv_commit: bool = False,
+        vision_kernel: str = "hf",
+        skip_padded_queries: bool = False,
     ) -> None:
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive Python integer")
+        if attention_kernel not in ("split", "gqa"):
+            raise ValueError("attention_kernel must be 'split' or 'gqa'")
+        if attention_kernel == "gqa" and not split_attention:
+            raise ValueError("the GQA attention kernel replaces split attention")
+        if skip_padded_queries and attention_kernel != "gqa":
+            raise ValueError("skipping padded queries requires the GQA attention kernel")
         if type(query_bucket_size) is not int or query_bucket_size < 1:
             raise ValueError("query_bucket_size must be a positive Python integer")
         if type(workspace_tokens) is not int or not 1 <= workspace_tokens <= policy.max_context:
@@ -106,7 +117,14 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             raise ValueError("CUDA shared KV pools require split_attention")
         if tree_fp32_projection and not tree_decode:
             raise ValueError("tree_fp32_projection requires tree_decode")
+        if gpu_preprocess and not parameter.is_cuda:
+            raise ValueError("gpu_preprocess requires a CUDA policy")
         self.pooled_kv = kv_pool_tokens is not None
+        self.attention_kernel = attention_kernel
+        self.skip_padded_queries = skip_padded_queries
+        self.incremental_kv_commit = incremental_kv_commit
+        self.gpu_preprocess = gpu_preprocess
+        policy.set_gpu_preprocess(gpu_preprocess)
         self.workspace_limit = workspace_tokens
         allocated_tokens = workspace_tokens if kv_pool_tokens is None else kv_pool_tokens
         self.batch_size = batch_size
@@ -142,13 +160,15 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
                 tree_decode=tree_decode,
                 tree_fp32_projection=tree_fp32_projection,
                 tree_repeat_actions=tree_repeat_actions,
+                vision_kernel=vision_kernel,
             )
             if allocated_tokens > self.storage.shape[-2]:
                 self._replace_storage(allocated_tokens)
         else:
-            if cuda_graph or fused_ops or split_attention:
+            if cuda_graph or fused_ops or split_attention or vision_kernel != "hf":
                 raise ValueError("graph/fused/split batch execution requires CUDA BF16")
             self.policy, self.device = policy, parameter.device
+            self.vision_kernel = vision_kernel
             self.weight_pointer = parameter.data_ptr()
             self.query_bucket_size = query_bucket_size
             self.fused_ops = self.split_attention = self.tree_fp32_projection = False
@@ -240,28 +260,61 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             "workspace_tokens": self.workspace_limit if self.pooled_kv else self.storage.shape[-2],
             "kv_pool_tokens": self.storage.shape[-2] if self.pooled_kv else None,
             "shared_graph_buffers": True,
+            "attention_kernel": self.attention_kernel,
+            "skip_padded_queries": self.skip_padded_queries,
+            "incremental_kv_commit": self.incremental_kv_commit,
+            "gpu_preprocess": self.gpu_preprocess,
             "text_graph_executables": len({id(entry.graph) for entry in self.text_graphs.values()}),
             "tree_graph_executables": len({id(entry.graph) for entry in self.tree_graphs.values()}),
         }
 
+    def prepare_host(
+        self, observations: Sequence[Observation], initial: Sequence[bool]
+    ) -> tuple[HostActiveVLNTurn, ...]:
+        """CPU preprocessing only.
+
+        Touches neither the device nor any memory, so callers may run it for
+        the next batch while the current batch is on the GPU.
+        """
+        if not 1 <= len(observations) <= self.batch_size or len(initial) != len(observations):
+            raise ValueError("observations and initial flags must align and fit the batch size")
+        return tuple(
+            self.policy.prepare_host(observation, initial=bool(first))
+            for observation, first in zip(observations, initial, strict=True)
+        )
+
     def prepare(
         self,
-        observations: Sequence[Observation],
+        observations: Sequence[Observation] | None,
         memories: Sequence[ActiveVLNMemory | None] | None = None,
+        *,
+        host_turns: Sequence[HostActiveVLNTurn] | None = None,
     ) -> PreparedActiveVLNBatch:
-        """Preprocess/H2D each observation without invoking the model or mutating KV."""
+        """Preprocess/H2D each observation without invoking the model or mutating KV.
+
+        ``host_turns`` replaces ``observations`` with already preprocessed rows.
+        """
         self._validate()
-        if not 1 <= len(observations) <= self.batch_size:
+        if (observations is None) == (host_turns is None):
+            raise ValueError("pass exactly one of observations and host_turns")
+        count = len(host_turns) if observations is None else len(observations)
+        if not 1 <= count <= self.batch_size:
             raise ValueError("observation count must fit the configured batch size")
-        memories = [None] * len(observations) if memories is None else list(memories)
-        if len(memories) != len(observations):
+        memories = [None] * count if memories is None else list(memories)
+        if len(memories) != count:
             raise ValueError("memories must align with observations")
-        turns = []
-        for row, (observation, memory) in enumerate(zip(observations, memories, strict=True)):
+        for memory in memories:
             if memory is not None and memory.token_ids_buffer.device != self.device:
                 raise ValueError("batch memories must already be on the model device")
-            batch = self.policy.collate([observation], [f"batch-row-{row}"])
-            turn = self.policy.prepare_prefix(batch, memory)
+        if host_turns is None:
+            host_turns = self.prepare_host(observations, [memory is None for memory in memories])
+        uint8_turns = [host for host in host_turns if host.rgb is not None]
+        pixels = iter(self.policy.device_pixels(uint8_turns) if uint8_turns else ())
+        turns = []
+        for host, memory in zip(host_turns, memories, strict=True):
+            turn = self.policy.prepare_device(
+                host, memory, pixel_values=None if host.rgb is None else next(pixels)
+            )
             past = 0 if memory is None else memory.seq_len
             if past + turn.turn.input_ids.shape[1] > self.policy.max_context:
                 raise ValueError("batched turn exceeds the model context limit")
@@ -679,7 +732,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             )
             if reusable:
                 self.counters["owned_kv_reuses"] += 1
-                owned[..., :length, :].copy_(source)
+                # The previous commit of this same memory already holds its
+                # prefix; scratch rows were restored from or match it.
+                kept = memory.seq_len if self.incremental_kv_commit and memory is not None else 0
+                owned[..., kept:length, :].copy_(source[..., kept:, :])
                 return owned
             if holder is None:
                 # Let the dead buffer go before allocating its replacement.
