@@ -620,8 +620,7 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             owned, owner = entry
             holder = owner()
             reusable = owned.shape[-2] >= length and (
-                (memory is not None and holder is memory)
-                or (memory is None and holder is None)
+                (memory is not None and holder is memory) or (memory is None and holder is None)
             )
             if reusable:
                 self.counters["owned_kv_reuses"] += 1
