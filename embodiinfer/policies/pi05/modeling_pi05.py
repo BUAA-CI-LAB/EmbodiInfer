@@ -467,7 +467,7 @@ class Pi05Policy(FlowVLAPolicy):
                     "Fused Pi05 operators require native_inference=True, no Inductor/global quantization, and TP=1"
                 )
             if denoise_attention != "sdpa" or prefix_attention != "sdpa":
-                raise ValueError("Select migrated attention through optimizations.attention")
+                raise ValueError("Select optimized attention through optimizations.attention")
             if optimizations.numerics == "rlinf" and not native_embeddings:
                 raise ValueError("RLinf numerics require native_embeddings=True")
         self._optimization_config = optimizations

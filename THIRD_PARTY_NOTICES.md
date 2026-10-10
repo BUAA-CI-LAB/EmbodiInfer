@@ -12,15 +12,18 @@ EmbodiInfer is licensed under the Apache License, Version 2.0 (see
 | `embodiinfer/models/video_vae/wan.py` | Cosmos-Policy / Wan2.1 VAE | Apache-2.0 |
 | `embodiinfer/models/video_vae/base.py` | Diffusers VAE conventions | Apache-2.0 |
 | `embodiinfer/policies/lingbot_vla/modules_lingbot_vla.py` | LingBot-VLA action expert | Apache-2.0 (see upstream) |
-| Pi05 RLinf numerical profile (`embeddings.py`, `vision.py`, optimization plans) | ccinfer's inference adaptation of RLinf OpenPI/Gemma/SigLIP | Apache-2.0 |
+| Pi05 RLinf numerical profile (`embeddings.py`, `vision.py`, optimization plans) | RLinf OpenPI/Gemma/SigLIP inference arithmetic | Apache-2.0 |
 
 The RLinf-derived numerical profile retains attribution to Copyright 2026 The
 RLinf Authors, from `RLinf/RLinf` revision
 `d34d4c320d08cb982de034aa9a011f08dc0fa217`. It adapts inference arithmetic and
 precision/layout boundaries to EmbodiInfer's existing checkpoint modules and
 operator registries. RL/SFT losses, training heads and trainer integrations are
-not included. ccinfer's CUDA/Triton operator implementations were also adapted
-under Apache-2.0; the runtime does not depend on that package.
+not included. The adapted upstream sources are
+`rlinf/models/embodiment/openpi/pi0.py`, `pi0_config.py`,
+`modules/gemma.py`, `modules/siglip.py`, and `modules/model.py`.
+The CUDA/Triton operator backends are distributed under this repository's
+Apache-2.0 license.
 
 ## Runtime dependencies
 

@@ -1,4 +1,4 @@
-"""Instance-local Pi05 execution plans for migrated fused operators."""
+"""Instance-local Pi05 execution plans for fused operators."""
 
 from __future__ import annotations
 

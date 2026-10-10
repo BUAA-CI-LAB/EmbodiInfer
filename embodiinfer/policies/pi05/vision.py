@@ -11,7 +11,7 @@ class SiglipPlan:
 
     Rebuild with the policy controller after refit or device migration. The FP32
     stem and positions, BF16 encoder/projector, exact GELU and native MHA calls
-    preserve ccinfer's RLinf vision contract.
+    preserve the RLinf vision precision contract.
     """
 
     @torch.no_grad()

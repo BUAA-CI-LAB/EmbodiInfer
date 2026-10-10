@@ -110,16 +110,16 @@ GEMM shapes can change rounding even with the same attention formula.
 
 #### Opt-in fused operators
 
-`Pi05OptimizationConfig` selects the operators migrated from ccinfer. The default
+`Pi05OptimizationConfig` selects EmbodiInfer's opt-in inference operators. The default
 configuration enables RMSNorm/residual fusion with Torch's FP32 mean and reusable
 prefix/suffix K/V storage. Passing no configuration retains the existing route.
 Set `norm_fusion=False` to test K/V storage alone using the existing normalization.
 
-The migrated Triton paired BF16 gate/up GEMMs (`fused_mlp=True`) require an explicit
+The Triton paired BF16 gate/up GEMMs (`fused_mlp=True`) require an explicit
 `hardware="thor"` or `"spark"` profile. These profiles require the matching SM110/SM121 device,
 standard 18-layer towers, B1, an inference horizon of 10, and 10 denoise steps.
-They are ccinfer launch choices; measurements for the migrated adapter are scoped
-in the [benchmark documentation](../../benchmarks/pi05-benchmark/README.md).
+These launch profiles have scoped measurements in the
+[benchmark documentation](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
 `attention="query_major"` removes group-major Q/probability copies;
 it requires `torch.bmm(out_dtype=torch.float32)` and reports unavailable when
 the installed Torch lacks that API.
@@ -155,8 +155,8 @@ The Torch paired projection reference does not require a Thor/Spark launch profi
 See [the API example](api.md#pi05-fused-operator-configuration) and
 [toolkit requirements](installation.md#pi05-fused-cuda-operators).
 
-**Complete RLinf/ccinfer inference profile.** Explicitly select `numerics="rlinf"`
-with `activation="gelu_pytorch_exact"`. This reproduces ccinfer's BF16 vision
+**RLinf inference profile.** Explicitly select `numerics="rlinf"`
+with `activation="gelu_pytorch_exact"`. This uses BF16 vision
 encoder/projector, FP32 patch/position/time/rotary math, BF16 query prescaling,
 separate Q/K/V, arithmetic action GEGLU, lookup prefix GEGLU and contiguous BF16
 down-projection layouts. It also enables camera batching, prefix compaction,
@@ -164,8 +164,8 @@ last-prefix-block K/V-only execution, and shared action mask/position/rotary wor
 Select these switches through a complete recipe; `numerics` alone changes the
 numerical contract without automatically enabling every optimization.
 
-`Pi05OptimizationConfig.from_ccinfer_json(path)` imports an original production
-ccinfer recipe with unchanged scales and the complete profile. Portable, translated
+`Pi05OptimizationConfig.from_runtime_json(path)` loads a compact action-precision
+recipe with unchanged scales and selects the complete profile. Standalone deployment
 recipes live in `configs/pi05/rlinf_libero_{thor,spark}_fp8.json` and load with
 `from_json`. The `nvfp4_prefix` and `nvfp4_prefix_fp8_action` variants retain frozen
 experimental prefix scales. Each recipe requires its matching hardware and
@@ -174,11 +174,10 @@ RLinf-Pi05-LIBERO-SFT weight hash. Set `native_embeddings=True`,
 `default_num_steps=10`; the factory allows this explicit shorter inference horizon
 while retaining checkpoint metadata (50 actions). Use CUDA eval/no-grad inference;
 training, logprob/hidden-state workflows and Inductor are outside this profile.
-On Thor and Spark, all four configurations matched ccinfer's retained K/V,
-ten velocities and full actions byte-for-byte on six recorded observations,
-including changed-noise graph replay. This establishes migration fidelity to each
-recipe; low precision still changes outputs relative to BF16. See the
-[measurement conditions and results](../../benchmarks/pi05-benchmark/README.md#完整-ccinfer-推理路径的直接对照2026-10-10).
+Thor and Spark validation covers prefix K/V, ten velocities, full actions and
+changed-noise graph replay against frozen, matching-format reference records.
+Low precision still changes outputs relative to BF16. See the
+[measurement conditions and results](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
 
 ### DM0.5
 

@@ -1,8 +1,8 @@
 # PI0.5 Benchmark
 
-## ccinfer 算子迁移的验证入口
+## Pi05 推理优化的验证入口
 
-新实现通过 `Pi05OptimizationConfig` 显式启用。本次迁移结果见下文三平台验证；
+新实现通过 `Pi05OptimizationConfig` 显式启用。优化结果见下文独立基线与三平台验证；
 其后的历史实验使用各自独立口径。候选算子验证可使用保持原 attention/MLP 的 BF16 配置：
 
 ```json
@@ -47,7 +47,7 @@ K/V-only（`norm_fusion: false`）、严格融合、alternative attention 和 pa
 FP8/NVFP4 可分别配置 `prefix_layers` 和 `action_layers`，每层独立选择 gate/up
 与 down 的精度；空配置保持该 tower 为 BF16。要求本地 checkpoint SHA256 和
 匹配的 activation/numerics 语义。默认 LeRobot 使用 `gelu_pytorch_tanh`，不能直接
-复用 ccinfer 的 exact GELU scale。完整 RLinf profile 和冻结配方见下一节。
+复用 exact-GELU profile 的 scale。完整 RLinf profile 和冻结配方见下文。
 NVFP4 需要 Blackwell，
 mixed GEMM 需要 Torch 2.13 的 `scaled_mm` API；新路径支持 CUDA Graph，暂不组合
 Inductor、全局量化或 TP。配置与安装要求见
@@ -67,46 +67,46 @@ graph eviction/capture failure、refit 失效及参数身份保持。它们使�
 
 ### PR 加速比的基线
 
-本次迁移的性能基线是加入 ccinfer 优化之前的 EmbodiInfer BF16，保留其原有
+本 PR 的性能基线是加入新优化之前的 EmbodiInfer BF16，保留其原有
 Inductor、Triton attention、prefix/full-loop CUDA Graph 和缓存优化。使用 PR 前
 提交 `05d603714dd3dcb48c5210810847395da13272aa` 的独立源码目录及独立进程；
 基线不导入新增的 ops、`Pi05OptimizationConfig` 或修改后的 policy/runtime。
 沿用原 checkpoint 的 BF16 transformer 与 FP32 视觉/projector/norm/action/time
 精度区域，不额外改变基线 dtype。
 
-下文的 `migrated_rlinf_bf16` / “完整优化 BF16 runtime” 是候选配置。FP8/NVFP4
+下文的 `optimized_rlinf_bf16` / “完整优化 BF16 runtime” 是候选配置。FP8/NVFP4
 相对它的加速只表示量化的额外收益；整个 PR 的加速比应计算为上述原 EmbodiInfer
 延迟除以候选延迟。RLinf profile 改变了视觉精度、GELU 和 time/RoPE 数值配置，性能对照需
 同时报告动作差异，不能自动视为无损优化。
 
-`compare_pre_migration.py` 对独立 checkout 进行计时，检查实际 package 导入路径，
-拒绝包含迁移实现的 baseline 目录，保存完整动作、实际配方、源码/权重/input 摘要
+`compare_optimizations.py` 对独立 checkout 进行计时，检查实际 package 导入路径，
+拒绝包含新增优化实现的 baseline 目录，保存完整动作、实际配方、源码/权重/input 摘要
 和每次分段计时。B1/H10/完整十步，六条核验观测逐条预热三次，roundrobin 两轮
 各 30 次；`highest` 和允许 TF32 的 `high` 分别运行。两种角色使用同一 Python
 环境，示例中的 recipe 是随仓库提供的硬件对应配方：
 
 ```bash
-python benchmarks/pi05-benchmark/compare_pre_migration.py \
+python benchmarks/pi05-benchmark/compare_optimizations.py \
   --role baseline --source /reference/embodiinfer-before-pr \
   --baseline-revision 05d603714dd3dcb48c5210810847395da13272aa \
   --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
   --matmul-precision highest --out runs/original-bf16-highest
 
-python benchmarks/pi05-benchmark/compare_pre_migration.py \
+python benchmarks/pi05-benchmark/compare_optimizations.py \
   --role candidate --source /workspace/EmbodiInfer \
   --recipe configs/pi05/rlinf_libero_thor_nvfp4_prefix_fp8_action.json \
   --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
-  --matmul-precision highest --out runs/migrated-highest
+  --matmul-precision highest --out runs/optimized-highest
 ```
 
-### 原 EmbodiInfer BF16 与完整迁移的补测（2026-10-10）
+### 原 EmbodiInfer BF16 与优化配置的对照（2026-10-10）
 
 按上述独立源码/进程协议完成 Thor/Spark 补测，以下均为六观测、60 次请求的同步
 wall P50。加速比统一为 **原 EmbodiInfer BF16 wall P50 / 候选 wall P50**。
 原有 Inductor、Triton attention 和两个 CUDA Graph 在 baseline 中均开启；运行时
 检查所有 EmbodiInfer 模块来自冻结的 PR 前源码，未导入新增 optimization 模块。
 “原数值配置 BF16 ops”保留 LeRobot 原 dtype/GELU/time/RoPE；其余候选使用完整
-迁移的 RLinf profile。两组的 CUDA Graph 缓存计数在测量前后均不变，六观测输出
+RLinf 优化 profile。两组的 CUDA Graph 缓存计数在测量前后均不变，六观测输出
 均为有限值且重复逐位一致；这不是候选与原 baseline 逐位一致的声明。
 
 FP32 GEMM precision = `high`，baseline 保留原有的 TF32 选项：
@@ -115,10 +115,10 @@ FP32 GEMM precision = `high`，baseline 保留原有的 TF32 选项：
 |---|---:|---:|---:|---:|
 | 原 EmbodiInfer BF16 / Inductor | 102.787 | 1.000× | 109.329 | 1.000× |
 | 原数值配置 BF16 ops | 93.468 | 1.100× | 109.098 | 1.002× |
-| 完整迁移 BF16 | 70.189 | 1.464× | 81.308 | 1.345× |
-| 完整迁移 / FP8 action | 63.494 | 1.619× | 75.744 | 1.443× |
-| 完整迁移 / NVFP4 prefix | 64.593 | 1.591× | 71.021 | 1.539× |
-| 完整迁移 / NVFP4 prefix + FP8 action | 58.054 | 1.771× | 65.758 | 1.663× |
+| 完整优化 BF16 | 70.189 | 1.464× | 81.308 | 1.345× |
+| 完整优化 / FP8 action | 63.494 | 1.619× | 75.744 | 1.443× |
+| 完整优化 / NVFP4 prefix | 64.593 | 1.591× | 71.021 | 1.539× |
+| 完整优化 / NVFP4 prefix + FP8 action | 58.054 | 1.771× | 65.758 | 1.663× |
 
 FP32 GEMM precision = `highest`，不与上一组交叉计算加速比：
 
@@ -126,18 +126,18 @@ FP32 GEMM precision = `highest`，不与上一组交叉计算加速比：
 |---|---:|---:|---:|---:|
 | 原 EmbodiInfer BF16 / Inductor | 189.137 | 1.000× | 129.545 | 1.000× |
 | 原数值配置 BF16 ops | 178.819 | 1.058× | 129.791 | 0.998× |
-| 完整迁移 BF16 | 69.787 | 2.710× | 83.391 | 1.553× |
-| 完整迁移 / FP8 action | 63.056 | 2.999× | 75.342 | 1.719× |
-| 完整迁移 / NVFP4 prefix | 64.715 | 2.923× | 69.109 | 1.874× |
-| 完整迁移 / NVFP4 prefix + FP8 action | 58.025 | 3.260× | 65.038 | 1.992× |
+| 完整优化 BF16 | 69.787 | 2.710× | 83.391 | 1.553× |
+| 完整优化 / FP8 action | 63.056 | 2.999× | 75.342 | 1.719× |
+| 完整优化 / NVFP4 prefix | 64.715 | 2.923× | 69.109 | 1.874× |
+| 完整优化 / NVFP4 prefix + FP8 action | 58.025 | 3.260× | 65.038 | 1.992× |
 
-完整迁移的收益包含 BF16 视觉路径、camera batching、prefix/context 优化和数值
+完整优化的收益包含 BF16 视觉路径、camera batching、prefix/context 优化和数值
 profile 变化，不能全部归因于新增 kernel。分段计时中，`highest` 的 Thor BF16
 prefix 均值从 153.19 降至 35.79 ms，diffusion 从 35.95 降至 34.03 ms；Spark
 分别为 90.08 → 44.41 ms、39.28 → 38.61 ms。这只能定位到 prefix 阶段，尚未
 进一步分离其中视觉精度、布局和算子的贡献。
 
-相对同设备/precision 的原 BF16，六观测中完整迁移 BF16 的 full32 动作相对 L2
+相对同设备/precision 的原 BF16，六观测中完整优化 BF16 的 full32 动作相对 L2
 最大值为 0.197–0.254%，组合低精度为 1.966–2.192%；LIBERO7 对应为
 0.177–0.240% / 1.944–2.170%。这些是归一化动作差异，没有任务成功率结论。
 原始动作、每次计时、实际导入文件清单、两份源码归档、launch 脚本及 SHA256
@@ -145,82 +145,39 @@ prefix 均值从 153.19 降至 35.79 ms，diffusion 从 35.95 降至 34.03 ms；
 `collect_summary.py` 可重新计算全部对照。两轮在同一进程内连续测量，未据此
 估计独立运行的置信区间，也不将几个百分点的差异解释为稳定加速。
 
-## 完整 ccinfer 推理路径的直接对照（2026-10-10）
+## RLinf 推理 profile 与数值验证（2026-10-10）
 
-此前仅迁入 kernel 与部分接线，且默认 LeRobot 使用 tanh GELU、FP32 视觉塔及
-不同 time/RoPE 精度；下文旧实验不能证明完整复现 ccinfer。现在新增显式
-`numerics="rlinf"` profile，补齐 BF16 视觉 encoder/projector、exact GELU、FP32
-time/RoPE、BF16 query prescaling、separate Q/K/V、BF16 down 矩阵布局、action
-arithmetic / prefix lookup GEGLU，以及 active-camera batching、prefix compaction、
-末层仅生成 K/V、action context 复用。既有 LeRobot 默认语义保持不变。
+RLinf 完整配方显式设置 `numerics="rlinf"`，使用 BF16 视觉 encoder/projector、exact GELU、FP32
+time/RoPE、BF16 query prescaling、separate Q/K/V、连续 BF16 down 矩阵布局、
+action arithmetic / prefix lookup GEGLU，并启用 active-camera batching、prefix
+compaction、末层仅生成 K/V、action context 复用。仅设置 `numerics` 不会自动启用
+所有优化开关；完整配方明确选择各项优化。既有 LeRobot 默认语义保持不变。
 
-Thor 与 Spark 使用相同 RLinf 权重和十条观测 fixture（SHA256 见下一节），
-B1、horizon=10、完整 10-step、FP32 matmul precision=`highest`。六条核验观测为
-1/2/4/5/7/8。FP8 使用 ccinfer 冻结的 8 组 BF16 保护选择及原 scale；NVFP4 prefix
-使用原 `calibration-v3.json` 的冻结范围，不重新校准或调整门限。参考直接加载
-冻结 ccinfer package；NVFP4 使用其原 MLP/NormQuant adapter 选择 prefix 精度，
-未替换参考 kernel。对应的独立部署 JSON 位于 `configs/pi05/rlinf_libero_*`。
+完整部署配方位于 `configs/pi05/rlinf_libero_*`，通过
+`Pi05OptimizationConfig.from_json(path)` 加载。`from_runtime_json(path)` 用于
+只含 hardware/action_layers/checkpoint_sha256/schema_version 的紧凑 action 配方，
+选择同一 RLinf profile，并保持所提供的激活范围。配方与 checkpoint、硬件和
+数值语义绑定；不能把 exact-GELU 的范围用于默认 tanh-GELU profile。
 
-**两台设备的四种配置均逐位一致：** 每层有效 prefix K/V、每个 diffusion step
-的完整 32 维 velocity、最终动作、graph/eager，以及同一观测改用相反 noise 后的
-graph 回放均通过。原始 `all_byte_equal` 为 true。这里比较每种精度与 ccinfer 的
-对应配置，**不表示 FP8/NVFP4 与 BF16 等价，也不是新的 LIBERO 成功率实验**。
+Thor/Spark 使用相同权重、fixture、noise、B1/H10/完整十步与 `highest` 进行冻结
+参考核验。四种精度配置分别为 BF16、受保护 action FP8、prefix NVFP4，以及
+prefix NVFP4/action FP8 组合。FP8 保留八组 BF16 投影保护选择；prefix NVFP4 使用
+冻结激活范围。没有按核验输出重新校准或调整门限。
 
-准备好的 GPU 输入到完整动作，预热 3 次，首条核验观测测量 30 次；不包含 CPU
-预处理、H2D、加载、编译/capture 或机器人 I/O。数值检查覆盖六条观测，计时是
-固定形状请求。ccinfer 使用单个完整请求图；EmbodiInfer 使用 prefix 和完整 diffusion
-两个图。以下是同步 wall P50，P95 也保存在原始报告中；不将这组单轮计时用于
-证明两框架之间几个百分点的性能差异。
+六条核验观测的有效 prefix K/V、十步完整 32 维 velocity、最终动作、graph/eager
+以及改用相反 noise 后的 graph 回放均与**对应精度的冻结参考**逐位一致。
+这不表示低精度与 BF16 等价，也没有任务成功率结论。性能以本文件上一节的
+独立原 EmbodiInfer BF16 对照为准；不同 profile、计时范围及统计量不得交叉相除。
 
-| 配置 | Thor ccinfer ms | Thor 迁移后 ms | Spark ccinfer ms | Spark 迁移后 ms |
-|---|---:|---:|---:|---:|
-| 完整优化 BF16 runtime | 70.043 | 69.675 | 82.193 | 83.513 |
-| BF16 prefix / 受保护 FP8 action | 63.020 | 63.265 | 74.471 | 75.978 |
-| NVFP4 prefix / BF16 action | 64.740 | 64.656 | 70.010 | 69.628 |
-| NVFP4 prefix / 受保护 FP8 action | 58.090 | 58.022 | 64.395 | 63.899 |
+运行环境为下文记录的 Python 3.12、Torch 2.13、Triton 3.7.1、Transformers 5.3
+及 LeRobot 0.5.1。最终算子/CUDA Graph 回归在 Thor/Spark 各为 87 passed、
+1 个按架构跳过。完整 tensor、逐层/逐步误差、冻结参考源码、配方、graph 检查
+及环境摘要保存在本地忽略目录 `runs/pr5-complete-migration-20261010/`。
+Orin 不支持本次原生 FP8/NVFP4 profile，使用其支持的 BF16 路径。
 
-**以下仅为量化的额外加速，参照是同一设备、同一 RLinf profile 的迁移后 BF16，
-不是整个 PR 相对原 EmbodiInfer 的加速。**
-该基线已经启用 BF16 视觉 encoder/projector、融合算子、attention 优化、context
-复用及 CUDA Graph；表中的低精度只用于指定的 prefix/action 投影，视觉塔仍为 BF16。
-加速比为 `BF16 wall P50 / 配置 wall P50`，延迟降幅为 `1 - 配置 wall P50 / BF16 wall P50`：
+后续三平台实验保留 LeRobot 数值语义，量化范围也不同，单独报告其条件和失败结果。
 
-| 配置 | Thor 加速比 | Thor 延迟降幅 | Spark 加速比 | Spark 延迟降幅 |
-|---|---:|---:|---:|---:|
-| BF16 prefix / 受保护 FP8 action | 1.10× | 9.2% | 1.10× | 9.0% |
-| NVFP4 prefix / BF16 action | 1.08× | 7.2% | 1.20× | 16.6% |
-| NVFP4 prefix / 受保护 FP8 action | 1.20× | 16.7% | 1.31× | 23.5% |
-
-与同精度 ccinfer 相比，迁移后延迟差约在 ±2% 内；本轮证明性能基本保留，不能据此
-宣称迁移本身带来显著加速。下文 Thor 178.68 ms / Spark 132.20 ms 是首轮迁移的
-`paired_flash` 候选，已启用新增 norm/MLP/attention ops；原有 `existing_inductor`
-对照是 189.02 / 131.11 ms，`optimization: null`。这四个旧数值均为六观测的 GPU
-elapsed 均值，本表是首条观测的同步 wall P50；数值 profile 也不同，不能直接相除
-宣称无损 kernel 加速。整个 PR 的基线及独立 checkout 对照方法见上一节。
-
-环境沿用下文 Thor/Spark 的 Python 3.12、Torch 2.13、Triton 3.7.1、TF 5.3 和
-LeRobot 0.5.1。最终算子/CUDA Graph 回归两台各为 87 passed、1 个按架构跳过；
-本机相关 CPU 回归 71 passed、47 个按硬件/依赖跳过。额外全套检查为 505 passed、
-101 skipped、4 个环境失败：本机缺少三个已安装 CLI 脚本及 Transformers。
-Orin 不支持本次原生 FP8/NVFP4 profile，保留原 BF16 路径。
-
-复现时使用独立空闲设备、匹配依赖和原冻结 ccinfer checkout：
-
-```bash
-PYTHONPATH=. CUDA_HOME=/usr/local/cuda python benchmarks/pi05-benchmark/compare_ccinfer.py \
-  --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
-  --ccinfer-source /reference/ccinfer --recipe /reference/ccinfer/configs/pi05/libero_thor_fp8.json \
-  --prefix-calibration /reference/calibration-v3.json \
-  --modes bf16 fp8 prefix_nvfp4 combined --warmup 3 --iterations 30 \
-  --out runs/new-complete-comparison
-```
-
-Spark 使用对应原配方。脚本保存输入/权重/双方源码摘要、配方、逐层/逐步误差、
-完整 tensor、graph 检查和每次计时；任一逐位核验失败时返回非零。部署代码没有
-ccinfer 依赖。完整证据在本地忽略目录 `runs/pr5-complete-migration-20261010/`。
-后续章节为不同数值语义/源码阶段的历史实验，保留原结论和条件。
-
-## 三平台迁移验证（2026-10-10）
+## 三平台 LeRobot-profile 验证（2026-10-10）
 
 验证源码基于 `8555ef48ee2901f2e70193e2c441916629612510`，另加 query-major
 的旧版 BMM API capability 检查。三台机器使用同一份真实 RLinf-Pi05-LIBERO-SFT
@@ -250,8 +207,8 @@ Orin 的完整模型使用已有 Python 3.12、Torch 2.6.0/cu128、Triton 3.2.0 
 
 ### 性能对照
 
-以下延迟为 GPU elapsed 均值。`existing_inductor` 未启用迁移配方；“新路径”已经
-使用迁入的 ops，不能用它充当原 EmbodiInfer BF16 基线。
+以下延迟为 GPU elapsed 均值。`existing_inductor` 未启用新增优化配方；“新路径”已经
+使用新增 ops，不能用它充当原 EmbodiInfer BF16 基线。
 
 FP32 GEMM precision = `highest`
 
@@ -299,8 +256,8 @@ Orin 的 BF16 baseline 输出。原始失败日志保留，未将失败尝试计
 统一 action-MLP FP8 在 Thor/Spark 分别仅通过 2/6、1/6 条核验，最大误差
 0.02301/0.02279；NVFP4 均为 0/6，最大误差 0.04663/0.04528。校准固定使用四条
 独立观测和 10% headroom，未按候选结果调整门限。**这些配方不推荐部署**。
-该实验量化全部 action MLP，与 ccinfer 保护八组敏感投影的 FP8 配置、以及
-NVFP4 prefix / BF16 action 实验范围不同，不能据此判断迁移后无法运行低精度。
+该实验量化全部 action MLP，与保护八组敏感投影的 FP8 配置、以及
+NVFP4 prefix / BF16 action 配置的量化范围不同，其误差结果需分别报告。
 Orin 不具备本实现要求的 FP8/NVFP4 原生 GEMM 能力。硬件 profile 未覆盖 Orin 的
 paired GEMM，query-major 在其 Torch 2.6 模型环境中因 BMM API 缺失明确不可用。
 
@@ -310,17 +267,15 @@ paired GEMM，query-major 在其 Torch 2.6 模型环境中因 BMM API 缺失明�
 
 ### 低精度范围补测
 
-初次迁移遗漏了 prefix 精度配置；现已补齐 `prefix_layers`，并与 `action_layers`
-独立选择。原有全局 `quantization` 在这些实验中为 `None`，且 policy 会在加载前
-拒绝它与 `optimizations` 同时开启；没有观察到旧量化参与执行，因此没有删除它。
-源码对照中，迁入的 FP8 缩放、NVFP4 编码与 native GEMM 格式保持 ccinfer 实现。
+`prefix_layers` 与 `action_layers` 独立选择每层精度。原有全局 `quantization` 在
+这些实验中为 `None`，且 policy 会在加载前拒绝它与 `optimizations` 同时开启。
 
 补测固定 B1/H10/完整十步、`highest`、相同权重/input/noise 和原冻结门限。
-FP8 复用 ccinfer Thor/Spark 各自冻结的八组 BF16 保护选择（28/36 组 FP8），
+FP8 使用 Thor/Spark 各自冻结的八组 BF16 保护选择（28/36 组 FP8），
 全部激活范围按当前 adapter 的四条独立观测重新校准；不复用旧 scale，
 也不按六条核验结果调整保护选择。NVFP4 只量化 prefix MLP，action 保持 BF16。
-当前 adapter 执行全部 18 层 prefix MLP；ccinfer 省略最后一层不影响输出的 MLP，
-因此其历史计时仍不是本补测的直接 baseline。
+本轮 LeRobot-profile 执行全部 18 层 prefix MLP；RLinf profile 省略最后一层
+不影响输出的 MLP，因此两组计时不能作为同一数值 profile 的对照。
 
 | 配置 | Thor 通过数 | Thor 最大动作差 | Spark 通过数 | Spark 最大动作差 |
 |---|---:|---:|---:|---:|
@@ -333,11 +288,9 @@ Torch norm/GELU/encoder 对照，NVFP4 使用 Torch norm/GELU 与同一 CUDA enc
 后者只能排除 pointwise 融合带来的额外误差，不能视为独立 NVFP4 编码器验证。
 本轮 native BF16 动作与同设备首轮 baseline 也逐位一致。
 
-**能够运行低精度、通过算子迁移回归、通过数值门限是不同结论。** 补测配方仍未
-全部通过门限，未作为默认或部署推荐。ccinfer 历史 NVFP4 实验本身有约 1.5–2.0%
-的连续动作相对 L2 P95，并发生闭环成功状态变化；其“可运行”不表示 BF16 等价。
-此外，两份模型的 GELU 和视觉精度不同，旧配方的校准/评测规模也不同。
-本次补测没有重跑闭环任务质量实验。
+**能够运行低精度、通过算子回归、通过数值门限是不同结论。** 补测配方仍未
+全部通过门限，未作为默认或部署推荐。LeRobot 与 RLinf profile 的 GELU 和视觉
+精度不同，激活范围不能混用。本次补测没有运行闭环任务质量实验。
 
 补齐后的回归在 Thor/Spark 各为 80 passed、1 skipped，包含 prefix/action
 FP8/NVFP4 图回放、NVFP4 分开执行对照、组合 prefix NVFP4/action FP8，以及 refit 失效。

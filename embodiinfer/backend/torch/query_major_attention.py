@@ -1,4 +1,4 @@
-"""Registered attention variants using ccinfer's query-major layout."""
+"""Registered attention variants using query-major layouts."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ class QueryMajorAttention:
 
 
 class QueryMajorCudaAttention(QueryMajorAttention):
-    """Query-major attention with ccinfer's Spark CUDA prefix softmax launch."""
+    """Query-major attention with the Spark CUDA prefix softmax launch."""
 
     name = "query_major_cuda"
 

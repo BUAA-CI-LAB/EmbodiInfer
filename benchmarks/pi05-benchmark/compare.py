@@ -448,7 +448,7 @@ def main() -> None:
     config = yaml.safe_load(args.config.read_text())
     if config.get("optimizations") is not None:
         if config["engine"] != "embodiinfer" or config["dtype"] != "auto":
-            raise ValueError("Migrated operators require engine: embodiinfer and dtype: auto")
+            raise ValueError("Optimized operators require engine: embodiinfer and dtype: auto")
         recipe = Path(config["optimizations"]).expanduser()
         recipe = recipe if recipe.is_absolute() else args.config.resolve().parent / recipe
         config["optimizations"] = str(recipe.resolve(strict=True))

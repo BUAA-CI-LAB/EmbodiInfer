@@ -38,13 +38,13 @@ ActionLayerPrecision = MlpLayerPrecision
 
 @dataclass(frozen=True)
 class Pi05OptimizationConfig:
-    """Immutable selection of migrated inference operators.
+    """Immutable selection of opt-in inference operators.
 
     The default enables strict pointwise RMSNorm/residual fusion and K/V storage
     reuse. Paired GEMMs and alternative attention require explicit selection;
-    they change floating-point accumulation. Hardware profiles originate from
-    ccinfer measurements for B1/horizon10/10steps, not migrated performance claims.
-    The default LeRobot contract uses tanh GELU. ``from_ccinfer_json`` explicitly
+    they change floating-point accumulation. Hardware profiles cover
+    B1/horizon10/10steps; benchmark results apply only to their measured settings.
+    The default LeRobot contract uses tanh GELU. ``from_runtime_json`` explicitly
     selects the complete RLinf inference contract, retaining its original scales.
     """
 
@@ -146,8 +146,8 @@ class Pi05OptimizationConfig:
         return cls(**values)
 
     @classmethod
-    def from_ccinfer_json(cls, path: str | Path) -> Pi05OptimizationConfig:
-        """Import a frozen ccinfer recipe with its complete inference contract.
+    def from_runtime_json(cls, path: str | Path) -> Pi05OptimizationConfig:
+        """Load a compact action-precision recipe with the RLinf inference contract.
 
         This selects the original activation, precision, layout and hardware
         operators. Scales are retained only for this matching contract; use
@@ -156,10 +156,10 @@ class Pi05OptimizationConfig:
         values = json.loads(Path(path).read_text())
         allowed = {"hardware", "action_layers", "checkpoint_sha256", "schema_version"}
         if not isinstance(values, dict) or set(values) - allowed:
-            raise ValueError("Expected a standalone ccinfer runtime recipe")
+            raise ValueError("Expected a standalone runtime recipe")
         hardware = values.get("hardware")
         if hardware not in ("thor", "spark"):
-            raise ValueError("A ccinfer recipe must select Thor or Spark")
+            raise ValueError("A runtime recipe must select Thor or Spark")
         values["action_layers"] = tuple(MlpLayerPrecision(**row) for row in values.get("action_layers", ()))
         return cls(
             **values,

@@ -496,7 +496,7 @@ def build(
 
     tokenizer_details = validate_tokenizer(config["checkpoint"])
     if config.get("optimizations") is not None and config["dtype"] != "auto":
-        raise ValueError("Migrated Pi05 operators require dtype: auto to preserve FP32 precision islands")
+        raise ValueError("Optimized Pi05 operators require dtype: auto to preserve FP32 precision islands")
     policy = make_policy(
         "pi05",
         checkpoint=config["checkpoint"],

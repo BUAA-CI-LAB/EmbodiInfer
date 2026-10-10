@@ -1,8 +1,8 @@
-"""Measure a frozen pre-PR BF16 checkout and migrated recipes in separate processes.
+"""Measure a frozen pre-PR BF16 checkout and optimized recipes in separate processes.
 
 Run once per checkout and FP32 matmul setting with the same checkpoint, fixture,
 warmup and iteration count. The baseline retains its original Inductor, Triton
-attention and CUDA Graphs. No benchmark helper imports migrated implementation
+attention and CUDA Graphs. No benchmark helper imports optimized implementation
 code into that process. Results include full actions for separate drift analysis.
 """
 
@@ -51,7 +51,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--recipe", type=Path, help="Migrated combined NVFP4-prefix/FP8-action recipe")
+    parser.add_argument("--recipe", type=Path, help="Optimized combined NVFP4-prefix/FP8-action recipe")
     parser.add_argument("--baseline-revision", help="Recorded immutable revision of the baseline export")
     parser.add_argument("--matmul-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--warmup", type=int, default=3)
@@ -79,7 +79,7 @@ def main() -> None:
     if Path(embodiinfer.__file__).resolve().parent != source / "embodiinfer":
         raise RuntimeError("Imported package does not belong to the requested isolated checkout")
     if args.role == "baseline" and (source / "embodiinfer/policies/pi05/optimization.py").exists():
-        raise RuntimeError("Baseline checkout contains the migrated optimization implementation")
+        raise RuntimeError("Baseline checkout contains the new optimization implementation")
     torch.set_float32_matmul_precision(args.matmul_precision)
     torch.manual_seed(42)
     fixture = torch.load(args.inputs, map_location="cpu", weights_only=False)
@@ -104,13 +104,13 @@ def main() -> None:
 
         combined = Pi05OptimizationConfig.from_json(args.recipe)
         recipes = {
-            "migrated_compat_bf16": Pi05OptimizationConfig(
+            "optimized_compat_bf16": Pi05OptimizationConfig(
                 hardware=combined.hardware, fused_mlp=True, attention="folded_flash"
             ),
-            "migrated_rlinf_bf16": replace(combined, action_layers=(), prefix_layers=()),
-            "migrated_rlinf_fp8": replace(combined, prefix_layers=()),
-            "migrated_rlinf_prefix_nvfp4": replace(combined, action_layers=()),
-            "migrated_rlinf_combined": combined,
+            "optimized_rlinf_bf16": replace(combined, action_layers=(), prefix_layers=()),
+            "optimized_rlinf_fp8": replace(combined, prefix_layers=()),
+            "optimized_rlinf_prefix_nvfp4": replace(combined, action_layers=()),
+            "optimized_rlinf_combined": combined,
         }
     model = load_lerobot_checkpoint(str(args.checkpoint), load_device="cuda", low_cpu_mem_usage=True)
     report = dict(
@@ -253,7 +253,7 @@ def main() -> None:
     ):
         raise RuntimeError("A package import escaped the isolated source tree")
     if args.role == "baseline" and any(".pi05.optimization" in name for name in sys.modules):
-        raise RuntimeError("Baseline imported migrated optimization modules")
+        raise RuntimeError("Baseline imported new optimization modules")
     (args.out / "measurement.json").write_text(json.dumps(report, indent=2) + "\n")
 
 

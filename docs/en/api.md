@@ -135,7 +135,7 @@ matching GELU/numerics contract. The existing demo accepts
 Full-checkpoint parity and task quality remain deployment gates, including for
 the strict operator route; component parity alone does not establish them.
 
-For the complete RLinf/ccinfer inference profile on Thor:
+For the RLinf inference profile on Thor:
 
 ```python
 import torch
@@ -155,7 +155,7 @@ engine = EngineCore(
 
 Use the Spark recipe on SM121. The `nvfp4_prefix` and
 `nvfp4_prefix_fp8_action` recipe variants reproduce the experimental mixed formats.
-`from_ccinfer_json(path)` imports the original action recipe and enables its
+`from_runtime_json(path)` loads a compact action-precision recipe and selects the
 complete inference profile without changing scales. These are explicitly RLinf
 inference semantics; they do not replace LeRobot's default or its rollout contract.
 

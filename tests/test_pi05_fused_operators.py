@@ -1,4 +1,4 @@
-"""Migration contracts for instance-local Pi05 fused operators."""
+"""Execution contracts for instance-local Pi05 fused operators."""
 
 import json
 from types import SimpleNamespace
@@ -67,7 +67,7 @@ def test_prefix_precision_is_checkpoint_bound_and_roundtrips(tmp_path):
 
 
 @pytest.mark.parametrize("hardware", ["thor", "spark"])
-def test_ccinfer_recipe_preserves_scales_and_complete_contract(tmp_path, hardware):
+def test_runtime_recipe_preserves_scales_and_complete_contract(tmp_path, hardware):
     values = dict(
         hardware=hardware,
         action_layers=[dict(gate_up="fp8", down="nvfp4", gate_up_max=2.5, down_max=8.75)],
@@ -76,7 +76,7 @@ def test_ccinfer_recipe_preserves_scales_and_complete_contract(tmp_path, hardwar
     )
     path = tmp_path / "original.json"
     path.write_text(json.dumps(values))
-    config = Pi05OptimizationConfig.from_ccinfer_json(path)
+    config = Pi05OptimizationConfig.from_runtime_json(path)
     assert config.action_layers == (ActionLayerPrecision("fp8", "nvfp4", 2.5, 8.75),)
     assert config.checkpoint_sha256 == values["checkpoint_sha256"]
     assert config.numerics == "rlinf" and config.activation == "gelu_pytorch_exact"
@@ -88,8 +88,8 @@ def test_ccinfer_recipe_preserves_scales_and_complete_contract(tmp_path, hardwar
     assert config.attention == ("folded_flash" if hardware == "thor" else "query_major")
     config.to_json(path)
     assert Pi05OptimizationConfig.from_json(path) == config
-    with pytest.raises(ValueError, match="standalone ccinfer"):
-        Pi05OptimizationConfig.from_ccinfer_json(path)
+    with pytest.raises(ValueError, match="standalone runtime"):
+        Pi05OptimizationConfig.from_runtime_json(path)
 
 
 def test_rlinf_profile_rejects_silent_eager_fallback():
@@ -129,7 +129,7 @@ def test_half_width_rotary_rejects_invalid_inputs():
     ],
 )
 def test_unsupported_combinations_fail_before_checkpoint_loading(values):
-    with pytest.raises(ValueError, match="Fused Pi05|Select migrated attention"):
+    with pytest.raises(ValueError, match="Fused Pi05|Select optimized attention"):
         Pi05Policy(VLAPolicyConfig(), None, optimizations=Pi05OptimizationConfig(), **values)
 
 
