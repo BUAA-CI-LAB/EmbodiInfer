@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
@@ -1262,17 +1263,39 @@ def _build_pi05(
     native_inference: bool = False,
     native_embeddings: bool = False,
     vision_attention: str = "sdpa",
-    prefix_cuda_graph: bool = False,
+    prefix_cuda_graph: bool | None = None,
     denoise_attention: str = "sdpa",
     prefix_attention: str = "sdpa",
     low_cpu_mem_usage: bool = False,
     checkpoint_config: Mapping[str, Any] | None = None,
+    device_type: str | None = None,
+    preset: str | None = None,
+    calibration: str | Path | None = None,
     optimizations: Pi05OptimizationConfig | None = None,
     quantization: str | Mapping[str, Any] | QuantizationConfig | None = None,
     **overrides,
 ) -> VLAPolicy:
+    """Build Pi05, expanding deployment presets into their required policy options."""
     if checkpoint is None:
         raise ValueError("pi0.5 needs a checkpoint, e.g. make_policy('pi05', checkpoint='lerobot/pi05_base')")
+    if preset is not None:
+        if device_type is None or optimizations is not None:
+            raise ValueError("A Pi05 preset requires device_type and cannot be combined with optimizations")
+        optimizations = Pi05OptimizationConfig.from_preset(device_type, preset, calibration=calibration)
+    elif device_type is not None or calibration is not None:
+        raise ValueError("Pi05 device_type and calibration require a preset")
+    if optimizations is not None:
+        if not isinstance(optimizations, Pi05OptimizationConfig):
+            raise TypeError("optimizations must be a Pi05OptimizationConfig")
+        native_inference = True
+        native_embeddings = native_embeddings or optimizations.numerics == "openpi_rlinf"
+        if optimizations.fused_mlp and optimizations.hardware in ("thor", "spark"):
+            for key in ("action_horizon", "default_num_steps"):
+                if key in overrides and overrides[key] != 10:
+                    raise ValueError(f"Optimized Pi05 presets require {key}=10")
+                overrides.setdefault(key, 10)
+    if prefix_cuda_graph is None:
+        prefix_cuda_graph = optimizations is not None
     tensor_parallel_size = overrides.pop("tensor_parallel_size", 1)
     tensor_parallel_group = overrides.pop("tensor_parallel_group", None)
     cfg = VLAPolicyConfig(**{"name": "pi0.5", **overrides})

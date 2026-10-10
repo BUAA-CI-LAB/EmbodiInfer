@@ -20,22 +20,8 @@ def test_strict_preset_preserves_default_numerics_without_fixed_request_shape(de
     assert config.numerics == "lerobot" and not config.fused_mlp
 
 
-@pytest.mark.parametrize("preset", ["strict", "optimized"])
-@pytest.mark.parametrize("numerics", ["lerobot", "openpi_rlinf"])
-def test_optimization_preset_does_not_select_numerical_contract(preset, numerics):
-    config = Pi05OptimizationConfig.from_preset("thor", preset, numerics=numerics)
-    assert config.numerics == numerics
-    assert config.activation == ("gelu_pytorch_tanh" if numerics == "lerobot" else "gelu_pytorch_exact")
-    assert config.fused_mlp == (preset == "optimized")
-    assert not config.has_quantized_mlp
-
-
 @pytest.mark.parametrize("prefix_mlp,action_mlp", [("fp8", "bf16"), ("bf16", "nvfp4"), ("fp8", "nvfp4")])
-@pytest.mark.parametrize("numerics", ["lerobot", "openpi_rlinf"])
-def test_custom_calibration_supports_other_tower_format_combinations(
-    tmp_path, prefix_mlp, action_mlp, numerics
-):
-    activation = "gelu_pytorch_tanh" if numerics == "lerobot" else "gelu_pytorch_exact"
+def test_custom_calibration_supports_other_tower_format_combinations(tmp_path, prefix_mlp, action_mlp):
     ranges = {
         "prefix": {"fp8": [asdict(MlpLayerPrecision("fp8", "bf16", 2.5, 8.75))] * 18},
         "action": {"nvfp4": [asdict(MlpLayerPrecision("nvfp4", "nvfp4", 4.5, 9.25))] * 18},
@@ -45,8 +31,8 @@ def test_custom_calibration_supports_other_tower_format_combinations(
         json.dumps(
             dict(
                 schema_version=2,
-                numerics=numerics,
-                activation=activation,
+                numerics="openpi_rlinf",
+                activation="gelu_pytorch_exact",
                 checkpoint_sha256="a" * 64,
                 devices={"thor": ranges},
             )
@@ -54,10 +40,7 @@ def test_custom_calibration_supports_other_tower_format_combinations(
     )
     config = Pi05OptimizationConfig.from_preset(
         "thor",
-        "optimized",
-        numerics=numerics,
-        prefix_mlp=prefix_mlp,
-        action_mlp=action_mlp,
+        f"{prefix_mlp}-{action_mlp}",
         calibration=path,
     )
     assert config.checkpoint_sha256 == "a" * 64
@@ -69,19 +52,18 @@ def test_custom_calibration_supports_other_tower_format_combinations(
     )
 
 
-@pytest.mark.parametrize("formats", [dict(prefix_mlp="fp8"), dict(action_mlp="nvfp4")])
-def test_bundled_calibration_rejects_unmeasured_formats(formats):
+@pytest.mark.parametrize("preset", ["fp8-bf16", "bf16-nvfp4"])
+def test_bundled_calibration_rejects_unmeasured_formats(preset):
     with pytest.raises(ValueError, match="18 .* MLP layer ranges"):
-        Pi05OptimizationConfig.from_preset("thor", "optimized", numerics="openpi_rlinf", **formats)
+        Pi05OptimizationConfig.from_preset("thor", preset)
 
 
 @pytest.mark.parametrize("device", ["thor", "spark"])
 @pytest.mark.parametrize("prefix_mlp", ["bf16", "nvfp4"])
 @pytest.mark.parametrize("action_mlp", ["bf16", "fp8"])
 def test_optimized_presets_compose_independent_tower_precision(device, prefix_mlp, action_mlp, tmp_path):
-    config = Pi05OptimizationConfig.from_preset(
-        device, "optimized", numerics="openpi_rlinf", prefix_mlp=prefix_mlp, action_mlp=action_mlp
-    )
+    preset = "bf16" if prefix_mlp == action_mlp == "bf16" else f"{prefix_mlp}-{action_mlp}"
+    config = Pi05OptimizationConfig.from_preset(device, preset)
     assert config.numerics == "openpi_rlinf" and config.activation == "gelu_pytorch_exact"
     assert all(
         (config.batch_cameras, config.compact_prefix, config.prefix_kv_only, config.reuse_action_context)
@@ -113,13 +95,13 @@ def test_optimized_presets_compose_independent_tower_precision(device, prefix_ml
         dict(device="cpu"),
         dict(device="thor", preset="unknown"),
         dict(device="thor", preset="rlinf"),
-        dict(device="thor", action_mlp="mixed"),
-        dict(device="thor", prefix_mlp="int8"),
-        dict(device="thor", numerics="rlinf"),
-        dict(device="4090", preset="optimized"),
-        dict(device="orin", action_mlp="fp8"),
-        dict(device="4090", prefix_mlp="nvfp4"),
-        dict(device="thor", preset="optimized", action_mlp="fp8"),
+        dict(device="thor", preset="mixed"),
+        dict(device="thor", preset="fp8"),
+        dict(device="thor", preset="optimized"),
+        dict(device="4090", preset="bf16"),
+        dict(device="orin", preset="fp8-fp8"),
+        dict(device="4090", preset="nvfp4-bf16"),
+        dict(device="thor", preset="strict", calibration="rlinf_libero"),
     ],
 )
 def test_presets_reject_unsupported_or_ambiguous_selectors(options):
@@ -134,9 +116,7 @@ def test_preset_resolution_is_cpu_safe_and_does_not_import_kernels(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", unexpected)
     monkeypatch.setattr(torch.cuda, "get_device_capability", unexpected)
     before = set(sys.modules)
-    Pi05OptimizationConfig.from_preset(
-        "thor", "optimized", numerics="openpi_rlinf", prefix_mlp="nvfp4", action_mlp="fp8"
-    )
+    Pi05OptimizationConfig.from_preset("thor", "nvfp4-fp8")
     assert not any(
         name.startswith(("triton", "embodiinfer.backend.cuda", "embodiinfer.backend.triton"))
         for name in set(sys.modules) - before
@@ -154,9 +134,7 @@ def test_custom_calibration_is_validated_before_execution(tmp_path, change):
     )
     path = tmp_path / "calibration.json"
     path.write_text(json.dumps(data))
-    config = Pi05OptimizationConfig.from_preset(
-        "thor", "optimized", numerics="openpi_rlinf", action_mlp="fp8", calibration=path
-    )
+    config = Pi05OptimizationConfig.from_preset("thor", "bf16-fp8", calibration=path)
     assert config.checkpoint_sha256 == "a" * 64
     assert config.action_layers == (MlpLayerPrecision("fp8", "fp8", 2.5, 8.75),) * 18
     if change == "contract":
@@ -171,9 +149,7 @@ def test_custom_calibration_is_validated_before_execution(tmp_path, change):
         data["devices"]["thor"]["action"]["fp8"][0]["down"] = "nvfp4"
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError):
-        Pi05OptimizationConfig.from_preset(
-            "thor", "optimized", numerics="openpi_rlinf", action_mlp="fp8", calibration=path
-        )
+        Pi05OptimizationConfig.from_preset("thor", "bf16-fp8", calibration=path)
 
 
 def test_native_wrapped_model_uses_public_constructor_without_lerobot(make_pi05_policy, monkeypatch):

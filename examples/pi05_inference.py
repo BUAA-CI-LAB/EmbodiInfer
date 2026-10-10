@@ -9,7 +9,7 @@ scaling (near-linear across devices).
     python examples/pi05_inference.py --ckpt lerobot/pi05_base --envs 8
     python examples/pi05_inference.py --ckpt lerobot/pi05_base --gpus 4 --envs 32
     python examples/pi05_inference.py --ckpt /models/RLinf-Pi05-LIBERO-SFT \
-        --device-type thor --preset optimized --numerics openpi_rlinf --prefix-mlp nvfp4 --action-mlp fp8 --envs 1 --horizon 10
+        --device-type thor --preset nvfp4-fp8 --envs 1
 
 Requires a CUDA device and the ``pi05`` dependency group
 (``uv sync --frozen --no-dev --group pi05``).
@@ -47,10 +47,7 @@ def main() -> None:
     ap.add_argument("--lang-len", type=int, default=48)
     ap.add_argument("--attn", default="sdpa", choices=["eager", "sdpa"])
     ap.add_argument("--device-type", choices=["thor", "spark", "orin", "4090"])
-    ap.add_argument("--preset", choices=["strict", "optimized"], help="Opt-in Pi05 inference preset")
-    ap.add_argument("--numerics", default="lerobot", choices=["lerobot", "openpi_rlinf"])
-    ap.add_argument("--prefix-mlp", default="bf16", choices=["bf16", "fp8", "nvfp4"])
-    ap.add_argument("--action-mlp", default="bf16", choices=["bf16", "fp8", "nvfp4"])
+    ap.add_argument("--preset", help="strict, bf16 or a prefix-action format pair such as nvfp4-fp8")
     ap.add_argument("--calibration", help="Calibration name or data path")
     ap.add_argument("--horizon", type=int, help="Inference action horizon; optimized profiles require 10")
     ap.add_argument("--steps", type=int, default=10, help="Number of denoising steps")
@@ -66,14 +63,8 @@ def main() -> None:
         ap.error("choose --preset or an advanced --optimizations recipe")
     if args.preset is not None and args.device_type is None:
         ap.error("--preset requires --device-type")
-    if args.preset is None and (
-        args.device_type is not None
-        or args.numerics != "lerobot"
-        or args.prefix_mlp != "bf16"
-        or args.action_mlp != "bf16"
-        or args.calibration is not None
-    ):
-        ap.error("device, numerics and MLP format selectors require --preset")
+    if args.preset is None and (args.device_type is not None or args.calibration is not None):
+        ap.error("--device-type and --calibration require --preset")
     if args.preset is not None or args.optimizations is not None:
         from embodiinfer.policies.pi05 import Pi05OptimizationConfig
 
@@ -86,22 +77,14 @@ def main() -> None:
                 else Pi05OptimizationConfig.from_preset(
                     args.device_type,
                     args.preset,
-                    numerics=args.numerics,
-                    prefix_mlp=args.prefix_mlp,
-                    action_mlp=args.action_mlp,
                     calibration=args.calibration,
                 )
             )
         except ValueError as exc:
             ap.error(str(exc))
-        if options.fused_mlp and (args.envs != 1 or args.horizon != 10 or args.steps != 10):
-            ap.error("paired-GEMM profiles require --envs 1 --horizon 10 --steps 10")
-        policy_options = dict(
-            optimizations=options,
-            native_inference=True,
-            native_embeddings=options.numerics == "openpi_rlinf",
-            prefix_cuda_graph=True,
-        )
+        if options.fused_mlp and (args.envs != 1 or args.horizon not in (None, 10) or args.steps != 10):
+            ap.error("optimized presets require --envs 1, horizon 10 and 10 denoising steps")
+        policy_options = dict(optimizations=options)
     policy_options["default_num_steps"] = args.steps
     if args.horizon is not None:
         policy_options["action_horizon"] = args.horizon

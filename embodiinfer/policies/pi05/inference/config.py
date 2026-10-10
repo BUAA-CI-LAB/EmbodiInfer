@@ -40,8 +40,9 @@ class Pi05OptimizationConfig:
     reuse. Paired GEMMs and alternative attention require explicit selection;
     they change floating-point accumulation. Paired-GEMM profiles cover
     B1/horizon10/10steps; benchmark results apply only to their measured settings.
-    Use ``from_preset`` for deployment; individual fields support operator
-    ablations and custom backends. The default preserves LeRobot numerics.
+    Deployment normally passes a preset directly to ``make_policy``. Individual
+    fields support operator ablations and custom backends. The default preserves
+    LeRobot numerics.
     """
 
     hardware: Literal["thor", "spark", "orin", "4090"] | None = None
@@ -145,33 +146,23 @@ class Pi05OptimizationConfig:
     def from_preset(
         cls,
         device: Literal["thor", "spark", "orin", "4090"],
-        preset: Literal["strict", "optimized"] = "strict",
+        preset: str = "strict",
         *,
-        numerics: Literal["lerobot", "openpi_rlinf"] = "lerobot",
-        prefix_mlp: Precision = "bf16",
-        action_mlp: Precision = "bf16",
         calibration: str | Path | None = None,
     ) -> Pi05OptimizationConfig:
-        """Resolve optimization, numerical semantics and MLP formats independently.
+        """Expand a complete deployment preset without importing kernels.
 
-        ``strict`` selects pointwise fusion and K/V reuse. ``optimized`` adds
-        measured B1/H10/10-step Thor/Spark execution choices. Neither changes
-        the selected numerical contract. MLP formats apply to projections only;
-        calibrated BF16 protection is retained. Low precision requires ranges
-        for the requested device, tower and format. The bundled calibration
-        belongs exclusively to RLinf-Pi05-LIBERO-SFT with openpi_rlinf numerics.
-        Resolution imports no kernels and does not probe CUDA.
+        ``strict`` preserves LeRobot numerics with pointwise fusion and K/V
+        reuse. ``bf16`` and explicit ``prefix-action`` pairs such as
+        ``nvfp4-fp8`` select the measured Thor/Spark B1/H10/ten-step execution
+        plan and openpi_rlinf numerics. MLP formats retain calibrated BF16
+        protection. Other format pairs require their own checkpoint-bound
+        calibration; missing ranges fail explicitly. Use the dataclass or
+        resolved JSON for custom numerical contracts and operator ablations.
         """
         from .presets import resolve_preset
 
-        return resolve_preset(
-            device,
-            preset,
-            numerics=numerics,
-            prefix_mlp=prefix_mlp,
-            action_mlp=action_mlp,
-            calibration=calibration,
-        )
+        return resolve_preset(device, preset, calibration=calibration)
 
     def to_json(self, path: str | Path) -> None:
         """Export deployment settings without benchmark or calibration dependencies."""

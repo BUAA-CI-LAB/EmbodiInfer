@@ -113,10 +113,7 @@ def main() -> None:
             if args.recipe is not None
             else Pi05OptimizationConfig.from_preset(
                 args.device,
-                "optimized",
-                numerics="openpi_rlinf",
-                prefix_mlp="nvfp4",
-                action_mlp="fp8",
+                "nvfp4-fp8",
                 calibration=args.calibration,
             )
         )

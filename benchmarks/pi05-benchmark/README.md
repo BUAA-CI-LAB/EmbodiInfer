@@ -153,29 +153,32 @@ action arithmetic / prefix lookup GEGLU，并启用 active-camera batching、pre
 compaction、末层仅生成 K/V、action context 复用。仅设置 `numerics` 不会自动启用
 所有优化开关；完整配方明确选择各项优化。既有 LeRobot 默认语义保持不变。
 
-部署将优化组合、数值约定和两部分 MLP 精度分开选择：
+部署直接选择设备和完整预设：
 
 ```python
-Pi05OptimizationConfig.from_preset(
-    "thor", "optimized", numerics="openpi_rlinf",
-    prefix_mlp="nvfp4", action_mlp="fp8",
+make_policy(
+    "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
+    device_type="thor", preset="nvfp4-fp8",
 )
 ```
 
-Spark 使用对应设备名称。`prefix_mlp` 和 `action_mlp` 各自支持 BF16/FP8/NVFP4
-选择，不再用 `mixed` 代指某个固定组合。设备/preset 决定执行优化，`numerics`
-决定数值约定；两者均不隐式选择精度。实际可执行组合仍受硬件和校准数据约束。
+Spark 使用对应设备名称。预设 `bf16`、`bf16-fp8`、`nvfp4-bf16`、`nvfp4-fp8`
+分别对应本节四组完整配方；组合名称按 prefix MLP、action MLP 排列。
+预设包含执行组合、明确的 `openpi_rlinf` 数值约定和校准选择，factory 自动配置
+native 路径、默认 prefix capture、horizon=10 和完整十步。不需要部署方再组合
+这些内部选项。其他精度组合可使用显式格式对名称，但仍需要对应校准。
 `inference/calibration/rlinf_libero.json` 的 schema 2 按设备、prefix/action、目标
 格式组织保护选择和激活范围，并保存 checkpoint identity 与数值语义。内置数据
 只覆盖已测的 prefix NVFP4、受保护 action FP8；可分别或组合选用。其他部分/格式
 组合需要自己的校准数据，缺失时明确报错。文件名指实际权重来源，不是优化 preset。
 
 自定义权重通过 `calibration` 传入独立校准数据路径。`from_json`/`to_json` 保留完整
-配置导入导出，供消融和记录实验使用。默认 `numerics="lerobot"` 保持 LeRobot
-tanh-GELU 及 dtype 语义；`strict` preset 支持 Thor/Spark/Orin/4090 的严格融合与
-K/V 复用，`optimized` 在 Thor/Spark 上增加完整优化。两者均保留调用方选择的
-数值约定；更细的开关可以直接构造配置。校准与 checkpoint、硬件、部分、格式
-和数值语义绑定，不能混用。本节性能只覆盖已测组合，没有推及所有可表达配置。
+配置导入导出，供消融和记录实验使用。`strict` preset 保持 LeRobot tanh-GELU
+及 dtype 语义，支持 Thor/Spark/Orin/4090 的严格融合与 K/V 复用。更细的算子、
+数值约定和逐层精度选择可以直接构造 `Pi05OptimizationConfig`；
+`from_preset(device, name)` 用于检查预设的完整展开结果。校准与 checkpoint、
+硬件、部分、格式和数值语义绑定，不能混用。本节性能只覆盖已测组合，
+没有推及所有可表达配置。
 
 Thor/Spark 使用相同权重、fixture、noise、B1/H10/完整十步与 `highest` 进行冻结
 参考核验。四种精度配置分别为 BF16、受保护 action FP8、prefix NVFP4，以及

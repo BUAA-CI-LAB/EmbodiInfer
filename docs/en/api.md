@@ -109,14 +109,12 @@ for measured latency, output parity and the CPU-offload memory tradeoff.
 ```python
 from embodiinfer import EngineConfig, make_policy
 from embodiinfer.engine import EngineCore
-from embodiinfer.policies.pi05 import Pi05OptimizationConfig
 
 policy = make_policy(
     "pi05",
     checkpoint="/models/pi05",
-    native_inference=True,
-    prefix_cuda_graph=True,
-    optimizations=Pi05OptimizationConfig.from_preset("4090"),
+    device_type="4090",
+    preset="strict",
 )
 engine = EngineCore(
     policy,
@@ -125,54 +123,50 @@ engine = EngineCore(
 ```
 
 This enables strict normalization/residual fusion and K/V workspace reuse with
-the existing attention and MLP implementation. Select alternative attention,
-paired GEMMs or calibrated per-layer precision through the configuration; see
+the existing attention and MLP implementation. Deployment selects a complete
+preset; see
 [supported profiles and precision contracts](models.md#opt-in-fused-operators).
-`Pi05OptimizationConfig.from_json(path)` loads a standalone recipe;
-`config.to_json(path)` exports one. JSON must explicitly identify its
-matching GELU/numerics contract. Resolved JSON is an advanced experiment interface;
-deployment normally uses presets.
+The policy factory supplies the required native inference options. CUDA Graph
+decoding remains controlled by `EngineConfig`; `prefix_cuda_graph=False` can
+disable prefix capture independently.
 Full-checkpoint parity and task quality remain deployment gates, including for
 the strict operator route; component parity alone does not establish them.
 
-For the `openpi_rlinf` numerical contract and optimized execution on Thor:
+For the complete optimized recipe on Thor:
 
 ```python
 import torch
 
 torch.set_float32_matmul_precision("highest")
-options = Pi05OptimizationConfig.from_preset(
-    "thor", "optimized", numerics="openpi_rlinf",
-    prefix_mlp="bf16", action_mlp="fp8",
-)
 policy = make_policy(
     "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
-    native_embeddings=True, native_inference=True, prefix_cuda_graph=True,
-    low_cpu_mem_usage=True, action_horizon=10, default_num_steps=10,
-    optimizations=options,
+    device_type="thor", preset="nvfp4-fp8", low_cpu_mem_usage=True,
 )
 engine = EngineCore(
     policy, EngineConfig(device="cuda", dtype="auto", max_batch_size=1, use_cuda_graph=True, capture_full_loop=True),
 )
 ```
 
-Choose `device="spark"` on SM121. `preset` never selects numerical semantics;
-`numerics="openpi_rlinf"` explicitly follows RLinf's `openpi_rlinf` inference
-implementation. `prefix_mlp` and `action_mlp` independently select projection
-formats, retaining any calibrated BF16 protection. For example,
-`prefix_mlp="nvfp4", action_mlp="fp8"` combines those two formats.
+Choose `device_type="spark"` on SM121. A preset is a complete recipe: `strict`
+preserves LeRobot numerical semantics, while `bf16` and explicit format pairs
+select the optimized `openpi_rlinf` inference plan. Pair names are ordered
+**prefix MLP – action MLP**: `bf16-fp8`, `nvfp4-bf16`, `nvfp4-fp8`.
+The factory configures native inference/embeddings, enables prefix capture by
+default, and sets horizon/denoising steps to 10 for optimized presets. Their
+request layout requires B1. Numerical semantics are declared by the recipe;
+they are not guessed from checkpoint filenames.
 
 The bundled calibration covers prefix NVFP4 and action FP8 for
-RLinf-Pi05-LIBERO-SFT on Thor/Spark with `openpi_rlinf` numerics. Other checkpoints,
-numerical contracts or tower/format pairs need their own `calibration` data path.
+RLinf-Pi05-LIBERO-SFT on Thor/Spark with `openpi_rlinf` numerics. Other checkpoints
+or tower/format pairs need their own `calibration` data path. Custom numerical
+contracts use an explicitly constructed configuration.
 Unsupported formats and missing calibration are rejected explicitly.
 
 The demo accepts the same deployment choices:
 
 ```bash
 python examples/pi05_inference.py --ckpt /models/RLinf-Pi05-LIBERO-SFT \
-  --device-type thor --preset optimized --numerics openpi_rlinf \
-  --prefix-mlp nvfp4 --action-mlp fp8 --envs 1 --horizon 10 --steps 10
+  --device-type thor --preset nvfp4-fp8 --envs 1
 ```
 
 A custom calibration JSON identifies `schema_version: 2`, `numerics`, `activation`,
@@ -181,15 +175,20 @@ A custom calibration JSON identifies `schema_version: 2`, `numerics`, `activatio
 contains 18 layer records using the `MlpLayerPrecision` fields; records may retain
 BF16 projections for protection. The resolved configuration instead contains
 `prefix_layers` and `action_layers` for execution.
-Preset composition supplies execution switches; calibration supplies only ranges
-and protected formats. Export the resolved configuration with `to_json` to record
-an experiment. Internal inference imports moved to `pi05.inference`; callers use
-the public `embodiinfer.policies.pi05` exports.
+Calibration supplies only ranges and protected formats. For custom numerical
+contracts or operator ablations, construct `Pi05OptimizationConfig` directly or
+load a resolved JSON with `from_json`, then pass it as `optimizations=` instead of
+`preset=`. The factory also supplies native policy options for this path.
+`Pi05OptimizationConfig.from_preset("thor", "nvfp4-fp8")` expands a preset for
+inspection; `config.to_json(path)` exports the complete resolved configuration.
+Internal inference imports moved to `pi05.inference`; callers use the public
+`embodiinfer.policies.pi05` exports.
 
 Select or extend an implementation through the shared operator layer:
 
 ```python
 from embodiinfer.layers import OperatorBackends, normalization_backends
+from embodiinfer.policies.pi05 import Pi05OptimizationConfig
 
 # MyRMSNorm implements NormalizationBackend and declares OperatorCapabilities.
 normalization_backends.register("my_rmsnorm", MyRMSNorm)

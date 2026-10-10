@@ -56,15 +56,24 @@ stop the final prefix block after K/V, and prepare action masks/positions/rotary
 factors outside denoising.
 CUDA rotary and the Thor FP4 lookup epilogue use the reusable registries.
 
-Deployment calls `Pi05OptimizationConfig.from_preset(device, preset, numerics=...,
-prefix_mlp=..., action_mlp=...)`. The `strict` preset selects pointwise fusion and
-K/V reuse on Thor, Spark, Orin and RTX 4090; `optimized` adds the Thor/Spark
-B1/H10/ten-step execution combination. Both preserve the independently selected
-`lerobot` or `openpi_rlinf` numerical contract. Each tower independently selects
-BF16, FP8 or NVFP4, retaining calibrated per-projection BF16 protection. No single
-`mixed` alias conflates distinct combinations. Hardware support and calibration
-are validated explicitly. Existing measurements cover `optimized` with
-`openpi_rlinf`; new combinations require their own accuracy/performance evaluation.
+Deployment calls `make_policy("pi05", checkpoint=..., device_type="thor",
+preset="nvfp4-fp8")`. A preset is a complete inference recipe. `strict` preserves
+LeRobot numerics with pointwise fusion and K/V reuse on all four supported
+devices. `bf16` and explicit prefix-action format pairs select the measured
+Thor/Spark B1/H10/ten-step plan with `openpi_rlinf` numerics. The factory supplies
+the required native flags, default prefix capture and fixed horizon/steps. Engine
+graph configuration remains model-neutral. A caller can explicitly disable
+prefix capture. Numerical semantics are declared by the preset rather than
+guessed from a checkpoint filename. Hardware and calibration are validated.
+
+This keeps the deployment interface small. Research configurations still select
+numerical semantics, individual operators and per-projection precision through
+`Pi05OptimizationConfig` or resolved JSON. Presets expand to the same immutable
+configuration, using `from_preset` for inspection. The previous independent
+deployment selectors exposed internal composition work to callers; they are
+removed from the unmerged API. No `mixed` alias conflates distinct format pairs.
+New calibration/format combinations require their own accuracy/performance
+evaluation.
 
 Checkpoint calibration is separate packaged data under `inference/calibration/`.
 Schema 2 identifies numerical semantics and checkpoint SHA256, and maps
