@@ -50,3 +50,30 @@ def rotate_qk(
     cos = cos.unsqueeze(1)
     sin = sin.unsqueeze(1)
     return (query * cos) + (_rotate_half(query) * sin), (key * cos) + (_rotate_half(key) * sin)
+
+
+def split_kv_attention(
+    query: torch.Tensor,
+    prefix_key: torch.Tensor,
+    prefix_value: torch.Tensor,
+    suffix_key: torch.Tensor,
+    suffix_value: torch.Tensor,
+    mask: torch.Tensor | None,
+    scaling: float,
+) -> torch.Tensor:
+    """Non-causal BHSD attention over cached (prefix) and current (suffix) K/V.
+
+    ``mask`` is a shared floating padding mask ``[batch, 1, 1, prefix + suffix]``:
+    zero keeps a key, any other value removes it. Query heads may be a multiple
+    of the KV heads (grouped-query attention).
+    """
+    key = torch.cat((prefix_key, suffix_key), dim=2)
+    value = torch.cat((prefix_value, suffix_value), dim=2)
+    return F.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=None if mask is None else mask == 0,
+        scale=scaling,
+        enable_gqa=query.shape[1] != key.shape[1],
+    )

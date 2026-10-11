@@ -685,8 +685,8 @@ class Pi05Policy(FlowVLAPolicy):
         if native_expert and self.denoise_attention == "triton":
             # All action queries share the same prefix/suffix key validity.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
-            out = self._native_attention.attend_split(
-                q, *prefix_kv, k, v, key_padding_mask=key_padding_mask, scaling=attn.scaling
+            out = _op(self._kernels, "split_kv_attention", True)(
+                q, *prefix_kv, k, v, key_padding_mask, attn.scaling
             )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         if prefix_kv is not None:  # denoise pass: attend [prefix ++ suffix]
@@ -696,7 +696,9 @@ class Pi05Policy(FlowVLAPolicy):
         if native_prefix:
             # Prefix preparation supplies a shared key mask; masked query outputs are unused.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
-            out = self._native_attention.attend(q, k, v, attn_mask=key_padding_mask, scaling=attn.scaling)
+            out = _op(self._kernels, "split_kv_attention", True)(
+                q, k[:, :, :0], v[:, :, :0], k, v, key_padding_mask, attn.scaling
+            )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         # K/V stay at num_kv_heads; the attention backend does the GQA repeat
         # (materialized for 'eager', broadcast for 'eager_bc').

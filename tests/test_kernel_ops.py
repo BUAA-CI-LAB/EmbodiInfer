@@ -45,7 +45,7 @@ def _write_profile(root, *, source=_TUNED_MODULE, applies="applies", digest=None
 
 def test_core_operators_have_torch_and_triton_implementations():
     ops = available_ops()
-    for op in ("gated_residual", "ada_rms_norm", "gated_gelu", "rotate_qk"):
+    for op in ("gated_residual", "ada_rms_norm", "gated_gelu", "rotate_qk", "split_kv_attention"):
         assert {"torch", "triton"} <= set(ops[op])
     assert get_op("gated_gelu", "torch") is torch_ops.gated_gelu
 
@@ -156,7 +156,28 @@ def test_prepare_resolves_everything_before_graph_tracing(monkeypatch):
     selection = KernelSelection("none")
     selection.prepare((None, torch_ops_wrapper := (lambda fn: fn)))
     monkeypatch.setattr(ops_module, "get_op", lambda *args: pytest.fail("resolve imported after prepare"))
-    for op in ("gated_residual", "ada_rms_norm", "gated_gelu", "rotate_qk"):
+    for op in ("gated_residual", "ada_rms_norm", "gated_gelu", "rotate_qk", "split_kv_attention"):
         for prefer in ("torch", "triton"):
             selection.resolve(op, prefer)
             selection.resolve(op, prefer, torch_ops_wrapper)
+
+
+def test_split_kv_attention_reference_matches_masked_gqa_attention():
+    torch.manual_seed(0)
+    q = torch.randn(2, 4, 3, 8, dtype=torch.float64)
+    pk, pv = torch.randn(2, 2, 5, 8, dtype=torch.float64), torch.randn(2, 2, 5, 8, dtype=torch.float64)
+    k, v = torch.randn(2, 2, 3, 8, dtype=torch.float64), torch.randn(2, 2, 3, 8, dtype=torch.float64)
+    mask = torch.zeros(2, 1, 1, 8, dtype=torch.float64)
+    mask[0, ..., 1] = torch.finfo(torch.float64).min
+    mask[1, ..., 6] = -1.0
+    actual = torch_ops.split_kv_attention(q, pk, pv, k, v, mask, 0.3)
+    keys = torch.cat((pk, k), dim=2).repeat_interleave(2, dim=1)
+    values = torch.cat((pv, v), dim=2).repeat_interleave(2, dim=1)
+    scores = (q @ keys.transpose(-1, -2)) * 0.3
+    scores = scores.masked_fill(mask != 0, float("-inf"))
+    torch.testing.assert_close(actual, torch.softmax(scores, dim=-1) @ values)
+    torch.testing.assert_close(
+        torch_ops.split_kv_attention(q, pk[:, :, :0], pv[:, :, :0], k, v, None, 0.3),
+        torch.softmax((q @ k.repeat_interleave(2, 1).transpose(-1, -2)) * 0.3, -1)
+        @ v.repeat_interleave(2, 1),
+    )

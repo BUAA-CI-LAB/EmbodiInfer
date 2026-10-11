@@ -162,6 +162,7 @@ for _op, _module in (
     ("ada_rms_norm", "norm"),
     ("gated_gelu", "activation"),
     ("rotate_qk", "rotary"),
+    ("split_kv_attention", "split_kv_attention"),
 ):
     register_lazy_op(_op, "torch", "embodiinfer.backend.torch.ops", _op)
     register_lazy_op(_op, "triton", f"embodiinfer.backend.triton.{_module}", _op)
