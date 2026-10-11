@@ -58,11 +58,11 @@ def test_kernels_follow_their_launch_into_enclosing_ranges():
     assert [(k.step, k.path, k.graph) for k in result] == [
         (0, ("stage:encode_prefix", "module:layers.*.mlp"), False),
         (0, ("stage:encode_prefix", "module:layers.*.mlp"), False),
-        (0, ("stage:encode_prefix",), False),
-        (0, ("stage:integrate",), True),
-        (0, ("stage:integrate",), True),
-        (1, (), False),
-        (None, (), False),
+        (0, ("stage:encode_prefix", "kernels:elementwise"), False),
+        (0, ("stage:integrate", "kernels:other"), True),
+        (0, ("stage:integrate", "kernels:other"), True),
+        (1, ("kernels:other",), False),
+        (None, ("kernels:other",), False),
         (None, ("<unlinked>",), False),
     ]
     assert result[0].duration_us == 3.0
@@ -161,3 +161,41 @@ def test_session_requires_enough_steps(fake_engine):
         session.close()
     with pytest.raises(ContractError, match="Only 1 inference steps ran"):
         session.kernels()
+
+
+def test_graph_replays_take_their_capture_labels_in_order():
+    capture_ranges = [  # the capture profiler starts inside the stage: no stage range
+        Range("kt/op:ada_rms_norm", 1, 10, 20),
+        Range("kt/attention:Split", 1, 30, 40),
+    ]
+    capture_launches = [
+        Launch("cudaLaunchKernel", 1, 35, 2),
+        Launch("cudaStreamIsCapturing", 1, 12, 9),
+        Launch("cuLaunchKernel", 1, 15, 1),
+        Launch("cudaMemsetAsync", 1, 50, 3),
+    ]
+    labels = hotspots.capture_labels(capture_ranges, capture_launches)
+    assert labels == [("op:ada_rms_norm",), ("attention:Split",), ()]
+
+    ranges = [
+        Range("kt/step:0", 1, 0, 1000),
+        Range("kt/stage:integrate", 1, 1, 999),
+        Range("kt/graph:77", 1, 10, 20),
+        Range("kt/graph:88", 1, 30, 40),
+    ]
+    launches = [Launch("cudaGraphLaunch", 1, 12, 5), Launch("cudaGraphLaunch", 1, 32, 6)]
+    kernels = [
+        DeviceKernel("attn", 200, 4000, 5),
+        DeviceKernel("norm", 100, 1000, 5),
+        DeviceKernel("memset", 300, 500, 5),
+        DeviceKernel("unknown_graph", 400, 500, 6),
+    ]
+    result = attribute(ranges, launches, kernels, {77: labels, 88: labels})
+    assert [(k.name, k.path, k.labelled) for k in result] == [
+        ("attn", ("stage:integrate", "attention:Split"), True),
+        ("norm", ("stage:integrate", "op:ada_rms_norm"), True),
+        ("memset", ("stage:integrate", "kernels:copy"), True),
+        ("unknown_graph", ("stage:integrate", "kernels:other"), False),  # 1 kernel vs 3 labels
+    ]
+    summary = summarize(result, steps=1)
+    assert summary["graph_labelled_fraction"] == pytest.approx(5.5 / 6.0)

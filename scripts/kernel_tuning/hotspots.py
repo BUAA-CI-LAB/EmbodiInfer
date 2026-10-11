@@ -18,10 +18,12 @@ profiling ranges enclosing that launch:
 A kernel's region is its stage ranges plus the innermost operator, attention or
 module range enclosing its launch.
 
-Kernels replayed from a CUDA graph keep the ranges active at replay time, so
-they are attributed to their stage only; profile a run without CUDA graphs or
-compilation for operator-level detail. Ranges are skipped inside
-``torch.compile`` tracing, so compiled regions also report at stage level.
+Kernels replayed from a CUDA graph are labelled from the graph's capture: a
+short profile around each capture outside the measured window records the
+ranges of every node launch, and replayed kernels take those labels in launch
+order when the counts match (otherwise they keep their replay-time stage).
+Ranges are skipped inside ``torch.compile`` tracing, so compiled regions report
+at the level of the range that called them.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from .contracts import ContractError
 
 RANGE = "kt/"
 STEP = f"{RANGE}step:"
+GRAPH = f"{RANGE}graph:"
 _ENTRIES = (
     ("embodiinfer.engine.core", "EngineCore", ("execute", "execute_pipelined")),
     (
@@ -98,6 +101,7 @@ class Kernel:
     name: str
     duration_us: float
     graph: bool
+    labelled: bool = False
 
 
 def fold_layers(name: str) -> str:
@@ -134,34 +138,111 @@ def _enclosing(ranges: Iterable[Range], launches: Iterable[Launch]) -> dict[int,
     return result
 
 
+def _labels(enclosing: Iterable[Range]) -> tuple[int | None, int | None, tuple[str, ...]]:
+    """Step index, replayed graph id and region path of one launch."""
+    step = graph = None
+    stages: list[str] = []
+    innermost = None
+    for item in enclosing:
+        if item.name.startswith(STEP):
+            step = int(item.name[len(STEP) :])
+        elif item.name.startswith(GRAPH):
+            graph = int(item.name[len(GRAPH) :])
+        elif item.name.startswith(RANGE + "stage:"):
+            name = item.name[len(RANGE) :]
+            if not stages or stages[-1] != name:
+                stages.append(name)
+        else:
+            innermost = fold_layers(item.name[len(RANGE) :])
+    return step, graph, (*stages, innermost) if innermost else tuple(stages)
+
+
+_KERNEL_CLASSES = (
+    ("attention", re.compile(r"attention|flash|fmha|_attn", re.IGNORECASE)),
+    ("gemm", re.compile(r"gemm|nvjet|cutlass|xmma|_mm_|matmul|cublas", re.IGNORECASE)),
+    ("inductor", re.compile(r"^triton_")),
+    ("copy", re.compile(r"memcpy|memset|copy|cat", re.IGNORECASE)),
+    ("elementwise", re.compile(r"elementwise|reduce|softmax|norm", re.IGNORECASE)),
+)
+
+
+def kernel_class(name: str) -> str:
+    """Coarse kernel category from its name, for regions without finer ranges."""
+    for label, pattern in _KERNEL_CLASSES:
+        if pattern.search(name):
+            return label
+    return "other"
+
+
+def _with_class(path: tuple[str, ...], name: str) -> tuple[str, ...]:
+    """Append the kernel category when no operator, attention or module range encloses it."""
+    if all(part.startswith("stage:") for part in path):
+        return (*path, f"kernels:{kernel_class(name)}")
+    return path
+
+
+def is_node_launch(name: str) -> bool:
+    """Whether a host API call adds one node (kernel, memset or memcpy) to a captured graph."""
+    return "LaunchKernel" in name or name.startswith(
+        ("cudaMemsetAsync", "cudaMemcpyAsync", "cuMemsetD", "cuMemcpy")
+    )
+
+
+def capture_labels(ranges: Iterable[Range], launches: Iterable[Launch]) -> list[tuple[str, ...]]:
+    """Region paths of a graph's node launches, in capture order."""
+    nodes = sorted(
+        (launch for launch in launches if is_node_launch(launch.name)), key=lambda item: item.start
+    )
+    enclosing = _enclosing(ranges, nodes)
+    return [_labels(enclosing[launch.correlation])[2] for launch in nodes]
+
+
 def attribute(
-    ranges: Iterable[Range], launches: Iterable[Launch], kernels: Iterable[DeviceKernel]
+    ranges: Iterable[Range],
+    launches: Iterable[Launch],
+    kernels: Iterable[DeviceKernel],
+    graph_labels: dict[int, list[tuple[str, ...]]] | None = None,
 ) -> list[Kernel]:
-    """Attribute each device kernel to the ranges enclosing its host launch."""
+    """Attribute each device kernel to the ranges enclosing its host launch.
+
+    Kernels of one graph replay share the replay's launch; when ``graph_labels``
+    holds as many capture labels as the replay ran kernels, they are matched in
+    device start order.
+    """
     kernels = list(kernels)
     wanted = {kernel.correlation for kernel in kernels}
     launch_by_id = {launch.correlation: launch for launch in launches if launch.correlation in wanted}
     enclosing_by_id = _enclosing(ranges, launch_by_id.values())
-    result = []
+    replays: dict[int, list[int]] = defaultdict(list)
+    result: list[Kernel] = []
     for kernel in kernels:
         launch = launch_by_id.get(kernel.correlation)
         if launch is None:
             result.append(Kernel(None, ("<unlinked>",), kernel.name, kernel.duration_ns / 1000, False))
             continue
-        step = None
-        stages: list[str] = []
-        innermost = None
-        for item in enclosing_by_id[kernel.correlation]:
-            name = item.name[len(RANGE) :]
-            if item.name.startswith(STEP):
-                step = int(name[len(STEP) - len(RANGE) :])
-            elif name.startswith("stage:"):
-                if not stages or stages[-1] != name:
-                    stages.append(name)
-            else:
-                innermost = fold_layers(name)
-        path = (*stages, innermost) if innermost else tuple(stages)
-        result.append(Kernel(step, path, kernel.name, kernel.duration_ns / 1000, "Graph" in launch.name))
+        step, _, path = _labels(enclosing_by_id[kernel.correlation])
+        graph = "Graph" in launch.name
+        if graph:
+            replays[kernel.correlation].append(len(result))
+        result.append(
+            Kernel(step, _with_class(path, kernel.name), kernel.name, kernel.duration_ns / 1000, graph)
+        )
+    for correlation, indices in replays.items():
+        graph_id = _labels(enclosing_by_id[correlation])[1]
+        labels = (graph_labels or {}).get(graph_id) if graph_id is not None else None
+        if labels is None or len(labels) != len(indices):
+            continue
+        ordered = sorted(indices, key=lambda index: kernels[index].start)
+        replay_stages = tuple(
+            part for part in _labels(enclosing_by_id[correlation])[2] if part.startswith("stage:")
+        )
+        for index, label in zip(ordered, labels, strict=True):
+            item = result[index]
+            # The capture profiler starts inside the stage that captures, so its
+            # labels lack the outer stages; the replay supplies them.
+            merged = (*replay_stages, *(part for part in label if part not in replay_stages))
+            path = _with_class(merged, item.name)
+            result[index] = Kernel(item.step, path, item.name, item.duration_us, True, True)
     return result
 
 
@@ -202,8 +283,12 @@ def summarize(kernels: Iterable[Kernel], steps: int, *, small_us: float = 5.0) -
                 ],
             }
         )
+    graph_us = sum(kernel.duration_us for kernel in measured if kernel.graph)
+    labelled_us = sum(kernel.duration_us for kernel in measured if kernel.labelled)
     return {
         "steps": steps,
+        "graph_us_per_step": graph_us / steps,
+        "graph_labelled_fraction": labelled_us / graph_us if graph_us else 1.0,
         "kernel_us_per_step": total / steps,
         "kernels_per_step": len(measured) / steps,
         "small_kernel_us": small_us,
@@ -218,6 +303,8 @@ def render(summary: dict[str, Any], *, limit: int = 30) -> str:
         "",
         f"GPU kernel time per step: {summary['kernel_us_per_step'] / 1000:.2f} ms in "
         f"{summary['kernels_per_step']:.0f} kernels. Small kernels are under {summary['small_kernel_us']:g} us.",
+        f"CUDA graph replays: {summary['graph_us_per_step'] / 1000:.2f} ms per step, "
+        f"{summary['graph_labelled_fraction']:.0%} labelled from their capture.",
         "",
         "| Region | ms/step | Share | Kernels/step | Mean us | Small | Graph | Top kernel |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
@@ -266,6 +353,13 @@ class ProfileSession:
         self._restore: list[Callable[[], None]] = []
         self._module_names: dict[int, str] = {}
         self._module_ranges = threading.local()
+        self._capture: tuple[Any, Any] | None = None
+        self.graph_labels: dict[int, list[tuple[str, ...]]] = {}
+
+    @property
+    def recording(self) -> bool:
+        """Whether a profiler (measured window or graph capture) is collecting ranges."""
+        return self._capture is not None or (self.profiler is not None and self.trace is None)
 
     def _replace(self, owner: Any, name: str, value: Any) -> None:
         """Set ``owner.name`` (class, module or instance) and remember how to undo it."""
@@ -389,15 +483,56 @@ class ProfileSession:
             return cls
 
         self._replace(attention, "_resolve_attention_backend", resolve_backend)
+        self._install_graph_hooks()
         if self.modules:
             self._install_module_hooks()
+
+    def _install_graph_hooks(self) -> None:
+        """Label CUDA graph nodes at capture and tag each measured replay with its graph."""
+        import torch
+        from torch.profiler import ProfilerActivity, profile, record_function
+
+        graph_class = torch.cuda.CUDAGraph
+        begin, end, replay = graph_class.capture_begin, graph_class.capture_end, graph_class.replay
+        session = self
+
+        @functools.wraps(begin)
+        def capture_begin(graph: Any, *args: Any, **kwargs: Any) -> Any:
+            if session.profiler is None and session._capture is None:
+                labeller = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA])
+                labeller.start()
+                session._capture = (graph, labeller)
+            return begin(graph, *args, **kwargs)
+
+        @functools.wraps(end)
+        def capture_end(graph: Any, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return end(graph, *args, **kwargs)
+            finally:
+                if session._capture is not None and session._capture[0] is graph:
+                    labeller = session._capture[1]
+                    session._capture = None
+                    labeller.stop()
+                    ranges, launches, _ = _events(labeller)
+                    session.graph_labels[id(graph)] = capture_labels(ranges, launches)
+
+        @functools.wraps(replay)
+        def tagged_replay(graph: Any, *args: Any, **kwargs: Any) -> Any:
+            if session.profiler is None or session.trace is not None:
+                return replay(graph, *args, **kwargs)
+            with record_function(f"{GRAPH}{id(graph)}"):
+                return replay(graph, *args, **kwargs)
+
+        self._replace(graph_class, "capture_begin", capture_begin)
+        self._replace(graph_class, "capture_end", capture_end)
+        self._replace(graph_class, "replay", tagged_replay)
 
     def _install_module_hooks(self) -> None:
         import torch
         from torch.nn.modules import module as module_hooks
 
         def before(module: Any, _inputs: Any) -> None:
-            if _compiling() or self.profiler is None or self.trace is not None:
+            if _compiling() or not self.recording:
                 return
             name = self._module_names.get(id(module))
             if name is None:
@@ -432,22 +567,23 @@ class ProfileSession:
             raise ContractError(
                 f"Only {self.started} inference steps ran; profiling needs warmup {self.warmup} + {self.steps}"
             )
-        ranges, launches, devices = [], [], []
-        for event in self.trace.profiler.kineto_results.events():
-            activity = event.activity_type()
-            name = event.name()
-            if activity == "user_annotation" and name.startswith(RANGE):
-                start = event.start_ns()
-                ranges.append(Range(name, event.start_thread_id(), start, start + event.duration_ns()))
-            elif activity in _LAUNCH_ACTIVITIES:
-                launches.append(
-                    Launch(name, event.start_thread_id(), event.start_ns(), event.correlation_id())
-                )
-            elif activity in _KERNEL_ACTIVITIES:
-                devices.append(
-                    DeviceKernel(name, event.start_ns(), event.duration_ns(), event.correlation_id())
-                )
-        return attribute(ranges, launches, devices)
+        return attribute(*_events(self.trace), self.graph_labels)
+
+
+def _events(profiler: Any) -> tuple[list[Range], list[Launch], list[DeviceKernel]]:
+    """Ranges, host launches and device kernels recorded by a stopped profiler."""
+    ranges, launches, devices = [], [], []
+    for event in profiler.profiler.kineto_results.events():
+        activity = event.activity_type()
+        name = event.name()
+        if activity == "user_annotation" and name.startswith(RANGE):
+            start = event.start_ns()
+            ranges.append(Range(name, event.start_thread_id(), start, start + event.duration_ns()))
+        elif activity in _LAUNCH_ACTIVITIES:
+            launches.append(Launch(name, event.start_thread_id(), event.start_ns(), event.correlation_id()))
+        elif activity in _KERNEL_ACTIVITIES:
+            devices.append(DeviceKernel(name, event.start_ns(), event.duration_ns(), event.correlation_id()))
+    return ranges, launches, devices
 
 
 def _environment() -> dict[str, Any]:
