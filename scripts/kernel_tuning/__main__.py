@@ -278,6 +278,15 @@ def main(argv: list[str] | None = None) -> int:
         "--output", type=Path, required=True, help="New model capture directory (JSONL for --catalog)"
     )
     capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
+    hotspots = commands.add_parser(
+        "profile", help="Rank where end-to-end inference spends GPU time (model runtime)"
+    )
+    hotspots.add_argument("--output", type=Path, required=True, help="New profile directory")
+    hotspots.add_argument("--warmup", type=int, default=10, help="Inference steps skipped before profiling")
+    hotspots.add_argument("--steps", type=int, default=20, help="Inference steps profiled")
+    hotspots.add_argument("--no-module-ranges", action="store_true", help="Skip per-nn.Module attribution")
+    hotspots.add_argument("--trace", action="store_true", help="Also write a Chrome trace.json")
+    hotspots.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
     calibration = commands.add_parser(
         "calibrate", help="Freeze baseline/FP64 numerical bounds in the model runtime before generation"
     )
@@ -290,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     skeleton.add_argument("--revision", required=True, help="Immutable commit to copy")
     skeleton.add_argument("--output", type=Path, required=True)
     raw = sys.argv[1:] if argv is None else argv
-    if "--" in raw and raw[0] == "capture":
+    if "--" in raw and raw[0] in ("capture", "profile"):
         split = raw.index("--")
         raw, command = raw[:split], raw[split + 1 :]
     else:
@@ -323,6 +332,20 @@ def main(argv: list[str] | None = None) -> int:
                     command or args.script, args.output, args.model, fixture_bytes=args.fixture_bytes
                 )
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "profile":
+            from .hotspots import render
+            from .hotspots import run as run_profile
+
+            summary = run_profile(
+                command or args.script,
+                args.output,
+                warmup=args.warmup,
+                steps=args.steps,
+                modules=not args.no_module_ranges,
+                trace=args.trace,
+            )
+            print(render(summary, limit=15))
+            print(f"Report: {args.output / 'hotspots.md'}")
         elif args.command == "calibrate":
             from benchmarks.kernel_tuning.calibration import calibrate
 
