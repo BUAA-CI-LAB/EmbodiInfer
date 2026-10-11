@@ -298,6 +298,14 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("export", type=Path, help="Directory written by export")
     install.add_argument("--profile", required=True, help="Kernel profile name, e.g. thor or rtx4090")
     install.add_argument("--replace", action="store_true", help="Overwrite an installed operator")
+    verify = commands.add_parser(
+        "verify", help="Model-level numerical gate for a kernel profile (model runtime)"
+    )
+    verify.add_argument("--profile", required=True, help="Installed kernel profile to check")
+    verify.add_argument("--output", type=Path, required=True, help="New gate report (JSON)")
+    verify.add_argument("--samples", type=int, help="Use only the first N recorded inputs")
+    verify.add_argument("--seed", type=int, default=1000, help="Base of the per-input seeds")
+    verify.add_argument("script", nargs=argparse.REMAINDER, help="-- discovery.drive arguments")
     hotspots = commands.add_parser(
         "profile", help="Rank where end-to-end inference spends GPU time (model runtime)"
     )
@@ -319,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     skeleton.add_argument("--revision", required=True, help="Immutable commit to copy")
     skeleton.add_argument("--output", type=Path, required=True)
     raw = sys.argv[1:] if argv is None else argv
-    if "--" in raw and raw[0] in ("capture", "capture-ops", "profile"):
+    if "--" in raw and raw[0] in ("capture", "capture-ops", "profile", "verify"):
         split = raw.index("--")
         raw, command = raw[:split], raw[split + 1 :]
     else:
@@ -371,6 +379,16 @@ def main(argv: list[str] | None = None) -> int:
 
             result = install_solution(args.export, args.profile, replace=args.replace)
             print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "verify":
+            from .verify import run as run_verify
+
+            report = run_verify(
+                args.profile, args.output, command or args.script, samples=args.samples, seed=args.seed
+            )
+            summary = {key: report[key] for key in ("passed", "inputs", "checks", "failed", "worst_ratio")}
+            print(json.dumps(summary, indent=2))
+            if not report["passed"]:
+                return 1
         elif args.command == "profile":
             from .hotspots import render
             from .hotspots import run as run_profile
