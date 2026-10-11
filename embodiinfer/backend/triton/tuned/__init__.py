@@ -1,7 +1,8 @@
 """Verified, hardware-specific operator kernels grouped into kernel profiles.
 
 Each subdirectory is one profile (for example ``thor`` or ``rtx4090``) holding a
-``profile.json`` manifest and one self-contained module per tuned operator.
+``profile.json`` manifest and one self-contained module or package per tuned
+operator (``scripts.kernel_tuning install`` writes packages).
 Profiles are produced by the kernel-tuning tooling and selected at runtime through
 :class:`embodiinfer.layers.ops.KernelSelection`; nothing here is used by default.
 
@@ -12,8 +13,8 @@ Profiles are produced by the kernel-tuning tooling and selected at runtime throu
       "match": {"device_name": "NVIDIA Thor", "capability": [11, 0],
                 "torch": "2.13.0+cu132", "triton": "3.7.1"},
       "ops": {
-        "gated_residual": {"module": "gated_residual.py", "function": "gated_residual",
-                           "applies": "applies", "sha256": "<module digest>"}
+        "gated_residual": {"module": "gated_residual", "function": "run",
+                           "applies": "applies", "sha256": "<source_digest of the package>"}
       }
     }
 
@@ -27,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,20 +67,43 @@ class KernelProfile:
             return self._loaded[op]
         entry = self.ops[op]
         path = self.root / entry["module"]
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != entry["sha256"]:
+        if source_digest(path) != entry["sha256"]:
             raise ValueError(f"kernel profile {self.name!r}: {path.name} does not match its recorded sha256")
-        spec = importlib.util.spec_from_file_location(f"embodiinfer_tuned_{self.name}_{path.stem}", path)
+        name = f"embodiinfer_tuned_{self.name}_{path.stem}"
+        if path.is_dir():
+            spec = importlib.util.spec_from_file_location(
+                name, path / "__init__.py", submodule_search_locations=[str(path)]
+            )
+        else:
+            spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
             raise ImportError(f"kernel profile {self.name!r}: cannot import {path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Packages import their own files relatively, which needs the parent registered.
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
         applies = entry.get("applies")
         kernel = TunedKernel(
             getattr(module, entry["function"]), getattr(module, applies) if applies else None
         )
         self._loaded[op] = kernel
         return kernel
+
+
+def source_digest(path: Path) -> str:
+    """SHA-256 of a module file, or of every file (by relative path) in a package directory."""
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    files = {
+        item.relative_to(path).as_posix(): hashlib.sha256(item.read_bytes()).hexdigest()
+        for item in sorted(path.rglob("*"))
+        if item.is_file() and "__pycache__" not in item.parts
+    }
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
 def _normalize(value: Any) -> Any:
@@ -134,4 +159,5 @@ __all__ = [
     "available_profiles",
     "current_environment",
     "load_profile",
+    "source_digest",
 ]

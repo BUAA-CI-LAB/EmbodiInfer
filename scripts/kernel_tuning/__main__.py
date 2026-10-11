@@ -292,6 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     capture_ops.add_argument(
         "script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]"
     )
+    install = commands.add_parser(
+        "install", help="Install an exported registry solution into a kernel profile (model runtime)"
+    )
+    install.add_argument("export", type=Path, help="Directory written by export")
+    install.add_argument("--profile", required=True, help="Kernel profile name, e.g. thor or rtx4090")
+    install.add_argument("--replace", action="store_true", help="Overwrite an installed operator")
     hotspots = commands.add_parser(
         "profile", help="Rank where end-to-end inference spends GPU time (model runtime)"
     )
@@ -359,6 +365,11 @@ def main(argv: list[str] | None = None) -> int:
                 steps=args.steps,
                 fixture_bytes=args.fixture_bytes,
             )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "install":
+            from .install import install as install_solution
+
+            result = install_solution(args.export, args.profile, replace=args.replace)
             print(json.dumps(result, indent=2, ensure_ascii=False))
         elif args.command == "profile":
             from .hotspots import render
