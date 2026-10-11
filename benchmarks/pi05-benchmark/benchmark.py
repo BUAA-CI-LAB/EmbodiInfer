@@ -500,7 +500,13 @@ def build(
         compile_backend=config["compile_backend"],
         **{
             k: config[k]
-            for k in ("native_inference", "prefix_cuda_graph", "denoise_attention", "prefix_attention")
+            for k in (
+                "native_inference",
+                "prefix_cuda_graph",
+                "denoise_attention",
+                "prefix_attention",
+                "kernel_profile",
+            )
             if k in config
         },
         load_device=str(device),

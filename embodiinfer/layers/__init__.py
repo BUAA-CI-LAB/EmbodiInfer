@@ -19,6 +19,7 @@ from .linear import (
     register_linear,
     resolve_linear_backend,
 )
+from .ops import KernelSelection, available_ops, get_op, register_lazy_op, register_op
 
 __all__ = [
     "AttentionBackend",
@@ -36,4 +37,9 @@ __all__ = [
     "parse_quantization_config",
     "register_linear",
     "resolve_linear_backend",
+    "KernelSelection",
+    "available_ops",
+    "get_op",
+    "register_lazy_op",
+    "register_op",
 ]
