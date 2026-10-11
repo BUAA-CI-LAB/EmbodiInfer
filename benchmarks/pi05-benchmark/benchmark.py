@@ -387,6 +387,12 @@ def engine_graph_stats(core: Any) -> dict[str, Any]:
     }
 
 
+def graph_capture_count(stats: dict[str, Any]) -> int:
+    """Count engine graphs plus graphs captured by the PI0.5 native runtime."""
+    native = stats.get("pi05_native") or {}
+    return stats["graphs"]["capture_count"] + native.get("capture_count", 0)
+
+
 def run(
     default: Path,
     build: Callable[[dict[str, Any], torch.device], tuple[LiberoInference, dict[str, Any], RuntimeStats]],
@@ -418,12 +424,15 @@ def run(
         for index in range(config["warmup_calls"]):
             sample = samples[warmup_indices[index % len(warmup_indices)]]
             infer(sample, read_libero(sample))
+        warm_layouts = getattr(infer, "warm_native_layouts", None)
+        if warm_layouts is not None:
+            details["warmed_native_layouts"] = warm_layouts(samples)
         torch.cuda.synchronize(device)
         details["warmup_seconds_including_data_io"] = time.perf_counter() - started
         details["warmup_sample_ids"] = [samples[index].sample_id for index in warmup_indices]
         before = runtime_stats()
         details["runtime_before_measurement"] = before
-        if config["cuda_graph"] and not before["graphs"]["capture_count"]:
+        if config["cuda_graph"] and not graph_capture_count(before):
             raise RuntimeError("CUDA Graph was requested but warmup captured no graph")
         torch.cuda.reset_peak_memory_stats(device)
         torch.manual_seed(config["seed"])
@@ -439,7 +448,7 @@ def run(
                     )
     after = runtime_stats()
     details["runtime_after_measurement"] = after
-    if after["graphs"]["capture_count"] != before["graphs"]["capture_count"]:
+    if graph_capture_count(after) != graph_capture_count(before):
         raise RuntimeError("CUDA Graph capture occurred during measurement; extend warmup")
     write_report(config, device, rows, details, Path(config["output"]))
 
@@ -509,7 +518,7 @@ def build(
         ),
     )
 
-    def infer(sample: LiberoSample, raw: dict[str, Any]) -> dict[str, Any]:
+    def prepare(sample: LiberoSample, raw: dict[str, Any]) -> tuple[Any, torch.Tensor]:
         state = processor.prepare_state(
             torch.from_numpy(
                 np.concatenate((raw["ee_pos"], raw["ee_ori"], raw["gripper_states"])).astype(np.float32)
@@ -526,7 +535,10 @@ def build(
             images[feature] = torch.from_numpy(processor.resize_image(image, 224, 224))
         batch = processor.prepare(state, images, sample.instruction)
         batch.request_ids = [sample.sample_id]
-        batch = policy.pad(batch, 1).to(device, core.dtype)
+        return policy.pad(batch, 1).to(device, core.dtype), state
+
+    def infer(sample: LiberoSample, raw: dict[str, Any]) -> dict[str, Any]:
+        batch, state = prepare(sample, raw)
         prefix, normalized, timing = timed_model(
             lambda: policy.encode_prefix(batch),
             lambda prefix: policy.decoder.integrate(
@@ -536,6 +548,26 @@ def build(
         )
         actions = policy.finalize_actions(normalized, prefix)[0].float().cpu()
         return {**output_record(processor.restore_actions(actions, state)), "model_timing_ms": timing}
+
+    def warm_native_layouts(samples: list[LiberoSample]) -> list[list[Any]]:
+        """Capture every native language-bucket graph before timing; return warmed layouts."""
+        if not policy.native_inference:
+            return []
+        warmed: set[tuple[int, bool]] = set()
+        for sample in samples:
+            raw = read_libero(sample)
+            batch, _ = prepare(sample, raw)
+            length = int(batch.masks.sum())
+            bucket = next(
+                (n for n in (16, 32, 48, 64, 96, 128, 160, 200) if n >= length), batch.tokens.shape[1]
+            )
+            layout = (bucket, length == bucket)
+            if layout not in warmed:
+                infer(sample, raw)
+                warmed.add(layout)
+        return [list(layout) for layout in sorted(warmed)]
+
+    infer.warm_native_layouts = warm_native_layouts  # type: ignore[attr-defined]
 
     def runtime_stats() -> dict[str, Any]:
         from embodiinfer.policies.pi05 import modeling_pi05
