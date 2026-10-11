@@ -278,6 +278,20 @@ def main(argv: list[str] | None = None) -> int:
         "--output", type=Path, required=True, help="New model capture directory (JSONL for --catalog)"
     )
     capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
+    capture_ops = commands.add_parser(
+        "capture-ops", help="Record operator-registry calls as a tunable model capture (model runtime)"
+    )
+    capture_ops.add_argument("--model", required=True, help="Canonical policy name built by the driver")
+    capture_ops.add_argument("--ops", help="Comma-separated registry operators (default: every one called)")
+    capture_ops.add_argument("--warmup", type=int, default=2, help="Inference steps skipped before recording")
+    capture_ops.add_argument("--steps", type=int, default=8, help="Inference steps recorded")
+    capture_ops.add_argument(
+        "--fixture-bytes", type=int, default=1 << 30, help="Maximum stored real-input bytes"
+    )
+    capture_ops.add_argument("--output", type=Path, required=True, help="New capture directory")
+    capture_ops.add_argument(
+        "script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]"
+    )
     hotspots = commands.add_parser(
         "profile", help="Rank where end-to-end inference spends GPU time (model runtime)"
     )
@@ -299,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     skeleton.add_argument("--revision", required=True, help="Immutable commit to copy")
     skeleton.add_argument("--output", type=Path, required=True)
     raw = sys.argv[1:] if argv is None else argv
-    if "--" in raw and raw[0] in ("capture", "profile"):
+    if "--" in raw and raw[0] in ("capture", "capture-ops", "profile"):
         split = raw.index("--")
         raw, command = raw[:split], raw[split + 1 :]
     else:
@@ -332,6 +346,20 @@ def main(argv: list[str] | None = None) -> int:
                     command or args.script, args.output, args.model, fixture_bytes=args.fixture_bytes
                 )
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "capture-ops":
+            from .regions import run as run_op_capture
+
+            ops = {name.strip() for name in args.ops.split(",") if name.strip()} if args.ops else None
+            result = run_op_capture(
+                command or args.script,
+                args.output,
+                args.model,
+                ops=ops,
+                warmup=args.warmup,
+                steps=args.steps,
+                fixture_bytes=args.fixture_bytes,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
         elif args.command == "profile":
             from .hotspots import render
             from .hotspots import run as run_profile

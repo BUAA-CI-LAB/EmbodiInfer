@@ -62,6 +62,10 @@ def policy(identity: dict[str, Any]) -> str | None:
         return None
     if any(dtype not in {"float16", "bfloat16", "float32"} for dtype in identity.get("output_dtypes", [])):
         return None
+    if identity["kind"] == "registry":
+        # Registry operators define their mathematics by a Torch reference,
+        # which also evaluates it in FP64 (embodiinfer.backend.torch.ops).
+        return "registry"
     name = identity["name"]
     if identity["kind"] == "aten" and name.split(".")[1] in _ATEN:
         return "aten"

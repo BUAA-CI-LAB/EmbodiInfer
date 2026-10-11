@@ -99,6 +99,11 @@ def _arguments(identity: dict[str, Any], inputs: list[torch.Tensor]) -> dict[str
             arg.name: args[i] if i < len(args) else kwargs.get(arg.name, arg.default_value)
             for i, arg in enumerate(schema.arguments)
         }
+    if identity["kind"] == "registry":
+        import inspect
+
+        function = getattr(importlib.import_module(identity["module"]), identity["entry"])
+        return {**dict(zip(inspect.signature(function).parameters, args)), **kwargs}
     names = {
         "split_kv_attention": (
             "query",
@@ -198,6 +203,9 @@ def high_precision(identity: dict[str, Any], inputs: list[torch.Tensor]) -> list
         raise ContractError("No trusted high-precision adapter for this operator")
     promoted = [x.to(torch.float64) if x.is_floating_point() else x for x in inputs]
     args = _arguments(identity, promoted)
+    if kind == "registry":
+        # The Torch reference is dtype-generic: FP64 inputs give an FP64 oracle.
+        return production(identity, promoted)
     if kind == "aten":
         _, name, overload = identity["name"].split(".")
         if name == "scaled_dot_product_attention":

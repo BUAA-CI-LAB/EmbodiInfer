@@ -92,6 +92,16 @@ def _sources(op: dict[str, Any]) -> tuple[str, dict[str, str]]:
         imports, callable_name = f"import torch\nfrom .vendor.{module} import {entry}\n", entry
         if module == "embodiinfer.backend.triton.sampling":
             imports += f"from .vendor.{module} import GreedyWorkspace\n"
+    elif identity["kind"] == "registry":
+        module, entry = identity["module"], identity["entry"]
+        if module != "embodiinfer.backend.torch.ops" or not entry.isidentifier():
+            raise ContractError("Registry tasks take their baseline from embodiinfer.backend.torch.ops")
+        for name, key in ((module, "source_digests"), (identity["start_module"], "start_digests")):
+            vendored = vendor_sources(name)
+            if {path: source_digest for path, (_, source_digest) in vendored.items()} != identity[key]:
+                raise ContractError(f"Registry operator source changed since capture: {name}")
+            files.update({path: text for path, (text, _) in vendored.items()})
+        imports, callable_name = f"import torch\nfrom .vendor.{module} import {entry}\n", entry
     else:
         raise ContractError(f"No task builder for {identity['kind']}")
     args, kwargs = identity["arguments"]["tuple"]
@@ -106,7 +116,8 @@ def _sources(op: dict[str, Any]) -> tuple[str, dict[str, str]]:
 def _plan(
     capture: ModelCapture, op: dict[str, Any], overrides: dict[str, Any], hardware_notes: Path | None
 ) -> dict[str, str | bytes]:
-    name = "discovered_" + op["id"]
+    registry = op["identity"]["kind"] == "registry"
+    name = (f"registry_{op['identity']['op']}_" if registry else "discovered_") + op["id"]
     unsupported = {
         spec["dtype"] for case in op["workloads"] for spec in case["inputs"] + case["outputs"]
     } - _DTYPES
@@ -192,9 +203,12 @@ def _plan(
         outputs={},
         reference=code,
         workloads=tuple(Workload(case["id"], {}, weight=case["count"]) for case in op["workloads"]),
-        notes="Single observed operator; no new fusion.",
+        notes="Registry operator; the Torch reference is the baseline."
+        if registry
+        else "Single observed operator; no new fusion.",
         precision=precision,
-        timing="eager",
+        # Registry operators run inside the model's CUDA graphs in production.
+        timing="cuda_graph" if registry else "eager",
     )
     settings = tuning_settings(descriptor, overrides)
     if identity.get("rng") and settings["timing"]["mode"] != "eager":
@@ -252,6 +266,30 @@ def _plan(
             ),
         }
     )
+    if registry:
+        start = identity["start_module"].replace(".", "/")
+        sources["README.md"] = (
+            f"# {identity['op']}\n\nTarget: `{capture.manifest['target']['model']}`.\n"
+            f"Capture: `{capture.identity}`.\n\n"
+            "Write a faster implementation of this operator-registry entry. The baseline to "
+            "beat is the Torch reference in baseline.py "
+            f"(`vendor/embodiinfer/backend/torch/ops.py::{identity['entry']}`); the repository's "
+            f"current implementation, `vendor/{start}.py::{identity['start_entry']}`, is a valid "
+            "starting point. Keep the call signature, return outputs with exactly the recorded "
+            "shapes, strides and dtypes in replay.json, use return-value style "
+            "(destination_passing_style=false), and do not change dtypes, masks or numerical "
+            "settings. Every recorded workload is mandatory and weighted by its call count in "
+            "the model. The installed kernel is used only for these recorded argument layouts, "
+            "so you may specialize on them.\n"
+        )
+        sources["generated.json"] = json.dumps(
+            {
+                "generator": "scripts.kernel_tuning.regions",
+                "capture_identity": capture.identity,
+                "operator_id": op["id"],
+                "registry_op": identity["op"],
+            }
+        )
     if hardware_notes is not None:
         sources["HARDWARE.md"] = hardware_notes.read_text(encoding="utf-8")
     if numerical is not None:
