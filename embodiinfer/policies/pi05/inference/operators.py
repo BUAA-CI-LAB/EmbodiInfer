@@ -23,8 +23,10 @@ from ....layers import (
     rotary_backends,
 )
 from ....layers.activation import GeluMulBackend, PairedGeluBackend
+from ....layers.attention_preparation import rotary_attention_backends
 from ....layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
 from ....layers.quantization import ActivationQuantizer, ProjectionBackend
+from ....layers.weight_only import weight_only_backends
 from ..embeddings import openpi_rlinf_rope_tables, rope_tables
 from .config import MlpLayerPrecision, Pi05OptimizationConfig
 
@@ -114,7 +116,16 @@ class Pi05OperatorPlans:
         self.paired: dict[bool, PairedGeluBackend] = {}
         if self.norm is not None and self.norm.capabilities.arithmetic != "torch_rmsnorm_bf16_rounding":
             raise ValueError("Pi05 requires the strict Torch RMSNorm rounding contract")
-        if config.fused_mlp or config.has_quantized_mlp:
+        if config.mlp_weights is not None:
+            from .weights import MlpWeightArchive
+
+            if not config.prefix_kv_only:
+                raise ValueError("W4A16 requires the final unused prefix MLP to be skipped")
+            self.weight_archive = MlpWeightArchive(
+                config.mlp_weights, config.checkpoint_sha256, layers=len(policy._prefix_tower.layers)
+            )
+            self.weight_only = weight_only_backends.get(selected.weight_only, request)
+        if (config.fused_mlp and config.mlp_weights is None) or config.has_quantized_mlp:
             self.projection = projection_backends.get(selected.projection, request)
         if config.has_quantized_mlp:
             bits = 4 if any("nvfp4" in (layer.gate_up, layer.down) for layer in precision_layers) else 8
@@ -134,7 +145,7 @@ class Pi05OperatorPlans:
                 )
                 if self.norm_quant.capabilities.arithmetic != "torch_rmsnorm_bf16_rounding":
                     raise ValueError("Pi05 requires strict RMSNorm/encoding rounding")
-        if config.fused_mlp:
+        if config.fused_mlp and config.mlp_weights is None:
             for prefix in (False, True):
                 self.paired[prefix] = paired_gelu_backends.get(
                     selected.paired_gelu,
@@ -144,7 +155,17 @@ class Pi05OperatorPlans:
                     large_m=prefix,
                 )
         self.attention = None
-        if config.attention != "reference":
+        self.rotary_attention = (
+            rotary_attention_backends.get(selected.attention_preparation, request)
+            if config.attention == "rotary_strict"
+            else None
+        )
+        self.attention_projection = projection_backends.get(selected.attention_projection, request)
+        self.attention_plans = {}
+        self.dense_plans = {}
+        self.active_attention_prefix = None
+        self._expert_attention = {id(layer.self_attn) for layer in policy._expert_tower.layers}
+        if config.attention not in ("reference", "rotary_strict"):
             name = config.attention
             if name == "query_major" and config.hardware == "spark":
                 name = "query_major_cuda"
@@ -174,6 +195,64 @@ class Pi05OperatorPlans:
     def rotate(self, inputs: torch.Tensor, cosine: torch.Tensor, sine: torch.Tensor) -> torch.Tensor:
         """Adapt BHSD storage to the reusable BTNH rotary contract."""
         return self.rotary(inputs.transpose(1, 2), sine, cosine).transpose(1, 2)
+
+    def project_attention(self, module: Any, inputs: torch.Tensor, *, expert: bool) -> torch.Tensor:
+        """Apply the selected BF16 prefix Q/O plan; expert projections retain Torch GEMMs."""
+        if expert or self.config.operators.attention_projection == "torch":
+            return module(inputs)
+        if module.bias is not None:
+            raise ValueError("Prepared prefix attention projections require bias-free weights")
+        if id(module) not in self.dense_plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Prepare prefix projection weights before capture")
+            self.dense_plans[id(module)] = self.attention_projection.plan(
+                module.weight, 1.0, "bf16", None, self.workspace_key
+            )
+        return self.dense_plans[id(module)].apply(inputs, None)
+
+    def _attention_plan(self, module: Any, batch: int, length: int, prefix: int = 0) -> Any:
+        key = (id(module), batch, length, prefix, self.workspace_key(module.q_proj.weight.device))
+        if key not in self.attention_plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Warm strict rotary attention shapes before capture")
+            heads = module.q_proj.weight.shape[0] // module.head_dim
+            kv_heads = module.k_proj.weight.shape[0] // module.head_dim
+            self.attention_plans[key] = self.rotary_attention.plan(
+                (batch, length, heads, module.head_dim), kv_heads=kv_heads, prefix_length=prefix
+            )
+        return self.attention_plans[key]
+
+    def attend_rotary(
+        self,
+        module: Any,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cosine: torch.Tensor,
+        sine: torch.Tensor,
+        mask: torch.Tensor | None,
+        prefix: tuple | None,
+    ) -> tuple:
+        """Adapt policy BHSD caches and Boolean padding to the prepared BTNH contract."""
+        plan = self._attention_plan(
+            module, query.shape[0], query.shape[1], 0 if prefix is None else prefix[0].shape[2]
+        )
+        if prefix is not None:
+            active = (
+                None if self.active_attention_prefix is None else self.active_attention_prefix.get(id(module))
+            )
+            if active is None:
+                plan.load_prefix(
+                    prefix[0].transpose(1, 2).contiguous(), prefix[1].transpose(1, 2).contiguous()
+                )
+            elif any(a is not b for a, b in zip(active, prefix, strict=True)):
+                raise ValueError("Strict attention requires the active request's prefix")
+        allowed = None
+        if mask is not None:
+            allowed = mask if mask.dtype == torch.bool else mask == 0
+            allowed = allowed[:, 0].expand(-1, query.shape[1], -1).contiguous()
+        context, key, value = plan(query, key, value, sine, cosine, allowed)
+        return context, (key.transpose(1, 2), value.transpose(1, 2))
 
     @staticmethod
     def reference_attention(
@@ -217,6 +296,11 @@ class Pi05OperatorPlans:
                     del plans[key]
         for mlp in self.mlp_plans.values():
             mlp.release_scope(scope)
+        for key in tuple(self.attention_plans):
+            if key[-1] == scope:
+                del self.attention_plans[key]
+        for projection in self.dense_plans.values():
+            projection.release_scope(scope)
 
     def validate_request(self, batch_size: int, steps: int | None = None) -> None:
         """Reject shapes outside measured profiles before graph creation."""
@@ -228,6 +312,10 @@ class Pi05OperatorPlans:
             raise ValueError("Thor/Spark Pi05 launch profiles require B1, horizon10 and 10 denoise steps")
         if self.config.attention == "folded_flash" and batch_size != 1:
             raise ValueError("Pi05 folded FlashAttention currently requires B1 prefix compaction")
+        if self.config.mlp_weights is not None and (
+            batch_size != 1 or self.policy.config.action_horizon != 10 or steps not in (None, 10)
+        ):
+            raise ValueError("Orin W4A16 launch profiles require B1, horizon10 and 10 denoise steps")
 
     def _norm_plan(self, norm: Any, inputs: torch.Tensor) -> Any:
         key = (id(norm), tuple(inputs.shape), inputs.device, self.workspace_key(inputs.device))
@@ -275,11 +363,16 @@ class Pi05OperatorPlans:
         )
 
     def _mlp_plan(self, module: Any, *, expert: bool) -> Any:
-        from .mlp import MlpPlan
+        from .mlp import MlpPlan, WeightOnlyMlpPlan
 
         if id(module) not in self.mlp_plans:
             if torch.cuda.is_current_stream_capturing():
                 raise RuntimeError("Prepare MLP weights before CUDA Graph capture")
+            if self.config.mlp_weights is not None:
+                tower = self.policy._expert_tower if expert else self.policy._prefix_tower
+                index = next(i for i, block in enumerate(tower.layers) if block.mlp is module)
+                self.mlp_plans[id(module)] = WeightOnlyMlpPlan(self, module, index, expert=expert)
+                return self.mlp_plans[id(module)]
             layer = MlpLayerPrecision()
             layers = self.config.action_layers if expert else self.config.prefix_layers
             if layers:
@@ -418,14 +511,27 @@ class Pi05OperatorPlans:
                         and self.config.numerics != "openpi_rlinf",
                         approximate=self.approximate,
                     )
-            hidden = _gated_residual(hidden, update, gate, False, fused)
+            residual_plan = (
+                self._norm_plan(layer.post_attention_layernorm, hidden)
+                if self.norm is not None and self.config.mlp_weights is not None
+                else None
+            )
+            add_residual = getattr(residual_plan, "add_residual", None)
+            hidden = (
+                add_residual(hidden, update, gate)
+                if add_residual is not None
+                else _gated_residual(hidden, update, gate, False, fused)
+            )
         hidden, _ = self.normalize(tower.norm, hidden, affine(tower.norm, -1), native=fused)
         return hidden, collected
 
     @contextmanager
     def decode_context(self, prefix: Pi05Prefix) -> Iterator[None]:
         """Hoist prefix-dependent arithmetic and bind K/V storage for all steps."""
-        if getattr(self, "action_context", None) is not None:
+        if (
+            getattr(self, "action_context", None) is not None
+            or getattr(self, "active_attention_prefix", None) is not None
+        ):
             raise RuntimeError("Pi05 action contexts cannot be nested")
         if self.config.reuse_action_context:
             batch, length = prefix.batch_size, self.policy.config.action_horizon
@@ -441,15 +547,24 @@ class Pi05OperatorPlans:
                 cosine, sine = rope_tables(tower.rotary_emb, prefix.kv[0][0], positions)
             self.action_context = positions, mask, cosine, sine
         try:
+            if self.rotary_attention is not None:
+                self.active_attention_prefix = {}
+                for layer, (key, value) in zip(self.policy._expert_tower.layers, prefix.kv, strict=True):
+                    plan = self._attention_plan(
+                        layer.self_attn, key.shape[0], self.policy.config.action_horizon, key.shape[2]
+                    )
+                    plan.load_prefix(key.transpose(1, 2).contiguous(), value.transpose(1, 2).contiguous())
+                    self.active_attention_prefix[id(layer.self_attn)] = (key, value)
             with self._kv_context(prefix):
                 yield
         finally:
             self.action_context = None
+            self.active_attention_prefix = None
 
     @contextmanager
     def _kv_context(self, prefix: Pi05Prefix) -> Iterator[None]:
         """Copy each read-only prefix once, then overwrite only suffix K/V slots."""
-        if not self.config.kv_workspace:
+        if not self.config.kv_workspace or self.rotary_attention is not None:
             yield
             return
         if self.active_kv is not None:
@@ -504,9 +619,17 @@ class Pi05OperatorPlans:
     def clear(self) -> None:
         """Release transient storage after all policy graphs have been discarded."""
         self.norm_plans.clear()
+        self.attention_plans.clear()
+        for projection in self.dense_plans.values():
+            # Complete all scopes, including eager streams, before dropping descriptors.
+            close = getattr(projection, "close", None)
+            if close is not None:
+                close()
+        self.dense_plans.clear()
         self.quant_plans.clear()
         self.mlp_plans.clear()
         self.kv_buffers.clear()
         self.active_kv = None
+        self.active_attention_prefix = None
         self.active_sources.clear()
         self.action_context = self.vision = None

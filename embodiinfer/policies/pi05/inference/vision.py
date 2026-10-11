@@ -81,7 +81,7 @@ class SiglipPlan:
         hidden = (hidden.flatten(2).transpose(1, 2) + self.positions).bfloat16()
         for norm1, attention, norm2, first, second in self.layers:
             normalized = F.layer_norm(hidden, *norm1)
-            attended, _ = attention(normalized, normalized, normalized)
+            attended, _ = attention(normalized, normalized, normalized, average_attn_weights=False)
             hidden = hidden + attended
             hidden = hidden + F.linear(F.gelu(F.linear(F.layer_norm(hidden, *norm2), *first)), *second)
         return F.linear(F.layer_norm(hidden, *self.final_norm), *self.projector)

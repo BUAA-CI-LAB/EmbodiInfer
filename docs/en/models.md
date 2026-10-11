@@ -122,6 +122,7 @@ policy = make_policy(
 | Preset | Devices | Prefix / action MLP | Numerical contract |
 |---|---|---|---|
 | `strict` | Thor, Spark, Orin, RTX 4090 | BF16 / BF16 | LeRobot |
+| `w4a16` | Orin SM87 | GPTQ INT4 weights / BF16 activations in both MLP towers | `openpi_rlinf` |
 | `bf16` | Thor, Spark | BF16 / BF16 | `openpi_rlinf` |
 | `bf16-fp8` | Thor, Spark | BF16 / protected FP8 | `openpi_rlinf` |
 | `nvfp4-bf16` | Thor, Spark | NVFP4 / BF16 | `openpi_rlinf` |
@@ -147,6 +148,31 @@ encoder with the `openpi_rlinf` contract; Spark uses query-major attention and
 its CUDA prefix softmax launch.
 Query-major attention requires `torch.bmm(out_dtype=torch.float32)`.
 
+The Orin `w4a16` preset requires an external group64 GPTQ weight archive:
+
+```python
+policy = make_policy(
+    "pi05", checkpoint="/models/pi05", device_type="orin", preset="w4a16",
+    calibration="/models/pi05-gptq/manifest.json",
+)
+```
+
+It retains all ten denoising steps, BF16 attention/vision and FP32 QK/softmax.
+Marlin decodes calibrated INT4 weights during GEMM; no activation quantization,
+online weight quantization or runtime column permutation is used. Prefix
+GEMM/GeGLU, strict rotary/cache/softmax layout preparation and BF16 cuBLASLt Q/O
+plans are selected together. The manifest must bind all MLP shards to the exact
+checkpoint SHA256 and preserve natural-column codes and BF16 group64 scales;
+corrupt or incompatible artifacts fail before use. The factory stages checkpoint
+loading on CPU and releases original BF16 MLPs before CUDA placement; the
+calibrated archive becomes their weight source. These inference-only MLPs have
+no standalone BF16 state-dictionary or training fallback. Refit invalidates the
+recipe and requires a newly calibrated artifact.
+This is approximate weight compression, distinct from Blackwell NVFP4, and needs
+checkpoint/task-specific quality evaluation. It is validated for B1/H10/ten steps
+on SM87 with CUDA 12.6 and cuBLASLt 12.6.4. The native toolchain must be available before
+capture. The default presets on other devices are unchanged.
+
 There is no ambiguous `mixed` precision option. Pair names explicitly order
 prefix then action: for example, `bf16-nvfp4` and `fp8-nvfp4` express other
 combinations and require separately calibrated data.
@@ -160,11 +186,11 @@ The name identifies the checkpoint, not an optimization preset.
 Calibration is keyed by device, tower and format, and is loaded only when low
 precision is requested. Missing ranges fail explicitly; the checkpoint SHA256
 is checked before weight packing. Use `calibration="/path/to/calibration.json"`
-for independently calibrated weights or formats. Orin supports BF16 on this path;
+for independently calibrated weights or formats.
 RTX 4090 supports BF16/FP8 hardware, and NVFP4 requires Blackwell. The optimized
-presets currently cover Thor/Spark; other devices use `strict` or explicitly
-constructed operator configurations. Quantized GEMMs require the Torch API
-tested in 2.13.
+FP8/NVFP4 presets cover Thor/Spark; Orin also offers calibrated `w4a16`. Other devices use `strict` or explicitly
+constructed operator configurations. FP8/NVFP4 GEMMs require the Torch API
+tested in 2.13; the W4A16 path uses standalone CUDA and cuBLASLt.
 
 The `openpi_rlinf` numerical contract follows the inference code in RLinf's
 `openpi_rlinf` package: BF16 vision encoder/projector, FP32

@@ -121,6 +121,7 @@ def load_openpi_checkpoint(
     load_device: str | None = None,
     checkpoint_config: Mapping[str, Any] | None = None,
     use_orbax: bool,
+    low_cpu_mem_usage: bool = False,
 ) -> tuple[Any, OpenPiConfig]:
     """Load either OpenPI storage format with the same explicit processor recipe.
 
@@ -148,9 +149,14 @@ def load_openpi_checkpoint(
         weights = cached_orbax_weights(root)
     else:
         weights = root / "model.safetensors"
+    import torch
     from safetensors.torch import load_file
 
-    model = PI05Policy(recipe.native_config())
+    if low_cpu_mem_usage:
+        with torch.device("meta"):
+            model = PI05Policy(recipe.native_config())
+    else:
+        model = PI05Policy(recipe.native_config())
     tensors = load_file(str(weights), device="cpu")
     # OpenPI saves the inner model, LeRobot normally prefixes these with model.
     if tensors and all(key.startswith("model.") for key in tensors):
@@ -163,7 +169,23 @@ def load_openpi_checkpoint(
         tensors.pop(f"paligemma_with_expert.{tower}.lm_head.weight", None)
     # Never use LeRobot's broad from_pretrained exception handler for this path:
     # a missing tensor must not leave randomly initialized model parameters.
-    model.model.load_state_dict(tensors, strict=True)
+    if low_cpu_mem_usage:
+        expected = model.model.state_dict()
+        missing, unexpected = set(expected) - set(tensors), set(tensors) - set(expected)
+        if missing or unexpected:
+            raise RuntimeError(
+                f"OpenPI checkpoint key mismatch: missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+            )
+        for name, tensor in tensors.items():
+            if tensor.shape != expected[name].shape:
+                raise RuntimeError(f"OpenPI checkpoint shape mismatch: {name}")
+            tensors[name] = tensor.to(dtype=expected[name].dtype)
+        model.model.load_state_dict(tensors, strict=True, assign=True)
+        from .lerobot import _materialize_buffers
+
+        _materialize_buffers(model, torch.device("cpu"))
+    else:
+        model.model.load_state_dict(tensors, strict=True)
     del tensors
     logger.info("Loaded %s checkpoint: %s", "openpi-orbax" if use_orbax else "openpi-pytorch", root)
     return model.eval().to(load_device or "cpu"), recipe

@@ -72,6 +72,19 @@ StreamVLN 使用原生 W8A8 FP8。Thor 使用原生 W8A8 FP8 和原生 NVFP4。
 [架构指南](architecture.md#cuda-graph-capture)介绍 CUDA Graph 捕获机制；
 [多 GPU 并行](parallelism.md)介绍跨设备批处理和张量并行。
 
+### Pi05 的 Orin W4A16 preset
+
+使用 `make_policy("pi05", checkpoint=..., device_type="orin", preset="w4a16",
+calibration="/models/pi05-gptq/manifest.json")` 选择校准后的 group64 GPTQ 权重。
+两套 MLP 使用 INT4 权重、BF16 激活；attention 保留 FP32 QK/softmax，vision
+保留原 attention，仍执行完整十步 diffusion。它与 Blackwell 的 NVFP4 是不同格式。
+
+加载时先在 CPU 校验 checkpoint 和校准包，再释放原 BF16 MLP 并放置到 GPU，
+避免同时保留两份 MLP 权重。推理权重由外部校准包提供；不支持训练回退，refit 后
+需要重新校准。当前配方覆盖 SM87、B1/H10/十步及 cuBLASLt 12.6.4。
+部署前需单独验证任务成功率，算子逐位一致不等于 INT4 与 BF16 的任务质量相同。
+配置与数值约定见[英文模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
+
 ## 路线图 {#roadmap}
 
 **SmolVLA** 和基础 **OpenVLA** 模型是计划新增的模型。OpenVLA-OFT

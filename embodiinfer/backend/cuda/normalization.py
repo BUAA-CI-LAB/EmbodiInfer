@@ -27,7 +27,9 @@ class NormFusion:
         self.library.cc_norm.argtypes = [pointer] * 6 + [integer] * 4 + [pointer]
         self.library.cc_residual_square.argtypes = [pointer] * 5 + [integer] * 3 + [pointer]
         self.library.cc_residual_norm.argtypes = [pointer] * 8 + [integer] * 3 + [pointer]
-        for name in ("cc_norm", "cc_residual_square", "cc_residual_norm"):
+        self.library.cc_square.argtypes = [pointer] * 2 + [ctypes.c_int64, pointer]
+        self.library.cc_residual.argtypes = [pointer] * 4 + [ctypes.c_int64, integer, integer, pointer]
+        for name in ("cc_norm", "cc_residual_square", "cc_residual_norm", "cc_square", "cc_residual"):
             getattr(self.library, name).restype = integer
 
     @staticmethod
@@ -110,7 +112,15 @@ class NormPlan:
         self._validate_inputs(inputs)
         self._validate_affine(scale, modulation)
         if self.mode == "pointwise":
-            torch.square(inputs.float(), out=self.square)
+            with torch.cuda.device(inputs.device):
+                self.backend._check(
+                    self.backend.library.cc_square(
+                        inputs.data_ptr(),
+                        self.square.data_ptr(),
+                        inputs.numel(),
+                        torch.cuda.current_stream(inputs.device).cuda_stream,
+                    )
+                )
             torch.mean(self.square, dim=-1, keepdim=True, out=self.mean)
         return self._normalize_with_mean(inputs, scale, modulation)
 
@@ -198,3 +208,31 @@ class NormPlan:
                     )
                 )
         return self.residual, self.output, self.gate
+
+    def add_residual(
+        self, inputs: torch.Tensor, update: torch.Tensor, gate: torch.Tensor | None
+    ) -> torch.Tensor:
+        """Round gated multiplication and addition separately in one kernel."""
+        self._validate_inputs(inputs)
+        self._validate_inputs(update)
+        if gate is not None and (
+            gate.shape != (self.shape[0], 1, self.shape[2])
+            or gate.device != inputs.device
+            or gate.dtype != torch.bfloat16
+            or not gate.is_contiguous()
+        ):
+            raise ValueError("Residual gate must be contiguous same-device BF16 [B,1,D]")
+        with torch.cuda.device(inputs.device):
+            self.backend._check(
+                self.backend.library.cc_residual(
+                    inputs.data_ptr(),
+                    update.data_ptr(),
+                    gate.data_ptr() if gate is not None else None,
+                    self.residual.data_ptr(),
+                    inputs.numel(),
+                    self.shape[2],
+                    self.shape[1],
+                    torch.cuda.current_stream(inputs.device).cuda_stream,
+                )
+            )
+        return self.residual

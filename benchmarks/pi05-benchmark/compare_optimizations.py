@@ -51,9 +51,10 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--recipe", type=Path, help="Optimized combined NVFP4-prefix/FP8-action recipe")
-    parser.add_argument("--device", choices=("thor", "spark"), help="Candidate preset device")
-    parser.add_argument("--calibration", default="rlinf_libero", help="Calibration name or data path")
+    parser.add_argument("--recipe", type=Path, help="Resolved candidate recipe")
+    parser.add_argument("--device", choices=("thor", "spark", "orin"), help="Candidate preset device")
+    parser.add_argument("--preset", default="nvfp4-fp8", help="Candidate preset, such as w4a16 on Orin")
+    parser.add_argument("--calibration", help="Activation calibration or offline GPTQ manifest path")
     parser.add_argument("--baseline-revision", help="Recorded immutable revision of the baseline export")
     parser.add_argument("--matmul-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--warmup", type=int, default=3)
@@ -113,20 +114,27 @@ def main() -> None:
             if args.recipe is not None
             else Pi05OptimizationConfig.from_preset(
                 args.device,
-                "nvfp4-fp8",
+                args.preset,
                 calibration=args.calibration,
             )
         )
-        recipes = {
-            "optimized_compat_bf16": Pi05OptimizationConfig(
-                hardware=combined.hardware, fused_mlp=True, attention="folded_flash"
-            ),
-            "optimized_rlinf_bf16": replace(combined, action_layers=(), prefix_layers=()),
-            "optimized_rlinf_fp8": replace(combined, prefix_layers=()),
-            "optimized_rlinf_prefix_nvfp4": replace(combined, action_layers=()),
-            "optimized_rlinf_combined": combined,
-        }
-    model = load_lerobot_checkpoint(str(args.checkpoint), load_device="cuda", low_cpu_mem_usage=True)
+        recipes = (
+            {"optimized_w4a16": combined}
+            if combined.mlp_weights is not None
+            else {
+                "optimized_compat_bf16": Pi05OptimizationConfig(
+                    hardware=combined.hardware, fused_mlp=True, attention="folded_flash"
+                ),
+                "optimized_rlinf_bf16": replace(combined, action_layers=(), prefix_layers=()),
+                "optimized_rlinf_fp8": replace(combined, prefix_layers=()),
+                "optimized_rlinf_prefix_nvfp4": replace(combined, action_layers=()),
+                "optimized_rlinf_combined": combined,
+            }
+        )
+    weight_only = any(config is not None and config.mlp_weights is not None for config in recipes.values())
+    model = load_lerobot_checkpoint(
+        str(args.checkpoint), load_device="cpu" if weight_only else "cuda", low_cpu_mem_usage=True
+    )
     report = dict(
         role=args.role,
         source_root=str(source),
@@ -156,6 +164,8 @@ def main() -> None:
         baseline = args.role == "baseline"
         print(f"Preparing {name} ({args.matmul_precision})", flush=True)
         kwargs = {} if baseline else {"optimizations": config}
+        if weight_only:
+            kwargs["load_device"] = "cuda"
         policy = Pi05Policy(
             VLAPolicyConfig(name="pi0.5", action_dim=32, action_horizon=10, default_num_steps=10),
             model,

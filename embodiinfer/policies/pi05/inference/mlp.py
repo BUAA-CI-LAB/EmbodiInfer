@@ -1,4 +1,4 @@
-"""Calibrated projection adapters retaining the original checkpoint parameters."""
+"""Calibrated MLP execution from checkpoint parameters or offline weight archives."""
 
 from __future__ import annotations
 
@@ -12,6 +12,36 @@ from .config import MlpLayerPrecision
 
 if TYPE_CHECKING:
     from .operators import Pi05OperatorPlans
+
+
+class CalibratedMlp(torch.nn.Module):
+    """MLP dimensions backed by the checkpoint-bound external weight archive.
+
+    No original BF16 MLP tensors are retained. The policy controller prepares
+    compressed execution weights on the final device. This module deliberately
+    has no eager/training fallback or independently loadable state dictionary.
+    """
+
+    def __init__(self, hidden_size: int, intermediate_size: int) -> None:
+        """Retain validated projection dimensions without materializing weights."""
+        super().__init__()
+        self.shape = (intermediate_size, hidden_size)
+
+    @classmethod
+    def from_module(cls, module: Any) -> CalibratedMlp:
+        """Validate the original checkpoint layout before releasing BF16 parameters."""
+        if isinstance(module, cls):
+            return module
+        shape = tuple(module.gate_proj.weight.shape)
+        if module.up_proj.weight.shape != shape or module.down_proj.weight.shape != tuple(reversed(shape)):
+            raise ValueError("W4A16 requires matching gate/up/down MLP dimensions")
+        if any(p.bias is not None for p in (module.gate_proj, module.up_proj, module.down_proj)):
+            raise ValueError("W4A16 MLP projections must be bias-free")
+        return cls(shape[1], shape[0])
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Reject execution outside the prepared checkpoint-bound policy plans."""
+        raise RuntimeError("Calibrated MLPs require their policy's prepared W4A16 execution plans")
 
 
 class MlpPlan:
@@ -84,3 +114,42 @@ class MlpPlan:
         if self.down.precision == "bf16":
             return self.down.apply(result.output.reshape_as(gate), None)
         return self.down.apply(gate, result)
+
+
+class WeightOnlyMlpPlan:
+    """Frozen calibrated W4 weights with BF16 activations and exact rounded GELU."""
+
+    def __init__(self, runtime: Pi05OperatorPlans, module: Any, index: int, *, expert: bool) -> None:
+        """Load two checkpoint-bound shards and pack without requantizing them."""
+        gate_shape = module.shape
+        down_shape = tuple(reversed(gate_shape))
+        self.runtime, self.expert = runtime, expert
+        codes, scales = runtime.weight_archive.load(
+            index, expert=expert, projection="gate_up", shape=(2 * gate_shape[0], gate_shape[1])
+        )
+        self.gate_up = runtime.weight_only.plan(
+            codes,
+            scales,
+            group_size=64,
+            workspace_key=runtime.workspace_key,
+            fused_gelu=True,
+            large_m=not expert,
+            blocks=16 if not expert else None,
+        )
+        codes, scales = runtime.weight_archive.load(index, expert=expert, projection="down", shape=down_shape)
+        self.down = runtime.weight_only.plan(
+            codes,
+            scales,
+            group_size=64,
+            workspace_key=runtime.workspace_key,
+            blocks=4 if expert else None,
+        )
+
+    def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Apply calibrated gate/up, rounded GeGLU and the down projection."""
+        return self.down(self.gate_up(inputs))
+
+    def release_scope(self, scope: WorkspaceKey) -> None:
+        """Drop private projection locks after their graph completes."""
+        self.gate_up.release_scope(scope)
+        self.down.release_scope(scope)

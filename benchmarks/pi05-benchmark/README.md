@@ -1,5 +1,37 @@
 # PI0.5 Benchmark
 
+## Orin NX 校准 W4A16（2026-10-12）
+
+部署使用 `device_type="orin", preset="w4a16", calibration="/models/pi05-gptq/manifest.json"`。
+group64 GPTQ 仅压缩两套 MLP 权重，激活保持 BF16，attention 保持 FP32 QK/softmax、
+BF16 query/probability，vision 保留原 MHA。使用完整十步 diffusion，B1、horizon10。
+配方包含 prefix GEMM/GeGLU、严格 residual/norm、RoPE/KV/layout 融合以及 BF16 Q/O
+cuBLASLt 配置；它是 INT4 weight-only 路径，不是 Blackwell NVFP4。
+
+真实权重验证使用 Jetson Orin NX SM87/8 SM、GPU 918 MHz、Torch 2.9.1/CUDA 12.6、
+cuBLASLt 12.6.4。checkpoint SHA256 为
+`4616e4c1966a5fb063b442ea5d69857f45e873222d839b794634d87d252ab9e7`，
+GPTQ manifest SHA256 为
+`acb66bcca3e599dc66ed2a0f9d28992f53c98539be7bf4cd86d4c44bac3946c4`。
+八条录制观测的完整 32 维动作逐位等于冻结的已校准 GPTQ 实现，graph/eager 逐位一致。
+这是迁移正确性验证，不能解释为 W4 与原 BF16 的逐位一致或任务成功率不下降。
+NX 的现有 LeRobot/Transformers 安装不匹配；此轮验证通过已加载模型接口和共享真实
+checkpoint 张量的容器适配，全部 forward 使用本仓库实现，未修改设备环境。
+checkpoint factory 的真实加载尚需在项目规定的匹配依赖环境中验证。
+
+在匹配的 LeRobot 环境中，可沿用下文的独立源码对照入口：
+
+```bash
+python benchmarks/pi05-benchmark/compare_optimizations.py \
+  --role candidate --source /workspace/EmbodiInfer --device orin --preset w4a16 \
+  --calibration /models/pi05-gptq/manifest.json \
+  --checkpoint /models/pi05 --inputs /data/inputs.pt \
+  --matmul-precision highest --out runs/orin-w4a16
+```
+
+原 BF16 基线仍使用下文的冻结 PR 前源码和独立进程。新增融合不能进入基线。
+权重校准、图像预处理、H2D、冷启动/编译/捕获和模拟器均须与准备好的 GPU 推理计时分开报告。
+
 ## Pi05 推理优化的验证入口
 
 新实现通过 `Pi05OptimizationConfig` 显式启用。优化结果见下文独立基线与三平台验证；

@@ -37,8 +37,36 @@ def resolve_preset(
         if calibration is not None:
             raise ValueError("The strict BF16 preset does not use calibration")
         return Pi05OptimizationConfig(hardware=device)
+    if preset == "w4a16":
+        if device != "orin" or calibration is None:
+            raise ValueError("The W4A16 preset requires Orin and an offline GPTQ weight manifest")
+        manifest = Path(calibration).expanduser().resolve()
+        if manifest.is_dir():
+            manifest /= "manifest.json"
+        data = json.loads(manifest.read_text())
+        if (data.get("status"), data.get("method"), data.get("bits"), data.get("group_size")) != (
+            "complete",
+            "gptq-static-actorder",
+            4,
+            64,
+        ):
+            raise ValueError("W4A16 requires a complete static-column group64 GPTQ archive")
+        return Pi05OptimizationConfig(
+            hardware=device,
+            numerics="openpi_rlinf",
+            activation="gelu_pytorch_exact",
+            fused_mlp=True,
+            batch_cameras=True,
+            compact_prefix=True,
+            prefix_kv_only=True,
+            reuse_action_context=True,
+            attention="rotary_strict",
+            checkpoint_sha256=data.get("checkpoint_sha256"),
+            mlp_weights=str(manifest),
+            operators=OperatorBackends(rotary="cuda", attention_projection="cublaslt"),
+        )
     if preset not in _OPTIMIZED:
-        raise ValueError("Pi05 preset must be strict, bf16 or a prefix-action pair such as nvfp4-fp8")
+        raise ValueError("Pi05 preset must be strict, bf16, w4a16 or a prefix-action pair such as nvfp4-fp8")
     prefix_mlp, action_mlp = _OPTIMIZED[preset]
     formats = {"prefix": prefix_mlp, "action": action_mlp}
     if device == "orin" and any(value != "bf16" for value in formats.values()):
