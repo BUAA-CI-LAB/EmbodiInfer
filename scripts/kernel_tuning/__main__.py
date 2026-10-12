@@ -385,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
             report = run_verify(
                 args.profile, args.output, command or args.script, samples=args.samples, seed=args.seed
             )
-            summary = {key: report[key] for key in ("passed", "inputs", "checks", "failed", "worst_ratio")}
+            summary = {key: report[key] for key in ("passed", "inputs", "failed", "worst_ratio")}
+            summary["outputs"] = {name: item["ratio"] for name, item in report["outputs"].items()}
             print(json.dumps(summary, indent=2))
             if not report["passed"]:
                 return 1

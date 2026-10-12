@@ -35,15 +35,20 @@ def test_flatten_outputs_splits_continuous_and_discrete_leaves():
     assert not any("timing" in name for name in leaves)
 
 
-def test_gate_uses_twice_the_baseline_error_with_floors():
-    reference = [_out([1.0, 2.0])]
-    baseline = [_out([1.001, 2.0])]
-    assert gate(reference, baseline, [_out([1.0015, 2.0005])])["passed"]  # rmse 1.12e-3 <= 1.41e-3
-    report = gate(reference, baseline, [_out([1.0025, 2.0])])
-    assert not report["passed"] and report["failed"] == 1
+def test_gate_compares_mean_and_worst_errors_over_all_inputs():
+    reference = [_out([1.0, 2.0]), _out([1.0, 2.0])]
+    baseline = [_out([1.001, 2.0]), _out([1.003, 2.0])]  # mean max-abs 2e-3, worst 3e-3
+    # The first input exceeds twice its own baseline error, but the means stay within 25%.
+    report = gate(reference, baseline, [_out([1.0024, 2.0]), _out([1.0, 2.0])])
+    assert report["passed"] and report["failed"] == []
+    report = gate(reference, baseline, [_out([1.003, 2.0]), _out([1.003, 2.0])])  # mean 3e-3 > 2.5e-3
+    assert not report["passed"] and report["failed"] == [".actions"]
+    report = gate(reference, baseline, [_out([1.0, 2.0]), _out([1.0065, 2.0])])  # worst 6.5e-3 > 6e-3
+    worst = report["outputs"][".actions"]["worst_max_abs"]
+    assert not report["passed"] and worst["candidate"] > worst["limit"]
     exact = [_out([1.0, 2.0])]
-    assert gate(reference, exact, [_out([1.00001, 2.0])])["passed"]  # within the 1e-4 / 1e-5 floors
-    assert not gate(reference, exact, [_out([1.0002, 2.0])])["passed"]
+    assert gate(exact, exact, [_out([1.00001, 2.0])])["passed"]  # within the 1e-4 / 1e-5 floors
+    assert not gate(exact, exact, [_out([1.0002, 2.0])])["passed"]
 
 
 def test_gate_requires_identical_discrete_outputs_and_comparable_reference():

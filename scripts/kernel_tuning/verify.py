@@ -9,9 +9,12 @@ times, each with a fixed per-input seed:
 * baseline: the requested dtype with ``kernel_profile: torch``;
 * candidate: the requested dtype with ``kernel_profile: NAME``.
 
-For every input, continuous outputs must satisfy ``max|C - R| <= max(1e-4, 2 max|B - R|)``
-and ``rms(C - R) <= max(1e-5, 2 rms(B - R))``; thresholds are fixed from the
-baseline before the candidate is compared. Discrete outputs (integers, strings,
+Continuous outputs are judged over all inputs together, per output name: the
+candidate's mean max-abs and mean RMSE error against the reference may exceed the
+baseline's by at most 25%, and its worst max-abs error may be at most twice the
+baseline's worst (floors 1e-4 and 1e-5). A single input's baseline error is not a
+threshold: Torch itself varies between runs by more than that on inputs where it
+happens to land close to the reference. Discrete outputs (integers, strings,
 booleans) must equal the baseline exactly. See docs/proposals/0009, Section 6.
 """
 
@@ -29,6 +32,9 @@ from .contracts import ContractError
 
 MAX_ABS_FLOOR = 1e-4
 RMSE_FLOOR = 1e-5
+# Mean errors over all inputs may grow by this factor; the worst input by WORST_FACTOR.
+MEAN_FACTOR = 1.25
+WORST_FACTOR = 2.0
 # A baseline this far from the FP32 reference means the two runs did not see the
 # same inputs or noise; the reference cannot calibrate a threshold then.
 INCOMPARABLE_FRACTION = 0.5
@@ -97,10 +103,10 @@ def gate(
     baseline: list[dict[str, tuple[str, Any]]],
     candidate: list[dict[str, tuple[str, Any]]],
 ) -> dict[str, Any]:
-    """Apply the frozen per-input thresholds; the baseline alone sets them."""
+    """Compare candidate and baseline errors against the reference over all inputs."""
     if not (len(reference) == len(baseline) == len(candidate)) or not reference:
         raise ContractError("All runs must produce one output per input")
-    rows, passed = [], True
+    rows, errors, passed = [], {}, True
     for index, (ref, base, cand) in enumerate(zip(reference, baseline, candidate)):
         if set(ref) != set(base) or set(base) != set(cand):
             raise ContractError(f"input {index}: output structure differs between runs")
@@ -120,38 +126,56 @@ def gate(
                     f"input {index} {name}: baseline differs from the FP32 reference by {base_abs:.3g} "
                     f"(scale {scale:.3g}); the runs did not share inputs/noise, so no threshold is valid"
                 )
-            max_abs_tol = max(MAX_ABS_FLOOR, 2 * base_abs)
-            rmse_tol = max(RMSE_FLOOR, 2 * base_rmse)
             cand_abs, cand_rmse = _error(cand[name][1], ref[name][1])
-            ok = cand_abs <= max_abs_tol and cand_rmse <= rmse_tol
-            passed &= ok
+            errors.setdefault(name, []).append((base_abs, base_rmse, cand_abs, cand_rmse))
             rows.append(
                 {
                     "input": index,
                     "output": name,
                     "kind": kind,
-                    "passed": ok,
                     "candidate_max_abs": cand_abs,
                     "candidate_rmse": cand_rmse,
                     "baseline_max_abs": base_abs,
                     "baseline_rmse": base_rmse,
-                    "max_abs_tolerance": max_abs_tol,
-                    "rmse_tolerance": rmse_tol,
                 }
             )
-    worst = max(
-        (row for row in rows if row["kind"] == "continuous"),
-        key=lambda row: row["candidate_max_abs"] / row["max_abs_tolerance"],
-        default=None,
-    )
+    outputs = {}
+    for name, values in sorted(errors.items()):
+        base_abs, base_rmse, cand_abs, cand_rmse = (list(column) for column in zip(*values))
+        checks = {
+            "mean_max_abs": (_mean(cand_abs), max(MAX_ABS_FLOOR, MEAN_FACTOR * _mean(base_abs))),
+            "mean_rmse": (_mean(cand_rmse), max(RMSE_FLOOR, MEAN_FACTOR * _mean(base_rmse))),
+            "worst_max_abs": (max(cand_abs), max(MAX_ABS_FLOOR, WORST_FACTOR * max(base_abs))),
+        }
+        ok = all(value <= limit for value, limit in checks.values())
+        passed &= ok
+        outputs[name] = {
+            "passed": ok,
+            "ratio": max(value / limit for value, limit in checks.values()),
+            **{key: {"candidate": value, "limit": limit} for key, (value, limit) in checks.items()},
+            "baseline": {
+                "mean_max_abs": _mean(base_abs),
+                "mean_rmse": _mean(base_rmse),
+                "worst_max_abs": max(base_abs),
+            },
+        }
     return {
         "passed": bool(passed),
         "inputs": len(reference),
-        "checks": len(rows),
-        "failed": sum(not row["passed"] for row in rows),
-        "worst_ratio": None if worst is None else worst["candidate_max_abs"] / worst["max_abs_tolerance"],
+        "outputs": outputs,
+        "failed": [name for name, item in outputs.items() if not item["passed"]]
+        + [
+            f"{row['output']}[{row['input']}]"
+            for row in rows
+            if row["kind"] == "discrete" and not row["passed"]
+        ],
+        "worst_ratio": max((item["ratio"] for item in outputs.values()), default=None),
         "rows": rows,
     }
+
+
+def _mean(values: list[float]) -> float:
+    return math.fsum(values) / len(values)
 
 
 def _run(args: argparse.Namespace, episodes: list[list[Any]], kind: str, profile: str, dtype: str, seed: int):
@@ -256,6 +280,7 @@ def run(profile: str, output: Path, driver_args: list[str], *, samples: int | No
             "seed": seed,
             "driver_args": driver_args,
             "floors": {"max_abs": MAX_ABS_FLOOR, "rmse": RMSE_FLOOR},
+            "factors": {"mean": MEAN_FACTOR, "worst": WORST_FACTOR},
         }
     )
     output.parent.mkdir(parents=True, exist_ok=True)

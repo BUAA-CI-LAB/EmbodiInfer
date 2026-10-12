@@ -247,10 +247,15 @@ candidate may be at most about twice as wrong as Torch.
 Model level (required for install):
 
 - Continuous outputs (action chunks): compute an FP32 Torch reference from the
-  same weights and inputs. Per observation, thresholds for max-abs and RMSE are
-  twice the error of the `kernel_profile: torch` run against that reference,
-  with floors `1e-4` and `1e-5`. Thresholds are frozen before any candidate runs
-  and every observation must pass.
+  same weights and inputs, and measure each run's max-abs and RMSE error per
+  observation. Over the whole evaluation set, the candidate's mean max-abs and
+  mean RMSE may exceed those of the `kernel_profile: torch` run by at most 25%,
+  and its worst max-abs may be at most twice Torch's worst (floors `1e-4` and
+  `1e-5`). Thresholds are frozen before any candidate runs. A per-observation
+  bound of twice Torch's error was tried first and rejected: on Jetson Thor,
+  40 pi0.5 observations, the existing Triton path failed it on 2 observations
+  where Torch happened to land within 1e-3 of the reference, while its mean
+  errors equalled Torch's and two Torch runs themselves differed per observation.
 - Discrete outputs (generated tokens or discrete actions): sequences must equal
   the `kernel_profile: torch` run on every evaluation input. A difference fails;
   there is no automatic waiver.
