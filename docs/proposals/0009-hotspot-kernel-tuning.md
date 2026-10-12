@@ -190,7 +190,14 @@ the evaluator checks is true on every workload. Expected model saving is
 
 `install` writes promoted sources and updates `profile.json`. It refuses an
 operator that is not registered by the current source, so a fusion region's code
-change must be merged first. `verify` runs the
+change must be merged first. The installed kernel applies only to the argument
+layouts the evaluator measured (shape, dtype and strides; strides of size-one
+dimensions and empty tensors are ignored) and otherwise falls back. Capture runs
+eagerly, so a policy must give registry arguments the same layout with and
+without `torch.compile`: on Jetson Thor the pi0.5 prefix K/V cache was a view of
+the fused projection in eager mode but contiguous under Inductor, and a tuned
+split-KV kernel was never selected until the cache was made contiguous in both.
+`verify` runs the
 model with `kernel_profile: <name>` against `kernel_profile: torch` on the
 evaluation set and applies the model-level gate; an operator is kept only if the
 whole profile passes. `benchmark` reports Torch, existing Triton and the profile

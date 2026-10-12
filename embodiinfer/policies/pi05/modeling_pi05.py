@@ -681,7 +681,9 @@ class Pi05Policy(FlowVLAPolicy):
             self._kernels,
         )
         if collected is not None:  # prefix pass: cache this layer's K/V
-            collected.append((k, v))
+            # Contiguous like Inductor's outputs, so the cache layout (which
+            # layout-gated tuned kernels match) is the same with or without compile.
+            collected.append((k.contiguous(), v.contiguous()))
         if native_expert and self.denoise_attention == "triton":
             # All action queries share the same prefix/suffix key validity.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
