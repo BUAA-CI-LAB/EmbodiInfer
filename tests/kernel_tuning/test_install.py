@@ -57,7 +57,11 @@ def export(tmp_path, monkeypatch):
         },
         "task/replay.json": {
             "torch_version": str(torch.__version__),
-            "numerical_identity": {"op": "gated_residual", "arguments": recipe},
+            "numerical_identity": {
+                "op": "gated_residual",
+                "arguments": recipe,
+                "input_dtypes": ["float32"] * 3,
+            },
             "cases": {"case": {"inputs": inputs}},
         },
         "solution.json": {"spec": {"language": "triton", "entry_point": "kernel.py::fast"}},
@@ -91,13 +95,19 @@ def test_installed_kernel_applies_only_to_verified_layouts(export, tmp_path):
     profile = tuned.load_profile(profiles / "testgpu")
     assert profile.ops["gated_residual"]["evidence"]["run_id"] == "run-1"
     op = KernelSelection(profile).resolve("gated_residual")
-    calls = profile.kernel("gated_residual").fn.__globals__["CALLS"]
+    calls = profile.kernel("gated_residual").fn.__globals__["run"].__globals__["CALLS"]
     x, gate = torch.ones(1, 2, 4), torch.full((1, 1, 4), 2.0)
     torch.testing.assert_close(op(x, x, gate), x + x * gate)
     assert calls == [(1, 2, 4)]
     y = torch.ones(1, 3, 4)
     torch.testing.assert_close(op(y, y, gate), y + y * gate)
     assert calls == [(1, 2, 4)]  # unverified layout fell back
+    z = torch.ones(2, 4).t().contiguous().t().unsqueeze(0)  # (1, 2, 4) with transposed strides
+    torch.testing.assert_close(op(z, z, gate), z + z * gate)
+    assert calls == [(1, 2, 4)]  # a different layout of the same shape also falls back
+    odd = torch.ones(5, 2, 4)[2:3]  # size-one batch dimension with another stride
+    torch.testing.assert_close(op(odd, odd, gate), odd + odd * gate)
+    assert calls == [(1, 2, 4), (1, 2, 4)]  # its stride addresses nothing, so it matches
     assert op.__closure__ is not None  # a dispatching wrapper, not the raw kernel
 
 
@@ -129,3 +139,17 @@ def test_only_registry_tasks_install(export, tmp_path):
     (root / "task" / "generated.json").write_text(json.dumps({"generator": "other"}), encoding="utf-8")
     with pytest.raises(ContractError, match="Only registry-operator tasks"):
         installer.install(root, "testgpu", root=tmp_path / "tuned")
+
+
+def test_installed_kernel_receives_only_tensor_arguments(export, tmp_path):
+    root, _ = export
+    replay = json.loads((root / "task" / "replay.json").read_text(encoding="utf-8"))
+    arguments = replay["numerical_identity"]["arguments"]["tuple"][0]["tuple"]
+    arguments.append({"constant": 0.5})  # e.g. an attention scale baked into the task
+    (root / "task" / "replay.json").write_text(json.dumps(replay), encoding="utf-8")
+    profiles = tmp_path / "tuned"
+    installer.install(root, "testgpu", root=profiles)
+    kernel = tuned.load_profile(profiles / "testgpu").kernel("gated_residual")
+    x, gate = torch.ones(1, 2, 4), torch.full((1, 1, 4), 2.0)
+    assert kernel.applies(x, x, gate, 0.5) and not kernel.applies(x, x, gate, 0.25)
+    torch.testing.assert_close(kernel.fn(x, x, gate, 0.5), x + x * gate)
