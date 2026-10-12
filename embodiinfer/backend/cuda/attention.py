@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import ctypes
+from typing import TYPE_CHECKING
 
 import torch
 
 from ...layers.registry import OperatorCapabilities
 from .native import build_library
+
+if TYPE_CHECKING:
+    from .qk import TensorCoreQk
 
 
 class StrictRotaryAttention:
@@ -21,6 +25,7 @@ class StrictRotaryAttention:
     capabilities = OperatorCapabilities(
         ("cuda",), (torch.bfloat16,), "fp32_scores_bf16_query_probability", minimum_sm=(8, 0)
     )
+    qk: TensorCoreQk | None = None
 
     def __init__(self) -> None:
         """Resolve packaged kernels on the registry's current device."""
@@ -76,6 +81,11 @@ class StrictAttentionPlan:
             self.key = torch.empty(full, device=backend.device, dtype=torch.bfloat16)
             self.key32 = torch.empty(full, device=backend.device, dtype=torch.float32)
             self.value = torch.empty_like(self.key)
+            self.qk_workspace = (
+                torch.empty(4 * 1024**2, device=backend.device, dtype=torch.uint8)
+                if prefix == 0 and backend.qk is not None
+                else None
+            )
 
     def _validate(self, tensor: torch.Tensor, shape: tuple, dtype: torch.dtype) -> None:
         if (
@@ -156,7 +166,11 @@ class StrictAttentionPlan:
             )
             values = self.value if self.prefix else value
             q = self.query.permute(0, 2, 1, 3).reshape(batch, tokens, 1, heads, width)
-            scores = torch.einsum("BTKGH,BSKH->BKGTS", q, self.key32)
+            scores = (
+                self.backend.qk(self.query, self.key32, self.qk_workspace)
+                if self.prefix == 0 and self.backend.qk is not None
+                else torch.einsum("BTKGH,BSKH->BKGTS", q, self.key32)
+            )
             storage = torch.empty(
                 (batch, 1, tokens, heads, columns), device=query.device, dtype=torch.bfloat16
             )
@@ -175,3 +189,18 @@ class StrictAttentionPlan:
             probabilities = storage.permute(0, 1, 3, 2, 4)
             output = torch.einsum("BKGTS,BSKH->BTKGH", probabilities, values)
         return output.reshape(batch, tokens, heads, width), self.key, values
+
+
+class TensorCorePrefixAttention(StrictRotaryAttention):
+    """Use private TF32 QK for prefix attention; keep action QK and softmax strict."""
+
+    capabilities = OperatorCapabilities(
+        ("cuda",), (torch.bfloat16,), "tf32_prefix_fp32_softmax_bf16_probability", minimum_sm=(8, 0)
+    )
+
+    def __init__(self) -> None:
+        """Prepare the strict layout kernels and a private cuBLAS math mode."""
+        from .qk import TensorCoreQk
+
+        super().__init__()
+        self.qk = TensorCoreQk()

@@ -34,14 +34,14 @@ class CalibratedMlp(torch.nn.Module):
             return module
         shape = tuple(module.gate_proj.weight.shape)
         if module.up_proj.weight.shape != shape or module.down_proj.weight.shape != tuple(reversed(shape)):
-            raise ValueError("W4A16 requires matching gate/up/down MLP dimensions")
+            raise ValueError("Calibrated MLPs require matching gate/up/down dimensions")
         if any(p.bias is not None for p in (module.gate_proj, module.up_proj, module.down_proj)):
-            raise ValueError("W4A16 MLP projections must be bias-free")
+            raise ValueError("Calibrated MLP projections must be bias-free")
         return cls(shape[1], shape[0])
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Reject execution outside the prepared checkpoint-bound policy plans."""
-        raise RuntimeError("Calibrated MLPs require their policy's prepared W4A16 execution plans")
+        raise RuntimeError("Calibrated MLPs require their policy's prepared execution plans")
 
 
 class MlpPlan:
@@ -151,5 +151,32 @@ class WeightOnlyMlpPlan:
 
     def release_scope(self, scope: WorkspaceKey) -> None:
         """Drop private projection locks after their graph completes."""
+        self.gate_up.release_scope(scope)
+        self.down.release_scope(scope)
+
+
+class IntegerMlpPlan:
+    """Frozen prefix W8A8 projections with the original rounded exact GeGLU."""
+
+    def __init__(self, runtime: Pi05OperatorPlans, module: Any, index: int) -> None:
+        """Load calibrated codes and transforms through the integer backend contract."""
+        shape = module.shape
+        archive = runtime.weight_archive.integer_prefix
+        self.gate_up = runtime.integer_projection.plan(
+            *archive.load(index, projection="gate_up", shape=(2 * shape[0], shape[1])),
+            workspace_key=runtime.workspace_key,
+            fused_gelu=True,
+        )
+        self.down = runtime.integer_projection.plan(
+            *archive.load(index, projection="down", shape=tuple(reversed(shape))),
+            workspace_key=runtime.workspace_key,
+        )
+
+    def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Run both native integer projections including their activation transforms."""
+        return self.down(self.gate_up(inputs))
+
+    def release_scope(self, scope: WorkspaceKey) -> None:
+        """Release completed graph workspaces in both projection plans."""
         self.gate_up.release_scope(scope)
         self.down.release_scope(scope)

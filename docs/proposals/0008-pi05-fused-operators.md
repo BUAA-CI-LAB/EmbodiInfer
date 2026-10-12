@@ -137,6 +137,28 @@ These opt-in modules require the calibrated artifact for restoration and do not
 provide a training or independent BF16 state-dictionary fallback.
 Quantized task quality must be evaluated separately from exact migration parity.
 
+### Orin native integer prefix
+
+The additional opt-in `w8a8-w4a16` preset composes a rotated INT8 prefix archive
+with the existing GPTQ action archive. A small deployment bundle binds both
+manifests and the checkpoint by SHA256. Calibration and archive preparation stay
+offline. The integer projection protocol lives in `layers/integer.py`; its Triton
+backend owns native INT8/INT32 GEMM, weight scaling and exact rounded GeGLU.
+The CUDA encoder preserves the calibrated channel divisor, H128 butterfly,
+FP32 division, BF16 rounding and per-token INT8 rounding. The measured down
+encoder uses 512 threads; the smaller gate encoder uses 256. All activation/output
+storage follows the existing stream/graph scope contract.
+
+Prefix QK uses a private cuBLAS handle with TF32 math mode. It retains the original
+FP32 score/softmax storage and BF16 probability/PV path; action QK remains strict.
+Every attention execution owns its cuBLAS scratch until its graph is destroyed;
+handle dispatch is serialized and binds that scratch after selecting the stream.
+This avoids changing Torch global flags or monkeypatching attention dispatch.
+The existing strict attention backend and `w4a16` preset retain their arithmetic.
+The two numerical approximations require separate task-quality evidence.
+Selective W4A4 was screened separately and rejected; its kernels and CUTLASS
+dependency are not part of the runtime.
+
 ## 5. Model-agnosticism verdict
 
 The engine gains no model-name branches. Backends operate on tensors and public

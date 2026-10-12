@@ -24,6 +24,7 @@ from ....layers import (
 )
 from ....layers.activation import GeluMulBackend, PairedGeluBackend
 from ....layers.attention_preparation import rotary_attention_backends
+from ....layers.integer import integer_projection_backends
 from ....layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
 from ....layers.quantization import ActivationQuantizer, ProjectionBackend
 from ....layers.weight_only import weight_only_backends
@@ -125,6 +126,10 @@ class Pi05OperatorPlans:
                 config.mlp_weights, config.checkpoint_sha256, layers=len(policy._prefix_tower.layers)
             )
             self.weight_only = weight_only_backends.get(selected.weight_only, request)
+            if self.weight_archive.integer_prefix is not None:
+                self.integer_projection = integer_projection_backends.get(
+                    selected.integer_projection, request
+                )
         if (config.fused_mlp and config.mlp_weights is None) or config.has_quantized_mlp:
             self.projection = projection_backends.get(selected.projection, request)
         if config.has_quantized_mlp:
@@ -363,7 +368,7 @@ class Pi05OperatorPlans:
         )
 
     def _mlp_plan(self, module: Any, *, expert: bool) -> Any:
-        from .mlp import MlpPlan, WeightOnlyMlpPlan
+        from .mlp import IntegerMlpPlan, MlpPlan, WeightOnlyMlpPlan
 
         if id(module) not in self.mlp_plans:
             if torch.cuda.is_current_stream_capturing():
@@ -371,7 +376,11 @@ class Pi05OperatorPlans:
             if self.config.mlp_weights is not None:
                 tower = self.policy._expert_tower if expert else self.policy._prefix_tower
                 index = next(i for i, block in enumerate(tower.layers) if block.mlp is module)
-                self.mlp_plans[id(module)] = WeightOnlyMlpPlan(self, module, index, expert=expert)
+                self.mlp_plans[id(module)] = (
+                    IntegerMlpPlan(self, module, index)
+                    if not expert and self.weight_archive.integer_prefix is not None
+                    else WeightOnlyMlpPlan(self, module, index, expert=expert)
+                )
                 return self.mlp_plans[id(module)]
             layer = MlpLayerPrecision()
             layers = self.config.action_layers if expert else self.config.prefix_layers

@@ -123,6 +123,7 @@ policy = make_policy(
 |---|---|---|---|
 | `strict` | Thor, Spark, Orin, RTX 4090 | BF16 / BF16 | LeRobot |
 | `w4a16` | Orin SM87 | GPTQ INT4 weights / BF16 activations in both MLP towers | `openpi_rlinf` |
+| `w8a8-w4a16` | Orin SM87 | Rotated native INT8 prefix / GPTQ W4A16 action | `openpi_rlinf` |
 | `bf16` | Thor, Spark | BF16 / BF16 | `openpi_rlinf` |
 | `bf16-fp8` | Thor, Spark | BF16 / protected FP8 | `openpi_rlinf` |
 | `nvfp4-bf16` | Thor, Spark | NVFP4 / BF16 | `openpi_rlinf` |
@@ -173,6 +174,33 @@ checkpoint/task-specific quality evaluation. It is validated for B1/H10/ten step
 on SM87 with CUDA 12.6 and cuBLASLt 12.6.4. The native toolchain must be available before
 capture. The default presets on other devices are unchanged.
 
+The opt-in Orin `w8a8-w4a16` preset uses native integer Tensor Cores in the
+prefix MLPs and retains W4A16 in the action expert. Its independently calibrated
+prefix archive stores signed INT8 codes, FP32 per-output scales and channel
+divisors. The runtime fuses channel scaling, H128 rotation, BF16 rounding and
+per-token activation quantization; GEMM fuses scaling and rounded exact GeGLU.
+Each stream or captured execution owns private activation buffers. Attention
+uses a private cuBLAS TF32 handle for prefix QK, with FP32 softmax and the original
+BF16 probabilities/PV. Action QK stays strict FP32 and vision stays unchanged.
+No global Torch precision settings are modified. TF32 accumulation and integer
+quantization are approximate choices requiring task-specific evaluation.
+
+Bundle the existing independently calibrated archives without converting weights:
+
+```bash
+python scripts/prepare_pi05_mlp_bundle.py \
+  --prefix /models/pi05-int8/manifest.json \
+  --action /models/pi05-gptq/manifest.json \
+  --output /models/pi05-integer.json
+```
+
+Pass `preset="w8a8-w4a16", calibration="/models/pi05-integer.json"` to the same
+factory. The bundle binds both manifests by SHA256 and requires all used prefix
+projections to have passed their frozen calibration gates. Keep both referenced
+archive directories with the bundle. There is no runtime calibration or fallback
+to an uncalibrated quantizer. This preset requires Triton, SM87, B1/H10/ten steps
+and the same checkpoint as its artifacts; the existing `w4a16` preset is unchanged.
+
 There is no ambiguous `mixed` precision option. Pair names explicitly order
 prefix then action: for example, `bf16-nvfp4` and `fp8-nvfp4` express other
 combinations and require separately calibrated data.
@@ -188,7 +216,8 @@ precision is requested. Missing ranges fail explicitly; the checkpoint SHA256
 is checked before weight packing. Use `calibration="/path/to/calibration.json"`
 for independently calibrated weights or formats.
 RTX 4090 supports BF16/FP8 hardware, and NVFP4 requires Blackwell. The optimized
-FP8/NVFP4 presets cover Thor/Spark; Orin also offers calibrated `w4a16`. Other devices use `strict` or explicitly
+FP8/NVFP4 presets cover Thor/Spark; Orin also offers calibrated `w4a16` and
+`w8a8-w4a16`. Other devices use `strict` or explicitly
 constructed operator configurations. FP8/NVFP4 GEMMs require the Torch API
 tested in 2.13; the W4A16 path uses standalone CUDA and cuBLASLt.
 

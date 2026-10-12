@@ -97,7 +97,7 @@ class Pi05OptimizationConfig:
             if not isinstance(self.mlp_weights, str) or not self.mlp_weights.strip():
                 raise ValueError("mlp_weights must name an offline calibrated weight manifest")
             if self.has_quantized_mlp or self.numerics != "openpi_rlinf" or not self.fused_mlp:
-                raise ValueError("Calibrated W4A16 requires fused exact-GELU MLPs and BF16 activations")
+                raise ValueError("Calibrated integer archives require fused exact-GELU MLPs and BF16 inputs")
         for name in ("action_layers", "prefix_layers"):
             layers = getattr(self, name)
             if not isinstance(layers, tuple) or any(
@@ -172,6 +172,8 @@ class Pi05OptimizationConfig:
         resolved JSON for custom numerical contracts and operator ablations.
         Orin ``w4a16`` selects calibrated weight-only INT4 with BF16 activations;
         pass its external manifest/directory through ``calibration``.
+        ``w8a8-w4a16`` selects a checkpoint-bound bundle with rotated INT8 prefix
+        projections, W4A16 action projections and prefix-only TF32 QK.
         """
         from .presets import resolve_preset
 

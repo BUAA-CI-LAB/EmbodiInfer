@@ -45,3 +45,6 @@ rotary_attention_backends = BackendRegistry[RotaryAttentionBackend]("rotary atte
 rotary_attention_backends.register_lazy(
     "cuda_strict", "embodiinfer.backend.cuda.attention", "StrictRotaryAttention"
 )
+rotary_attention_backends.register_lazy(
+    "cuda_tf32_prefix", "embodiinfer.backend.cuda.attention", "TensorCorePrefixAttention"
+)

@@ -85,6 +85,18 @@ calibration="/models/pi05-gptq/manifest.json")` 选择校准后的 group64 GPTQ 
 部署前需单独验证任务成功率，算子逐位一致不等于 INT4 与 BF16 的任务质量相同。
 配置与数值约定见[英文模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
 
+`w8a8-w4a16` 则使用原生整数 W8A8 prefix MLP，action expert 保持 GPTQ W4A16。
+CUDA 编码融合通道缩放、H128 旋转、BF16 舍入和逐 token INT8 量化；整数 GEMM
+融合缩放和精确 BF16 GeGLU。每个 stream/graph 持有独立工作区。
+Prefix QK 使用私有 cuBLAS TF32 handle，softmax 保持 FP32，概率/PV 保持原 BF16；
+action QK 保持严格 FP32，vision 不变，不修改全局 Torch 精度设置。
+
+先用 `scripts/prepare_pi05_mlp_bundle.py --prefix INT8_MANIFEST --action GPTQ_MANIFEST
+--output BUNDLE` 组合已完成的独立校准产物，再传入 `preset="w8a8-w4a16",
+calibration=BUNDLE`。部署需保留两份被引用的权重目录。bundle 绑定 checkpoint、
+manifest 和 shard 摘要，运行时不重新校准或回退到未经校准的量化。
+此配方需要 Triton，仍限定 SM87、B1/H10/完整十步；量化与 TF32 都需要单独验证任务质量。
+
 ## 路线图 {#roadmap}
 
 **SmolVLA** 和基础 **OpenVLA** 模型是计划新增的模型。OpenVLA-OFT

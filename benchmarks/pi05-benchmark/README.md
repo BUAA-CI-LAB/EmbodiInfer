@@ -1,5 +1,53 @@
 # PI0.5 Benchmark
 
+## Orin NX 原生 W8A8 prefix / W4A16 action（2026-10-12）
+
+新增 opt-in `preset="w8a8-w4a16"`，部署参数与权重 bundle 见[模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
+Prefix 的17套 MLP 使用独立 trial30 校准的 H128/SmoothQuant alpha0.5 W8A8；
+action expert 保留 group64 GPTQ W4A16。整数 GEMM 融合 BF16 缩放/舍入和精确
+GeGLU，CUDA 编码融合通道缩放、旋转和逐 token 量化。Down 编码采用已验证的512线程布局。
+Prefix QK 使用私有 TF32 cuBLAS handle 与执行计划私有 scratch；action QK 保持严格
+FP32，softmax 保持 FP32，概率/PV 保持 BF16，vision 不变，不修改全局 Torch 精度。
+
+设备为 Orin NX SM87/8 SM、GPU918MHz，Torch2.9.1/CUDA12.6/cuBLASLt12.6.4，
+沿用下节同一 checkpoint 与 GPTQ archive。INT8 manifest SHA256：
+`44f8d44092160ddaebe8ba935705eb82087d289d560f2fb0d101da66eae409ad`。
+B1、horizon10、完整10-step；公共同步 wall 计时包含 vision、prefix/KV刷新、action
+解码，不包含预处理、H2D、加载、编译/捕获和模拟器。每条观测预热十次后测18次。
+
+| 观测 | 冻结实验组合 wall P50 ms | 最终生产实现 wall P50 ms |
+|---|---:|---:|
+| 1 | 322.189 | 321.948 |
+| 210 | 336.841 | 338.329 |
+| 490 | 338.250 | 338.215 |
+
+两列来自独立进程和不同测量轮次，仅验证迁移保留了原性能，不能把细小差异解释为
+新增加速，也不是相对原 EmbodiInfer BF16 的加速比。八条录制观测、全部32维动作
+逐位等于冻结实验组合；graph/eager/replay、更换图像/噪声、独立返回值、非默认stream
+通过。验证加载的213个运行时源码摘要与最终工作树一致。
+
+此前冻结实验组合的复用 Object/Goal trial46、seed47、chunk5 闭环筛选为19/20，
+原 BF16 为20/20，先前 W8A8 为19/20；19个严格匹配状态没有新增失败或成功。
+这些小样本已用于开发筛选，不能证明原 BF16 成功率非劣，也不是本次迁移的新闭环证据。
+NX 仍通过已加载模型接口验证实际 checkpoint 张量和本仓库 forward；为了避免无用
+临时 MLP 打包导致的 allocator 失败，夹具直接加载非 MLP 张量。初始失败日志保留。
+checkpoint factory 仍需匹配的 LeRobot/Transformers 环境验证。
+
+最后一轮选择性原生 W4A4 仅尝试 prefix gate/up，使用同一独立校准 divisor 与原始
+checkpoint 权重、逐输出 W4/逐 token A4，CUTLASS3.9.2的SM80整数Tensor Core后端
+在SM87上运行。SASS确认`IMMA.16864.S4.S4.SAT`，整数CPU子集、graph/replay/stream
+一致。计时包含旋转/量化、materialized INT32 GEMM及融合缩放/GeGLU epilogue：
+
+| Prefix层 | W8A8 ms | W4A4 ms | 重建 relative L2 | 预先固定门槛 |
+|---|---:|---:|---:|---:|
+|0|4.185|3.883|0.05801|0.02000|
+|8|4.204|3.874|0.15902|0.04641|
+|16|4.214|3.877|0.15524|0.05021|
+
+每层3712个独立校准token，三层完整算子收益中位数7.87%，低于预先固定20%扩展门槛，
+且三层均未通过质量门槛。因此停止扩展，没有W4A4端到端/闭环结果；其kernel和CUTLASS
+依赖不进入生产代码。这只拒绝本次固定配方，不能推广为所有W4A4方法的硬件上限。
+
 ## Orin NX 校准 W4A16（2026-10-12）
 
 部署使用 `device_type="orin", preset="w4a16", calibration="/models/pi05-gptq/manifest.json"`。
