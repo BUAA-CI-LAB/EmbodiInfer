@@ -15,6 +15,7 @@
  */
 
 
+// Fused M128 tiles use two warp groups sharing one compressed B tile.
 // Derived for Orin NX: BF16 operands and group64 quantization.
 // Adapted BF16 group64 kernels; upstream license retained.
 #ifndef MARLIN_CUDA_KERNEL_CUH
@@ -205,6 +206,16 @@ __global__ void MarlinNX(
   int  prob_k, // reduction dimension k
   int* locks // extra global storage for barrier synchronization
 ) {
+#if EI_MARLIN_KIND == 2
+  // Two M64 warp groups share one B tile in the fused M128 CTA. Each
+  // accumulator retains the original K order; smaller tiles keep one group.
+  constexpr int warp_groups = EI_MARLIN_KIND == 2 && thread_m_blocks == 8 ? 2 : 1;
+  constexpr int warp_threads = threads / warp_groups;
+  constexpr int warp_m_blocks = thread_m_blocks / warp_groups;
+  const int warp_group = warp_groups == 1 ? 0 : threadIdx.x / warp_threads;
+  const int warp_thread = warp_groups == 1 ? threadIdx.x : threadIdx.x % warp_threads;
+
+#endif
   // Each threadblock processes one "stripe" of the B matrix with (roughly) the same size, which might involve multiple
   // column "slices" (of width 16 * `thread_n_blocks`). Stripes are defined as shown in the 3x3 matrix 5 SM example:
   //   0 1 3
@@ -297,7 +308,11 @@ __global__ void MarlinNX(
   constexpr int a_gl_rd_delta_o = 16 * thread_k_blocks / 8; // delta between subsequent A tiles in global memory
   int a_gl_rd_delta_i = a_gl_stride * (threads / a_gl_rd_delta_o); // between subsequent accesses within a tile
   constexpr int a_sh_wr_delta = a_sh_stride * (threads / a_gl_rd_delta_o); // between shared memory writes
+#if EI_MARLIN_KIND == 2
+  constexpr int a_sh_rd_delta_o = 2 * ((warp_threads / 32) / (thread_n_blocks / 4)); // between shared memory tile reads
+#else
   constexpr int a_sh_rd_delta_o = 2 * ((threads / 32) / (thread_n_blocks / 4)); // between shared memory tile reads
+#endif
   constexpr int a_sh_rd_delta_i = a_sh_stride * 16; // within a shared memory tile
   constexpr int a_sh_stage = a_sh_stride * (16 * thread_m_blocks); // overall size of a tile
   constexpr int a_sh_wr_iters = ceildiv(a_sh_stage, a_sh_wr_delta); // number of shared write iterations for a tile
@@ -307,9 +322,19 @@ __global__ void MarlinNX(
   int b_gl_rd_delta_o = b_gl_stride * thread_k_blocks;
   int b_gl_rd_delta_i = b_gl_stride * (threads / b_sh_stride);
   constexpr int b_sh_wr_delta = threads;
+#if EI_MARLIN_KIND == 2
+  constexpr int b_sh_rd_delta = warp_threads;
+#else
   constexpr int b_sh_rd_delta = threads;
+#endif
   constexpr int b_sh_stage = b_sh_stride * thread_k_blocks;
+#if EI_MARLIN_KIND == 2
+  // B is copied cooperatively once, then read by both M warp groups.
+  constexpr int b_sh_wr_iters = b_sh_stage / warp_threads;
+  constexpr int b_gl_wr_iters = b_sh_stage / b_sh_wr_delta;
+#else
   constexpr int b_sh_wr_iters = b_sh_stage / b_sh_wr_delta;
+#endif
 
   int s_gl_stride = prob_n / 8;
   constexpr int s_sh_stride = 16 * thread_n_blocks / 8;
@@ -323,13 +348,21 @@ __global__ void MarlinNX(
   int a_sh_wr = a_sh_stride * (threadIdx.x / a_gl_rd_delta_o) + (threadIdx.x % a_gl_rd_delta_o);
   // Shared read index.
   int a_sh_rd = a_sh_stride * ((threadIdx.x % 32) % 16) + (threadIdx.x % 32) / 16;
+#if EI_MARLIN_KIND == 2
+  a_sh_rd += 2 * (((warp_thread) / 32) / (thread_n_blocks / 4)) + warp_group * (16 * warp_m_blocks) * a_sh_stride;
+#else
   a_sh_rd += 2 * ((threadIdx.x / 32) / (thread_n_blocks / 4));
+#endif
 
   int b_gl_rd = b_gl_stride * (threadIdx.x / b_sh_stride) + (threadIdx.x % b_sh_stride);
   b_gl_rd += b_sh_stride * slice_col;
   b_gl_rd += b_gl_rd_delta_o * slice_row;
   int b_sh_wr = threadIdx.x;
+#if EI_MARLIN_KIND == 2
+  int b_sh_rd = warp_thread;
+#else
   int b_sh_rd = threadIdx.x;
+#endif
 
   int s_gl_rd = s_gl_stride * ((thread_k_blocks * slice_row) / group_blocks) + s_sh_stride * slice_col + threadIdx.x;
   int s_sh_wr = threadIdx.x;
@@ -363,19 +396,35 @@ __global__ void MarlinNX(
   #pragma unroll
   for (int i = 0; i < a_sh_wr_iters; i++)
     a_sh_wr_trans[i] = transform_a(a_sh_wr_delta * i + a_sh_wr);
+#if EI_MARLIN_KIND == 2
+  int a_sh_rd_trans[b_sh_wr_iters][warp_m_blocks];
+#else
   int a_sh_rd_trans[b_sh_wr_iters][thread_m_blocks];
+#endif
   #pragma unroll
   for (int i = 0; i < b_sh_wr_iters; i++) {
     #pragma unroll
+#if EI_MARLIN_KIND == 2
+    for (int j = 0; j < warp_m_blocks; j++)
+#else
     for (int j = 0; j < thread_m_blocks; j++)
+#endif
       a_sh_rd_trans[i][j] = transform_a(a_sh_rd_delta_o * i + a_sh_rd_delta_i * j + a_sh_rd);
   }
 
   // Since B-accesses have non-constant stride they have to be computed at runtime; we break dependicies between
   // subsequent accesses with a tile by maintining multiple pointers (we have enough registers), a tiny optimization.
+#if EI_MARLIN_KIND == 2
+  const int4* B_ptr[b_gl_wr_iters];
+#else
   const int4* B_ptr[b_sh_wr_iters];
+#endif
   #pragma unroll
+#if EI_MARLIN_KIND == 2
+  for (int i = 0; i < b_gl_wr_iters; i++)
+#else
   for (int i = 0; i < b_sh_wr_iters; i++)
+#endif
     B_ptr[i] = B + b_gl_rd_delta_i * i + b_gl_rd;
 
   extern __shared__ int4 sh[];
@@ -384,15 +433,27 @@ __global__ void MarlinNX(
   int4* sh_b = sh_a + (stages * a_sh_stage);
   int4* sh_s = sh_b + (stages * b_sh_stage);
   // Register storage for double buffer of shared memory reads.
+#if EI_MARLIN_KIND == 2
+  FragA frag_a[2][warp_m_blocks];
+#else
   FragA frag_a[2][thread_m_blocks];
+#endif
   I4 frag_b_quant[2];
+#if EI_MARLIN_KIND == 2
+  FragC frag_c[warp_m_blocks][4][2];
+#else
   FragC frag_c[thread_m_blocks][4][2];
+#endif
   FragS frag_s[2][4];
 
   // Zero accumulators.
   auto zero_accums = [&] () {
     #pragma unroll
+#if EI_MARLIN_KIND == 2
+    for (int i = 0; i < warp_m_blocks * 4 * 2 * 4; i++)
+#else
     for (int i = 0; i < thread_m_blocks * 4 * 2 * 4; i++)
+#endif
       reinterpret_cast<float*>(frag_c)[i] = 0;
   };
 
@@ -410,7 +471,11 @@ __global__ void MarlinNX(
       }
       int4* sh_b_stage = sh_b + b_sh_stage * pipe;
       #pragma unroll
+#if EI_MARLIN_KIND == 2
+      for (int i = 0; i < b_gl_wr_iters; i++) {
+#else
       for (int i = 0; i < b_sh_wr_iters; i++) {
+#endif
         cp_async4_stream(&sh_b_stage[b_sh_wr_delta * i + b_sh_wr], B_ptr[i]);
         B_ptr[i] += b_gl_rd_delta_o;
       }
@@ -445,7 +510,11 @@ __global__ void MarlinNX(
     }
     int4* sh_a_stage = sh_a + a_sh_stage * pipe;
     #pragma unroll
+#if EI_MARLIN_KIND == 2
+    for (int i = 0; i < warp_m_blocks; i++)
+#else
     for (int i = 0; i < thread_m_blocks; i++)
+#endif
       ldsm4(frag_a[k % 2][i], &sh_a_stage[a_sh_rd_trans[k % b_sh_wr_iters][i]]);
     int4* sh_b_stage = sh_b + b_sh_stage * pipe;
     frag_b_quant[k % 2] = *reinterpret_cast<I4*>(&sh_b_stage[b_sh_rd_delta * (k % b_sh_wr_iters) + b_sh_rd]);
@@ -466,7 +535,11 @@ __global__ void MarlinNX(
       if (group_blocks != -1)
         scale(frag_b1, frag_s[k % 2][j], 1);
       #pragma unroll
+#if EI_MARLIN_KIND == 2
+      for (int i = 0; i < warp_m_blocks; i++) {
+#else
       for (int i = 0; i < thread_m_blocks; i++) {
+#endif
         mma(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
         mma(frag_a[k % 2][i], frag_b1, frag_c[i][j][1]);
       }
@@ -477,7 +550,11 @@ __global__ void MarlinNX(
   // dimension of a tile reasonable, we have multiple warps that accumulate their partial sums of the same output
   // location; which we have to reduce over in the end. We do in shared memory.
   auto thread_block_reduce = [&] () {
+#if EI_MARLIN_KIND == 2
+    constexpr int red_off = warp_threads / b_sh_stride / 2;
+#else
     constexpr int red_off = threads / b_sh_stride / 2;
+#endif
     if (red_off >= 1) {
       int red_idx = threadIdx.x / b_sh_stride;
       constexpr int red_sh_stride = b_sh_stride * 4 * 2;
@@ -677,7 +754,11 @@ __global__ void MarlinNX(
     c_gl_wr += (2 * thread_n_blocks) * slice_col;
 #endif
     int c_sh_wr = (4 * c_sh_stride) * ((threadIdx.x % 32) / 4) + (threadIdx.x % 32) % 4;
+#if EI_MARLIN_KIND == 2
+    c_sh_wr += 32 * ((warp_thread) / 32) + warp_group * (16 * warp_m_blocks) * (4 * c_sh_stride);
+#else
     c_sh_wr += 32 * (threadIdx.x / 32);
+#endif
 #if EI_MARLIN_KIND == 0
     int c_sh_rd = c_sh_stride * (threadIdx.x / (2 * thread_n_blocks)) + (threadIdx.x % (2 * thread_n_blocks));
 #elif EI_MARLIN_KIND == 2
@@ -696,9 +777,17 @@ __global__ void MarlinNX(
         res = __hmul2(res, s[0]);
       ((__nv_bfloat162*) sh)[idx] = res;
     };
+#if EI_MARLIN_KIND == 2
+    if ((warp_thread) / 32 < thread_n_blocks / 4) {
+#else
     if (threadIdx.x / 32 < thread_n_blocks / 4) {
+#endif
       #pragma unroll
+#if EI_MARLIN_KIND == 2
+      for (int i = 0; i < warp_m_blocks; i++) {
+#else
       for (int i = 0; i < thread_m_blocks; i++) {
+#endif
         #pragma unroll
         for (int j = 0; j < 4; j++) {
           int wr = c_sh_wr + 8 * j;
@@ -836,11 +925,19 @@ __global__ void MarlinNX(
       if (slice_iters) {
         a_gl_rd = a_gl_stride * (threadIdx.x / a_gl_rd_delta_o) + (threadIdx.x % a_gl_rd_delta_o);
         #pragma unroll
+#if EI_MARLIN_KIND == 2
+        for (int i = 0; i < b_gl_wr_iters; i++)
+#else
         for (int i = 0; i < b_sh_wr_iters; i++)
+#endif
           B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
         if (slice_col == 0) {
           #pragma unroll
+#if EI_MARLIN_KIND == 2
+          for (int i = 0; i < b_gl_wr_iters; i++)
+#else
           for (int i = 0; i < b_sh_wr_iters; i++)
+#endif
             B_ptr[i] -= b_gl_stride;
         }
         s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
@@ -888,7 +985,7 @@ const int SHARED_MEM = 96 * 1024; // max shared memory on compute capability 8.6
 #define NX_STAGES 3
 #endif
 #ifndef NX_MBLOCKS
-#define NX_MBLOCKS 4
+#define NX_MBLOCKS 8
 #endif
 #ifndef NX_TILE_N
 #define NX_TILE_N 256
@@ -905,7 +1002,8 @@ constexpr int nx_shared_bytes() {
 
 template <int M>
 int nx_resources(int* registers, int* occupancy) {
-  auto kernel = MarlinGeGLU<THREADS, M, NX_TILE_N / 16, 4, STAGES, 4>;
+  constexpr int tile_threads = M == 8 ? 256 : 128;
+  auto kernel = MarlinGeGLU<tile_threads, M, NX_TILE_N / 16, 4, STAGES, 4>;
   cudaFuncAttributes attributes;
   cudaError_t status = cudaFuncGetAttributes(&attributes, kernel);
   if (status != cudaSuccess) return static_cast<int>(status);
@@ -914,7 +1012,7 @@ int nx_resources(int* registers, int* occupancy) {
                                nx_shared_bytes<M>());
   if (status != cudaSuccess) return static_cast<int>(status);
   return static_cast<int>(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-      occupancy, kernel, THREADS, nx_shared_bytes<M>()));
+      occupancy, kernel, tile_threads, nx_shared_bytes<M>()));
 }
 
 #define CALL_IF(M) \
@@ -931,8 +1029,9 @@ int nx_resources(int* registers, int* occupancy) {
     if (launch_blocks < 1) return ERR_KERN_SHAPE; \
     const int virtual_columns = (prob_n / NX_TILE_N) * par; \
     while (virtual_columns % launch_blocks != 0) --launch_blocks; \
-    MarlinGeGLU<THREADS, M, NX_TILE_N / 16, 4, STAGES, 4> \
-      <<<launch_blocks, THREADS, shared, stream>>>( \
+    constexpr int tile_threads = M == 8 ? 256 : 128; \
+    MarlinGeGLU<tile_threads, M, NX_TILE_N / 16, 4, STAGES, 4> \
+      <<<launch_blocks, tile_threads, shared, stream>>>( \
         A_ptr, B_ptr, C_ptr, s_ptr, prob_m, prob_n, prob_k, locks); \
   }
 #else
@@ -1059,7 +1158,7 @@ int marlin_cuda(
 #if EI_MARLIN_KIND == 0
   for (int i = 0; i < tot_m_blocks; i += 4) {
 #elif EI_MARLIN_KIND == 2
-  for (int i = 0; i < tot_m_blocks; i += NX_MBLOCKS) {
+  for (int i = 0; i < tot_m_blocks; i += 4) {
 #else
   for (int i = 0; i < tot_m_blocks; i += NX_MBLOCKS) {
 #endif
@@ -1098,6 +1197,14 @@ int marlin_cuda(
 #endif
     }
 
+#if EI_MARLIN_KIND == 2
+    if (thread_m_blocks > 4 && thread_m_blocks < 8) {
+      thread_m_blocks = 4;
+      prob_m = 64;
+    }
+    if (thread_m_blocks == 8) i += 4;
+#endif
+
     // For compilation speed, we only define the kernel configurations that have seemed useful (in terms of performance)
     // in our testing, however many more are, in principle, possible.
     if (false) {}
@@ -1117,6 +1224,7 @@ int marlin_cuda(
     CALL_IF(4, 16,  4,  8)
     CALL_IF(4, 16,  4,  4)
 #elif EI_MARLIN_KIND == 2
+    CALL_IF(8)
     CALL_IF(1)
     CALL_IF(2)
 #if NX_MBLOCKS >= 3
@@ -1172,6 +1280,7 @@ extern "C" int ei_marlin(
 
 extern "C" int ei_marlin_resources(int m, int* registers, int* occupancy) {
   switch (m) {
+    case 8: return nx_resources<8>(registers, occupancy);
     case 1: return nx_resources<1>(registers, occupancy);
     case 2: return nx_resources<2>(registers, occupancy);
 #if NX_MBLOCKS >= 3

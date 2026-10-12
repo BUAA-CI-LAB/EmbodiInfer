@@ -108,6 +108,10 @@ Marlin packs these codes once and owns synchronization locks per eager stream
 or graph scope. Prefix GeGLU is fused into GEMM; the small action projection
 retains its rounded pointwise epilogue. One shared native source retains the
 upstream license and the measured arithmetic for each kernel specialization.
+The fused prefix kernel processes M128 with two M64 warp groups sharing each
+compressed weight tile. Each accumulator keeps its original K order; M64 and
+smaller kernels handle the remaining rows. Tile selection and occupancy remain
+inside the CUDA backend, without adding deployment configuration.
 
 A rotary-attention preparation contract owns fixed BTNH buffers and cache
 conversion. RoPE stores head-major queries; strict softmax stores token-major
