@@ -19,6 +19,10 @@ class OperatorBackends:
     paired_gelu: str = "triton_lookup"
     projection: str = "torch"
     rotary: str = "torch"
+    attention_preparation: str = "cuda_strict"
+    attention_projection: str = "torch"
+    weight_only: str = "marlin"
+    integer_projection: str = "triton_rotated"
 
     def __post_init__(self) -> None:
         """Validate names without importing optional backends or resolving devices."""

@@ -41,7 +41,13 @@ def cache_directory() -> Path:
 
 
 def build_library(
-    name: str, *, strict: bool = False, specific: bool = True, native_fp4: bool = False
+    name: str,
+    *,
+    strict: bool = False,
+    specific: bool = True,
+    native_fp4: bool = False,
+    flags: tuple[str, ...] = (),
+    libraries: tuple[str, ...] = (),
 ) -> NativeLibrary:
     """Compile once per source, compiler and architecture; serialize concurrent builds.
 
@@ -50,13 +56,17 @@ def build_library(
         strict: Disable fused multiply/add to preserve the validated rounding order.
         specific: Use an architecture-specific target when the GPU supports it.
         native_fp4: Verify native FP4 conversions in the emitted PTX.
+        flags: Additional compile options for this packaged implementation.
+        libraries: CUDA libraries to link, for example ``("cublasLt",)``.
 
     Returns:
         Loaded library with its compiler version and command.
     """
     if torch.cuda.is_current_stream_capturing():
         raise RuntimeError("Initialize CUDA operators before graph capture")
-    if name not in {path.stem for path in _SOURCES.glob("*.cu")}:
+    sources = [path for path in _SOURCES.iterdir() if path.suffix in (".cu", ".cpp")]
+    source = next((path for path in sources if path.stem == name), None)
+    if source is None:
         raise ValueError(f"Unknown packaged CUDA source: {name}")
     cuda_home = os.environ.get("CUDA_HOME")
     compiler_path = str(Path(cuda_home) / "bin/nvcc") if cuda_home else shutil.which("nvcc")
@@ -70,16 +80,16 @@ def build_library(
         raise RuntimeError("Native FP4 conversions require a Blackwell CUDA device")
     # Ada/Ampere have no architecture-specific 'a' compilation target.
     architecture = f"sm_{major}{minor}{'a' if specific and major >= 9 else ''}"
-    flags = ["-O3", "-std=c++17", f"-arch={architecture}"]
+    flags = ["-O3", "-std=c++17", f"-arch={architecture}", *flags]
     if strict:
         flags.append("--fmad=false")
-    digest = hashlib.sha256((compiler_path + compiler + repr(flags)).encode())
-    for source in sorted(_SOURCES.glob("*.cu")):
-        digest.update(source.name.encode())
-        digest.update(source.read_bytes())
+    digest = hashlib.sha256((compiler_path + compiler + repr((flags, libraries))).encode())
+    for dependency in sorted(_SOURCES.iterdir()):
+        if dependency.suffix in (".cu", ".cpp", ".cuh", ".h"):
+            digest.update(dependency.name.encode())
+            digest.update(dependency.read_bytes())
     directory = cache_directory() / f"{architecture}-{digest.hexdigest()[:20]}"
     directory.mkdir(parents=True, exist_ok=True)
-    source = _SOURCES / f"{name}.cu"
     target = directory / f"{name}.so"
     command = [
         compiler_path,
@@ -87,6 +97,7 @@ def build_library(
         "--shared",
         "-Xcompiler=-fPIC",
         str(source),
+        *(f"-l{library}" for library in libraries),
         "-o",
         str(target),
     ]

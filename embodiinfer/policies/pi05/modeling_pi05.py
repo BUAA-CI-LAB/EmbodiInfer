@@ -514,14 +514,15 @@ class Pi05Policy(FlowVLAPolicy):
         # ``checkpoint`` is a path / HF id to load, or an already-loaded
         # PI05Policy to wrap (sharing weights — used by parity tests).
         self.openpi_config = None
+        weight_only = optimizations is not None and optimizations.mlp_weights is not None
         if isinstance(checkpoint, str):
             from .checkpoints import load_checkpoint
 
             self._lerobot, self.openpi_config = load_checkpoint(
                 checkpoint,
-                load_device=load_device,
+                load_device="cpu" if weight_only else load_device,
                 checkpoint_config=checkpoint_config,
-                low_cpu_mem_usage=low_cpu_mem_usage,
+                low_cpu_mem_usage=low_cpu_mem_usage or weight_only,
             )
         else:
             self._lerobot = checkpoint.eval()
@@ -530,6 +531,21 @@ class Pi05Policy(FlowVLAPolicy):
         pwe = self._m.paligemma_with_expert
         self._prefix_tower = pwe.paligemma.model.language_model  # PiGemmaModel (VLM text)
         self._expert_tower = pwe.gemma_expert.model  # PiGemmaModel (action expert)
+        if weight_only:
+            from .inference.mlp import CalibratedMlp
+            from .inference.weights import MlpWeightArchive
+
+            # Validate artifact coverage before releasing original MLP tensors.
+            MlpWeightArchive(
+                optimizations.mlp_weights,
+                optimizations.checkpoint_sha256,
+                layers=len(self._prefix_tower.layers),
+            )
+            for tower in (self._prefix_tower, self._expert_tower):
+                for layer in tower.layers:
+                    layer.mlp = CalibratedMlp.from_module(layer.mlp)
+            if load_device is not None:
+                self._lerobot.to(load_device)
         self.tensor_parallel = TensorParallelContext.from_distributed(
             tensor_parallel_size,
             tensor_parallel_group,
@@ -671,7 +687,7 @@ class Pi05Policy(FlowVLAPolicy):
         super().on_refit(version)
         self._clear_inference_caches()
         config = getattr(self, "_optimization_config", None)
-        if config is not None and config.has_quantized_mlp:
+        if config is not None and (config.has_quantized_mlp or config.mlp_weights is not None):
             self._optimization_recipe_stale = True
 
     def _apply(self, fn, recurse: bool = True):
@@ -739,6 +755,14 @@ class Pi05Policy(FlowVLAPolicy):
         # the reduction shape and therefore the rounding of the eager parity
         # path for low-precision checkpoints.
         openpi_rlinf = operators is not None and operators.config.numerics == "openpi_rlinf"
+        if operators is not None and operators.rotary_attention is not None:
+            expert = id(attn) in operators._expert_attention
+            query = operators.project_attention(attn.q_proj, h, expert=expert).view(B, S, -1, hd)
+            key, value = (projection(h).view(B, S, -1, hd) for projection in (attn.k_proj, attn.v_proj))
+            out, cache = operators.attend_rotary(attn, query, key, value, cos, sin, mask, prefix_kv)
+            if collected is not None:
+                collected.append(cache)
+            return operators.project_attention(attn.o_proj, out.reshape(B, S, -1), expert=expert)
         if self.attention == "eager" or openpi_rlinf:
             q, k, v = attn.q_proj(h), attn.k_proj(h), attn.v_proj(h)
         else:
@@ -1289,7 +1313,9 @@ def _build_pi05(
             raise TypeError("optimizations must be a Pi05OptimizationConfig")
         native_inference = True
         native_embeddings = native_embeddings or optimizations.numerics == "openpi_rlinf"
-        if optimizations.fused_mlp and optimizations.hardware in ("thor", "spark"):
+        if optimizations.fused_mlp and (
+            optimizations.hardware in ("thor", "spark") or optimizations.mlp_weights is not None
+        ):
             for key in ("action_horizon", "default_num_steps"):
                 if key in overrides and overrides[key] != 10:
                     raise ValueError(f"Optimized Pi05 presets require {key}=10")

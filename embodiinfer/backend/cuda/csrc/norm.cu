@@ -136,3 +136,33 @@ extern "C" int cc_residual_norm(
         (__nv_bfloat16*)output_gate, columns, tokens);
     return int(cudaGetLastError());
 }
+
+__global__ void square_bf16(const __nv_bfloat16* input, float* output, int64_t count) {
+    int64_t index = int64_t(blockIdx.x) * THREADS + threadIdx.x;
+    if (index >= count) return;
+    float x = __bfloat162float(input[index]);
+    output[index] = __fmul_rn(x, x);
+}
+
+__global__ void residual_only(
+    const __nv_bfloat16* inputs, const __nv_bfloat16* update, const __nv_bfloat16* gate,
+    __nv_bfloat16* output, int64_t count, int columns, int tokens) {
+    int64_t index = int64_t(blockIdx.x) * THREADS + threadIdx.x;
+    if (index < count)
+        output[index] = __float2bfloat16_rn(residual_value(inputs, update, gate, index, columns, tokens));
+}
+
+extern "C" int cc_square(const void* inputs, void* output, int64_t count, void* stream) {
+    square_bf16<<<(count + THREADS - 1) / THREADS, THREADS, 0, (cudaStream_t)stream>>>(
+        (const __nv_bfloat16*)inputs, (float*)output, count);
+    return int(cudaGetLastError());
+}
+
+extern "C" int cc_residual(
+    const void* inputs, const void* update, const void* gate, void* output,
+    int64_t count, int columns, int tokens, void* stream) {
+    residual_only<<<(count + THREADS - 1) / THREADS, THREADS, 0, (cudaStream_t)stream>>>(
+        (const __nv_bfloat16*)inputs, (const __nv_bfloat16*)update, (const __nv_bfloat16*)gate,
+        (__nv_bfloat16*)output, count, columns, tokens);
+    return int(cudaGetLastError());
+}

@@ -49,7 +49,7 @@ class Pi05OptimizationConfig:
     norm_fusion: bool = True
     kv_workspace: bool = True
     fused_mlp: bool = False
-    attention: Literal["reference", "query_major", "folded_flash"] = "reference"
+    attention: Literal["reference", "query_major", "folded_flash", "rotary_strict"] = "reference"
     action_layers: tuple[MlpLayerPrecision, ...] = ()
     checkpoint_sha256: str | None = None
     activation: Literal["gelu_pytorch_tanh", "gelu_pytorch_exact"] = "gelu_pytorch_tanh"
@@ -61,6 +61,7 @@ class Pi05OptimizationConfig:
     compact_prefix: bool = False
     prefix_kv_only: bool = False
     reuse_action_context: bool = False
+    mlp_weights: str | None = None
 
     def __post_init__(self) -> None:
         """Validate semantics and bind quantized MLPs to a calibrated checkpoint."""
@@ -88,8 +89,15 @@ class Pi05OptimizationConfig:
             )
         ):
             raise ValueError("Pi05 optimization switches must be booleans")
-        if self.attention not in ("reference", "query_major", "folded_flash"):
+        if self.attention not in ("reference", "query_major", "folded_flash", "rotary_strict"):
             raise ValueError("Unknown optimized attention implementation")
+        if self.attention == "rotary_strict" and self.numerics != "openpi_rlinf":
+            raise ValueError("Strict rotary attention requires openpi_rlinf numerics")
+        if self.mlp_weights is not None:
+            if not isinstance(self.mlp_weights, str) or not self.mlp_weights.strip():
+                raise ValueError("mlp_weights must name an offline calibrated weight manifest")
+            if self.has_quantized_mlp or self.numerics != "openpi_rlinf" or not self.fused_mlp:
+                raise ValueError("Calibrated integer archives require fused exact-GELU MLPs and BF16 inputs")
         for name in ("action_layers", "prefix_layers"):
             layers = getattr(self, name)
             if not isinstance(layers, tuple) or any(
@@ -98,11 +106,12 @@ class Pi05OptimizationConfig:
                 raise ValueError(f"{name} must be a tuple of MlpLayerPrecision values")
         if (
             self.fused_mlp
+            and self.mlp_weights is None
             and self.hardware not in ("thor", "spark")
             and self.operators.paired_gelu in ("triton_lookup", "triton_exact")
         ):
             raise ValueError("Paired GEMMs require an explicit Thor or Spark launch profile")
-        if self.has_quantized_mlp and self.checkpoint_sha256 is None:
+        if (self.has_quantized_mlp or self.mlp_weights is not None) and self.checkpoint_sha256 is None:
             raise ValueError("Quantized MLPs require a calibration checkpoint SHA256")
         if self.checkpoint_sha256 is not None and (
             not isinstance(self.checkpoint_sha256, str)
@@ -140,6 +149,8 @@ class Pi05OptimizationConfig:
             if not isinstance(values["operators"], dict):
                 raise ValueError("operators must be a mapping of implementation names")
             values["operators"] = OperatorBackends(**values["operators"])
+        if values.get("mlp_weights") is not None:
+            values["mlp_weights"] = str((Path(path).resolve().parent / values["mlp_weights"]).resolve())
         return cls(**values)
 
     @classmethod
@@ -159,6 +170,10 @@ class Pi05OptimizationConfig:
         protection. Other format pairs require their own checkpoint-bound
         calibration; missing ranges fail explicitly. Use the dataclass or
         resolved JSON for custom numerical contracts and operator ablations.
+        Orin ``w4a16`` selects calibrated weight-only INT4 with BF16 activations;
+        pass its external manifest/directory through ``calibration``.
+        ``w8a8-w4a16`` selects a checkpoint-bound bundle with rotated INT8 prefix
+        projections, W4A16 action projections and prefix-only TF32 QK.
         """
         from .presets import resolve_preset
 

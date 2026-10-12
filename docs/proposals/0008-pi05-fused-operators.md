@@ -98,6 +98,67 @@ removed from the unmerged API in favor of `MlpLayerPrecision` and `from_preset`.
 A separate model-specific runner was considered. It would duplicate graph and
 execution ownership; policy-local plans reuse the existing model-neutral engine.
 
+### Orin weight-only execution
+
+The opt-in `orin`/`w4a16` recipe loads externally calibrated group64 GPTQ MLP
+weights. It keeps BF16 activations and the original FP32 QK/softmax arithmetic;
+it does not route INT4 through the FP8/NVFP4 activation encoder. A separate
+weight-only protocol/registry accepts natural-column codes and BF16 scales.
+Marlin packs these codes once and owns synchronization locks per eager stream
+or graph scope. Prefix GeGLU is fused into GEMM; the small action projection
+retains its rounded pointwise epilogue. One shared native source retains the
+upstream license and the measured arithmetic for each kernel specialization.
+The fused prefix kernel processes M128 with two M64 warp groups sharing each
+compressed weight tile. Each accumulator keeps its original K order; M64 and
+smaller kernels handle the remaining rows. Tile selection and occupancy remain
+inside the CUDA backend, without adding deployment configuration.
+
+A rotary-attention preparation contract owns fixed BTNH buffers and cache
+conversion. RoPE stores head-major queries; strict softmax stores token-major
+probabilities. The following FP32 QK and BF16 probability/value GEMMs therefore
+avoid layout clones. Cached prefix conversion occurs once per request. The
+policy supplies masks, factors, cache identity and scope lifetimes.
+
+The optional cuBLASLt projection backend owns descriptors and scoped outputs.
+It selects an explicit library configuration identity, checks the library
+version and fails when that identity is unavailable. All native launches use
+the guarded tensor device and its current stream. No modules are monkeypatched,
+no benchmark imports occur in production, and no simulator or calibration loop
+is added to the runtime. The user cache includes C++/CUDA/header sources,
+compiler options and linked libraries; builds remain atomic and locked.
+
+The archive validates checkpoint identity, complete tower coverage, shard hashes,
+shapes, decoder layout and scales. Runtime loading never falls back to RTN.
+The only permitted unused final-prefix shard is skipped by KV-only execution.
+The factory loads on CPU with meta initialization, validates original MLP
+dimensions, replaces their storage with archive-backed inference modules and
+then places the remaining parameters. No BF16 MLP copy is kept on CUDA.
+These opt-in modules require the calibrated artifact for restoration and do not
+provide a training or independent BF16 state-dictionary fallback.
+Quantized task quality must be evaluated separately from exact migration parity.
+
+### Orin native integer prefix
+
+The additional opt-in `w8a8-w4a16` preset composes a rotated INT8 prefix archive
+with the existing GPTQ action archive. A small deployment bundle binds both
+manifests and the checkpoint by SHA256. Calibration and archive preparation stay
+offline. The integer projection protocol lives in `layers/integer.py`; its Triton
+backend owns native INT8/INT32 GEMM, weight scaling and exact rounded GeGLU.
+The CUDA encoder preserves the calibrated channel divisor, H128 butterfly,
+FP32 division, BF16 rounding and per-token INT8 rounding. The measured down
+encoder uses 512 threads; the smaller gate encoder uses 256. All activation/output
+storage follows the existing stream/graph scope contract.
+
+Prefix QK uses a private cuBLAS handle with TF32 math mode. It retains the original
+FP32 score/softmax storage and BF16 probability/PV path; action QK remains strict.
+Every attention execution owns its cuBLAS scratch until its graph is destroyed;
+handle dispatch is serialized and binds that scratch after selecting the stream.
+This avoids changing Torch global flags or monkeypatching attention dispatch.
+The existing strict attention backend and `w4a16` preset retain their arithmetic.
+The two numerical approximations require separate task-quality evidence.
+Selective W4A4 was screened separately and rejected; its kernels and CUTLASS
+dependency are not part of the runtime.
+
 ## 5. Model-agnosticism verdict
 
 The engine gains no model-name branches. Backends operate on tensors and public

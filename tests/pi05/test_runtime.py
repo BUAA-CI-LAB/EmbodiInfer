@@ -55,6 +55,7 @@ def workspace_runtime(monkeypatch):
     runtime.config = Pi05OptimizationConfig(norm_fusion=False)
     runtime.kv_buffers = {}
     runtime.active_kv = None
+    runtime.rotary_attention = None
     runtime.active_sources = {}
     runtime._scope = None
     return runtime, attn

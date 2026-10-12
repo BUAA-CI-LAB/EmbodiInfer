@@ -1,5 +1,118 @@
 # PI0.5 Benchmark
 
+## Orin NX 原生 W8A8 prefix / W4A16 action（2026-10-12）
+
+新增 opt-in `preset="w8a8-w4a16"`，部署参数与权重 bundle 见[模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
+Prefix 的17套 MLP 使用独立 trial30 校准的 H128/SmoothQuant alpha0.5 W8A8；
+action expert 保留 group64 GPTQ W4A16。整数 GEMM 融合 BF16 缩放/舍入和精确
+GeGLU，CUDA 编码融合通道缩放、旋转和逐 token 量化。Down 编码采用已验证的512线程布局。
+Prefix QK 使用私有 TF32 cuBLAS handle 与执行计划私有 scratch；action QK 保持严格
+FP32，softmax 保持 FP32，概率/PV 保持 BF16，vision 不变，不修改全局 Torch 精度。
+
+设备为 Orin NX SM87/8 SM、GPU918MHz，Torch2.9.1/CUDA12.6/cuBLASLt12.6.4，
+沿用下节同一 checkpoint 与 GPTQ archive。INT8 manifest SHA256：
+`44f8d44092160ddaebe8ba935705eb82087d289d560f2fb0d101da66eae409ad`。
+B1、horizon10、完整10-step；公共同步 wall 计时包含 vision、prefix/KV刷新、action
+解码，不包含预处理、H2D、加载、编译/捕获和模拟器。每条观测预热十次后测18次。
+
+| 观测 | 冻结实验组合 wall P50 ms | 最终生产实现 wall P50 ms |
+|---|---:|---:|
+| 1 | 322.189 | 321.948 |
+| 210 | 336.841 | 338.329 |
+| 490 | 338.250 | 338.215 |
+
+两列来自独立进程和不同测量轮次，仅验证迁移保留了原性能，不能把细小差异解释为
+新增加速，也不是相对原 EmbodiInfer BF16 的加速比。八条录制观测、全部32维动作
+逐位等于冻结实验组合；graph/eager/replay、更换图像/噪声、独立返回值、非默认stream
+通过。验证加载的213个运行时源码摘要与最终工作树一致。
+
+此前冻结实验组合的复用 Object/Goal trial46、seed47、chunk5 闭环筛选为19/20，
+原 BF16 为20/20，先前 W8A8 为19/20；19个严格匹配状态没有新增失败或成功。
+这些小样本已用于开发筛选，不能证明原 BF16 成功率非劣，也不是本次迁移的新闭环证据。
+NX 仍通过已加载模型接口验证实际 checkpoint 张量和本仓库 forward；为了避免无用
+临时 MLP 打包导致的 allocator 失败，夹具直接加载非 MLP 张量。初始失败日志保留。
+checkpoint factory 仍需匹配的 LeRobot/Transformers 环境验证。
+
+最后一轮选择性原生 W4A4 仅尝试 prefix gate/up，使用同一独立校准 divisor 与原始
+checkpoint 权重、逐输出 W4/逐 token A4，CUTLASS3.9.2的SM80整数Tensor Core后端
+在SM87上运行。SASS确认`IMMA.16864.S4.S4.SAT`，整数CPU子集、graph/replay/stream
+一致。计时包含旋转/量化、materialized INT32 GEMM及融合缩放/GeGLU epilogue：
+
+| Prefix层 | W8A8 ms | W4A4 ms | 重建 relative L2 | 预先固定门槛 |
+|---|---:|---:|---:|---:|
+|0|4.185|3.883|0.05801|0.02000|
+|8|4.204|3.874|0.15902|0.04641|
+|16|4.214|3.877|0.15524|0.05021|
+
+每层3712个独立校准token，三层完整算子收益中位数7.87%，低于预先固定20%扩展门槛，
+且三层均未通过质量门槛。因此停止扩展，没有W4A4端到端/闭环结果；其kernel和CUTLASS
+依赖不进入生产代码。这只拒绝本次固定配方，不能推广为所有W4A4方法的硬件上限。
+
+## Orin NX 校准 W4A16（2026-10-12）
+
+部署使用 `device_type="orin", preset="w4a16", calibration="/models/pi05-gptq/manifest.json"`。
+group64 GPTQ 仅压缩两套 MLP 权重，激活保持 BF16，attention 保持 FP32 QK/softmax、
+BF16 query/probability，vision 保留原 MHA。使用完整十步 diffusion，B1、horizon10。
+配方包含 prefix GEMM/GeGLU、严格 residual/norm、RoPE/KV/layout 融合以及 BF16 Q/O
+cuBLASLt 配置；它是 INT4 weight-only 路径，不是 Blackwell NVFP4。
+
+真实权重验证使用 Jetson Orin NX SM87/8 SM、GPU 918 MHz、Torch 2.9.1/CUDA 12.6、
+cuBLASLt 12.6.4。checkpoint SHA256 为
+`4616e4c1966a5fb063b442ea5d69857f45e873222d839b794634d87d252ab9e7`，
+GPTQ manifest SHA256 为
+`acb66bcca3e599dc66ed2a0f9d28992f53c98539be7bf4cd86d4c44bac3946c4`。
+八条录制观测的完整 32 维动作逐位等于冻结的已校准 GPTQ 实现，graph/eager 逐位一致。
+这是迁移正确性验证，不能解释为 W4 与原 BF16 的逐位一致或任务成功率不下降。
+NX 的现有 LeRobot/Transformers 安装不匹配；此轮验证通过已加载模型接口和共享真实
+checkpoint 张量的容器适配，全部 forward 使用本仓库实现，未修改设备环境。
+checkpoint factory 的真实加载尚需在项目规定的匹配依赖环境中验证。
+
+迁移延迟使用三条观测、每条九次同步 wall 请求，完成预热及正确性检查后计时：
+
+| 路径 | 观测 1 ms | 观测 210 ms | 观测 490 ms |
+|---|---:|---:|---:|
+| 冻结 GPTQ 实现，后置独立进程对照 | 395.638 | 405.500 | 400.221 |
+| EmbodiInfer `w4a16`，prefix + 完整 decoder | 395.483 | 405.144 | 400.135 |
+
+双方全部动作仍逐位一致。这是迁移性能检查，不是相对原 EmbodiInfer BF16 的加速比。
+最终提交源码的独立进程复测中，观测 210 的 prepared graph P50 为 407.660 ms，
+同次公共请求的 GPU/wall P50 为 411.814/411.874 ms，全部 32 维仍逐位一致。
+后一次额外预热十次；各进程存在波动，不把表中不足 1 ms 的差异解释为加速。
+
+后续 vision BF16 GEMM 筛选了 11 组 cuBLASLt bias 配置；五组 down 配置未通过
+逐位一致性检查。up 的初筛收益没有在固定双方输出缓冲的 ABBA 复测中保持：
+两个候选分别慢 13.48% 和 2.63%，均未进入配方。
+
+后续 M128 prefix tile 让两组 M64 warp 共享压缩权重加载。最终源码保持其余
+15 个 Marlin GPU 函数的机器码与旧版一致，并保留原 K 累加与 BF16/GeGLU 舍入。
+对照基线为本 PR 已有 W4A16 路径（`a7bb38e`），仅衡量这项增量优化。
+两套完整 prepared GPU 图分别捕获 prefix 和十步 action，每条观测双方各预热
+十次，再按 ABBA 顺序测九轮；不含预处理、H2D 和公共调用的 host 开销。
+
+| 观测 | 首轮旧版 → M128 ms | 新进程旧版 → M128 ms |
+|---|---:|---:|
+| 1 | 406.408 → 405.140 | 407.604 → 404.661 |
+| 210 | 421.071 → 413.952 | 429.282 → 421.537 |
+| 490 | 418.321 → 412.265 | 426.251 → 421.170 |
+
+两轮按三条观测统计的中位延迟降低分别为 1.45% 和 1.19%。最新八条观测的
+全部 32 维动作及 prefix K/V 逐位一致；此轮不新增任务成功率结论。
+早期只共享 action 图的 prefix 对照没有用作最终组合收益；未隔离旧 kernel 的
+版本在整套组合中仅有 0.41%，已拒绝。解码调度、单缓冲和三 block 候选也未合入。
+
+在匹配的 LeRobot 环境中，可沿用下文的独立源码对照入口：
+
+```bash
+python benchmarks/pi05-benchmark/compare_optimizations.py \
+  --role candidate --source /workspace/EmbodiInfer --device orin --preset w4a16 \
+  --calibration /models/pi05-gptq/manifest.json \
+  --checkpoint /models/pi05 --inputs /data/inputs.pt \
+  --matmul-precision highest --out runs/orin-w4a16
+```
+
+原 BF16 基线仍使用下文的冻结 PR 前源码和独立进程。新增融合不能进入基线。
+权重校准、图像预处理、H2D、冷启动/编译/捕获和模拟器均须与准备好的 GPU 推理计时分开报告。
+
 ## Pi05 推理优化的验证入口
 
 新实现通过 `Pi05OptimizationConfig` 显式启用。优化结果见下文独立基线与三平台验证；
