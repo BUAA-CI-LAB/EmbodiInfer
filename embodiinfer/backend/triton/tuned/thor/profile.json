@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "match": {
+    "device_name": "NVIDIA Thor",
+    "capability": [
+      11,
+      0
+    ],
+    "torch": "2.13.0+cu132",
+    "triton": "3.7.1"
+  },
+  "ops": {
+    "split_kv_attention": {
+      "module": "split_kv_attention",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "55e8a20b057457d63f7557aaa16f344d74397e4925047f1b6666bcf52faac2d3",
+      "verified_layouts": 2,
+      "evidence": {
+        "run_id": "20261012T084037Z-cf9243b720",
+        "task_digest": "0192979023cd12ccc2a72bb04807c258509aeb29259333a33e1f89077f51a64b",
+        "capture_identity": "3fda25f6804e3178470c1bc390062d402242029cc2a6fcbdf8ecd96904b22ca7",
+        "solution_digest": "8b1db93ae8388ca0f296151d4bbf25e4f5e8c31d43a8f6234f87630d8f92cc46",
+        "decision": {
+          "promoted": true,
+          "reasons": [],
+          "rounds": [
+            {
+              "mean_latency_ms": {
+                "baseline": 0.3732264595013676,
+                "incumbent": 0.04873815755365473,
+                "candidate": 0.0469428035458832
+              },
+              "improvement": {
+                "baseline": 0.8742243419488559,
+                "incumbent": 0.03683672296793472
+              },
+              "workloads": {
+                "d5cf735e215bb7574e71": {
+                  "baseline": 1.0804690765937168,
+                  "incumbent": 0.1394609593451023,
+                  "candidate": 0.1392327032983303
+                },
+                "03293aab11415ac3e8c7": {
+                  "baseline": 0.30250219779213267,
+                  "incumbent": 0.03966587737450997,
+                  "candidate": 0.037713813570638494
+                }
+              }
+            },
+            {
+              "mean_latency_ms": {
+                "baseline": 0.37376189036260954,
+                "incumbent": 0.048764153013626736,
+                "candidate": 0.046742537992921745
+              },
+              "improvement": {
+                "baseline": 0.8749403318043637,
+                "incumbent": 0.041456990345758005
+              },
+              "workloads": {
+                "d5cf735e215bb7574e71": {
+                  "baseline": 1.079287349820137,
+                  "incumbent": 0.13775917767484983,
+                  "candidate": 0.13755703370273112
+                },
+                "03293aab11415ac3e8c7": {
+                  "baseline": 0.3032093444168568,
+                  "incumbent": 0.039864650547504425,
+                  "candidate": 0.037661088421940804
+                }
+              }
+            }
+          ]
+        },
+        "export_checksums": "4bbfc952ca6abcbce7edf7a2b3b0494c60a17354f97d5c353c115e719c58ce67"
+      }
+    }
+  }
+}

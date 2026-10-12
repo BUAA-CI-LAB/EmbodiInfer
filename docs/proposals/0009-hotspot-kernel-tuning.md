@@ -68,7 +68,7 @@ Non-goals:
 - Lower precision, quantization or changed model mathematics. A region may
   reorder floating-point work, but not change dtype or matmul precision.
 - Automatic merging of agent-written policy changes; they are reviewed as PRs.
-- Thor/AGX profiles in the first phase; multi-GPU and batch > 1 tuning.
+- Multi-GPU and batch > 1 tuning.
 - Compatibility with the 0008 discovery/catalog task formats. Those commands
   stay as they are and are not extended.
 
@@ -295,6 +295,11 @@ reproduces them.
 4. Agent selection and new fusion regions (one-time code changes, §4.4).
 5. Further hardware profiles.
 
+Status (2026-10-12): steps 1–3 are implemented for pi0.5; the loop was proven
+on Jetson Thor instead of an RTX 4090 (§9), and the `thor` profile ships one
+tuned operator. Qwen R2R and StreamVLN call sites, step 4 and an RTX 4090
+profile are not done; neither is shape-range tuning (§10).
+
 New tooling lives in `scripts/kernel_tuning/` and `benchmarks/kernel_tuning/`.
 Existing 0008 commands keep working and are not extended. No public symbol is
 removed.
@@ -321,11 +326,51 @@ split; per-operator ablation. Expected gain is bounded by the recoverable time
 in the hotspot report; it disappears where regions are already at the bandwidth
 or launch floor. Batch > 1 and other hardware are reported only when measured.
 
+First measurement (2026-10-12): Jetson Thor (sm_110, MAXN, `jetson_clocks`),
+Torch 2.13.0+cu132, Triton 3.7.1, `pi05_libero_finetuned_v044`, B=1, BF16,
+10 denoise steps, LIBERO-10 1,600 frames after 10 warmup calls, Inductor,
+prefix and full-loop CUDA Graphs, native prefix/denoise attention.
+
+| `kernel_profile` | Mean / P50 (ms) | Prefill (ms) | Decode (ms) |
+|---|---|---|---|
+| `torch` path (`native_inference: false`) | 179.9 / 179.9 | 63.9 | 111.4 |
+| `none` (existing Triton) | 98.8 / 99.7 | 45.4 | 49.0 |
+| `thor` | 87.6 / 85.4 | 45.2 | 37.2 |
+
+The `thor` profile contains one operator, `split_kv_attention`, tuned by
+`codex/gpt-6-astra:high` (run `20261012T084037Z-cf9243b720`, 12 attempts). Its
+task timing (CUDA Graph, cold L2) against the Torch reference and the existing
+Triton kernel:
+
+| Workload (calls per step) | Torch (µs) | Existing Triton (µs) | Tuned (µs) |
+|---|---|---|---|
+| prefix, 576 keys (18) | 1,079 | ~178 | 139 |
+| denoise, 576 + 50 keys (180) | 304 | ~120 | 38 |
+
+Under the benchmark configuration every dispatch decision selected the tuned
+kernel (72 prefix and 720 denoise calls executed before graph capture; replays
+reuse them). `verify` on 40
+recorded inputs passed (worst ratio 0.80 of the §6 limits). With
+`kernel_profile: none`, 200 benchmark frames were bit-identical to the previous
+code on both the native and the Torch path (`TORCHINDUCTOR_DETERMINISTIC=1`).
+
 ## 10. Risks and limitations
 
 - Agent kernels are often shape-specialized (a 2026-10-07 `split_kv_attention`
   candidate asserted `P % PART_LENGTH == 0`); `applies` and fallback mitigate,
-  but uncovered shapes run the old path.
+  but uncovered shapes run the old path. The shipped kernel covers the captured
+  B=1 shapes with a 576-token prefix only; the 48-token text bucket, B > 1 and
+  other checkpoints fall back. Follow-up: tasks over declared shape ranges
+  (buckets, batch sizes, several layouts per shape), kernels with runtime strides
+  and scales, and range-based `applies`.
+- Region selection is manual: the hotspot report ranks time, but a person picks
+  the operators. Follow-up: rank by `Σ count × (t − roofline floor)`, detect
+  chains of memory-bound kernels between GEMMs as fusion candidates, and let an
+  agent turn a candidate into a registered operator by PR, with a bit-exact
+  `kernel_profile: none` parity test as the proof.
+- GEMMs (the largest share of pi0.5 time on Thor) are not registry operators.
+- Agent runs depend on a relay that drops streams; failed attempts consume the
+  search budget.
 - Profiles are tied to Triton/Torch versions; a version upgrade disables them
   under `auto` until re-verified.
 - Attribution under CUDA Graphs depends on CUPTI support; the eager fallback pass
