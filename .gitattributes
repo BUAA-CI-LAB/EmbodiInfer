@@ -1,0 +1,3 @@
+# Installed kernel profiles are pinned by SHA-256 of their bytes (profile.json);
+# keep them LF on every checkout so the digests match on Windows too.
+embodiinfer/backend/triton/tuned/*/** text eol=lf
