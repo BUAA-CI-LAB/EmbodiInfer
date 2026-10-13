@@ -20,6 +20,10 @@ def plan_prompt(task: TaskPackage) -> str:
     return f"""Optimize the operator in task/ for this target machine.
 Read task/README.md, task/definition.json, task/workloads.jsonl, task/baseline.py,
 task/tuning.yaml, environment.json, incumbent.json, and feedback.json before choosing one change.
+Read task/HARDWARE.md when present for target-specific observations and prior experiments.
+Feedback includes complete source for recent evaluated candidates, including rejected ones.
+Compare their implementations with their measured failures before selecting a materially
+different configuration or algorithm; do not repeat a rejected implementation by guessing its source.
 {replay}\
 Write PLAN.md with: the current bottleneck; one falsifiable optimization hypothesis;
 the source/launch configuration changes; correctness hazards; and validation steps.

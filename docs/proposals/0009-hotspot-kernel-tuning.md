@@ -186,6 +186,11 @@ workload) and archive are reused. A candidate must also export `applies`, which
 the evaluator checks is true on every workload. Expected model saving is
 `Σ count × Δt`.
 
+Each planning turn receives the recent candidates' verified source alongside
+their measured failures, including rejected candidates that never became the
+incumbent. This lets a fresh agent inspect failed configurations before choosing
+a new change. Optional hardware notes are part of the frozen task context.
+
 ### 4.6 Install, verify, benchmark
 
 `install` writes promoted sources and updates `profile.json`. It refuses an
@@ -217,6 +222,62 @@ with resume under `results/kernel_tuning/optimize/<id>/`.
   is a dictionary lookup after `prepare()` and is skipped entirely by CUDA Graph
   replay.
 - Apply agent policy patches without review: rejected.
+
+### 4.8 Agent-assisted operator registration
+
+`python -m scripts.kernel_tuning register` implements the registration step
+between manual operator selection and tuning. Its developer-only controller is
+in `scripts/kernel_tuning/registration/`; it changes no inference API or default
+runtime behavior. The caller supplies one mathematical operator and exact source
+expressions. The initial supported routing convention is pi0.5's existing `_op`
+helper and explicit `KernelSelection` parameters. Other policies must first gain
+an equivalent integration; this tool does not create model-specific engine logic.
+
+The [registration contract](../../scripts/kernel_tuning/registration/README.md)
+defines the YAML specification and `new`, `run`, `resume`, `status`, and `finalize`
+commands. `new` requires a clean checkout and probes the public registry in a
+separately selected `test_python`. `--repository` may select a clean model checkout
+separate from an uncommitted controller checkout. It records BASE, creates a detached baseline
+and a `registry/<op>-<run_id>` worktree, and stops after AST call-site review.
+Explicit `run` confirms the reviewed sites and freezes the execution settings.
+Humanize2 plans and implements in the branch worktree, keeping a session for
+repair turns and opening a fresh planning session after two equal check failures.
+An interrupted run retains its completed stages and elapsed budget.
+
+The controller applies five fail-fast CPU gates: file scope (including untracked
+and staged changes); annotated Torch reference, standalone lazy registration,
+preserved branches, parameter forwarding and public registry resolution; Ruff;
+declared existing tests and new test nodes; and baseline effectiveness. Every new
+test node must execute on BASE and fail by assertion, with all parametrizations
+covered. Collection errors, missing dependencies and skips are not proof. The
+baseline overlay is journaled before copying and restored after failures or
+interruptions. Check evidence is bound to source bytes and the registration
+manifest, so changing a patch invalidates completed gates.
+Baseline integrity hashes tracked symbolic links by their link text without
+following their targets; selected source and test files must still be regular files.
+
+This is lossless routing, not kernel optimization: the reference must preserve
+ATen calls, arithmetic order, dtype conversions and shapes. Generated tests must
+compare original and reference expressions with `torch.equal` on CPU FP32 and
+BF16, exercise a recording profile, and verify preservation branches. The §6
+whole-model target-GPU bit-exact gate remains mandatory before merge. Static
+checks and finite CPU tests cannot prove arbitrary numerical equivalence or
+that agent-authored tests cover every behavior.
+
+Passing runs export `patch.diff` and `SUMMARY.md`. Finalization prints the branch
+by default; commits and pushes each need their explicit flags. No merge is
+provided. Operator selection, fusion, GPU testing and tuning remain separate.
+The alternative of adding registration to the GPU tuning flow was rejected:
+registration needs baseline code checkouts and routing tests, whereas tuning
+measures candidate kernels against a frozen numerical/performance contract.
+
+Validation uses disposable clones of existing commit objects, structural
+counterexamples, real CPU subprocesses, and official Humanize2 fake agents for
+repair/session restart/resume. It requires no model checkpoint and makes no
+performance claim. Coding agents and tests run with the user's process
+permissions; directory bounds, integrity checks and hidden accelerator devices
+are not an OS security sandbox. Actual Humanize2 execution requires POSIX and
+Python 3.12+, while runtime imports use the separately prepared test interpreter.
 
 ## 5. Model-agnosticism verdict
 
@@ -298,7 +359,9 @@ reproduces them.
 Status (2026-10-12): steps 1–3 are implemented for pi0.5; the loop was proven
 on Jetson Thor instead of an RTX 4090 (§9), and the `thor` profile ships one
 tuned operator. Qwen R2R and StreamVLN call sites, step 4 and an RTX 4090
-profile are not done; neither is shape-range tuning (§10).
+profile are not done; neither is shape-range tuning (§10). The manually selected,
+single-operator registration portion of step 4 now has the CPU controller in
+§4.8; automatic selection and new fusion remain future work.
 
 New tooling lives in `scripts/kernel_tuning/` and `benchmarks/kernel_tuning/`.
 Existing 0008 commands keep working and are not extended. No public symbol is

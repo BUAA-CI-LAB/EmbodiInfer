@@ -146,6 +146,14 @@ explains task inputs, the full tuning loop, stopping conditions, and saved resul
 The controller snapshots task inputs, saves all attempts, and exports improving
 solutions with their correctness and timing evidence under `results/kernel_tuning/`.
 Saved operators require a separate review/integration before runtime use.
+For an unregistered operator, the
+[registration workflow](scripts/kernel_tuning/registration/README.md) creates an
+isolated review branch with `register new`, then runs a resumable CPU
+plan/implement/check/repair loop with `register run`. Supply a prepared model
+interpreter using `--set test_python=/absolute/runtime/python` on `new` (and, if
+needed, the first `run`). `finalize` exports the checked patch; commit and push
+are explicit options. This registration gate does not replace target-GPU
+whole-model bit-exact verification before merge.
 Humanize2 agents may execute commands without interactive approval; the scratch
 directory and content hashes are not an OS sandbox. Use an appropriate isolated
 account/container on the target host when needed.

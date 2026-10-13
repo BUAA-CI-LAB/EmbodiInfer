@@ -235,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     """Run only the requested command; checking/status/export never invoke an agent."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    from .registration.cli import add_parser
+
+    add_parser(commands)
     check = commands.add_parser("check", help="Validate a task without executing its code")
     check.add_argument("task", type=Path)
     check.add_argument(
@@ -334,6 +337,10 @@ def main(argv: list[str] | None = None) -> int:
         command = None
     args = parser.parse_args(raw)
     try:
+        if args.command == "register":
+            from .registration.cli import dispatch
+
+            return dispatch(args)
         if args.command == "capture":
             if args.catalog:
                 from .capture import run as run_capture

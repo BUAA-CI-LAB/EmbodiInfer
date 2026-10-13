@@ -109,6 +109,33 @@ def test_full_loop_promotes_then_preserves_failures_and_exports(store, candidate
         saved.export(exported)
 
 
+def test_rejected_source_is_available_to_the_next_planning_turn(store, candidate) -> None:
+    """A fresh agent can inspect rejected code without mistaking it for the incumbent."""
+    witnessed = []
+
+    def answer(prompt: str, **kwargs: Any) -> str:
+        scratch = Path(str(kwargs["session"].placement.workdir))
+        if "Write PLAN.md" in prompt:
+            if scratch.name == "0002":
+                rejected = read_json(scratch / "feedback.json")[0]
+                assert rejected["status"] == "rejected"
+                assert rejected["solution"]["name"] == candidate["name"] + "_0001"
+                assert rejected["solution"]["sources"] == candidate["sources"]
+                assert read_json(scratch / "incumbent.json")["name"] != rejected["solution"]["name"]
+                witnessed.append(rejected["id"])
+            (scratch / "PLAN.md").write_text("Revise the previous implementation.", encoding="utf-8")
+        else:
+            solution = copy.deepcopy(candidate)
+            solution["name"] += "_" + scratch.name
+            solution["description"] = {"0001": "12", "0002": "8", "0003": "9"}[scratch.name]
+            atomic_json(scratch / "solution.json", solution)
+        return "ready"
+
+    result = run_fake(store, fakes.FakeAgentDriver(reply=answer))
+    assert witnessed == ["0001"]
+    assert result["best"] == "0002"
+
+
 def test_resume_counts_interrupted_attempt_and_keeps_elapsed_budget(store, candidate) -> None:
     coder = fake_coder(store, candidate, [8, asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):

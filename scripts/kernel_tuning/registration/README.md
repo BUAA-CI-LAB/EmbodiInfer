@@ -1,6 +1,7 @@
 # 算子注册流程（智能体闭环）
 
-本目录是 `python -m scripts.kernel_tuning register …` 工具链的规格说明，代码尚未实现。
+本目录实现 `python -m scripts.kernel_tuning register …` 工具链。设计归属见
+[0009 §4.8](../../../docs/proposals/0009-hotspot-kernel-tuning.md#48-agent-assisted-operator-registration)。
 
 本工具链自动完成"把一个算子接入算子注册表"这一步：
 
@@ -45,7 +46,8 @@
 TOOL="uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning"
 
 # 步骤 1、2：为选定的算子建立一次运行，打印 sites.md 后停下，等待调用方确认
-$TOOL register new --spec linear.yaml --output results/kernel_tuning/register
+$TOOL register new --spec linear.yaml --output results/kernel_tuning/register \
+    --set test_python=/abs/dev/python
 
 # 步骤 3–5：智能体修改、检查、反馈，直到通过或预算用尽
 $TOOL register run RUN --agent 'HARNESS/MODEL:EFFORT' --set test_python=/abs/dev/python
@@ -56,6 +58,14 @@ $TOOL register status RUN   # 查看当前阶段和每次尝试的结果
 # 步骤 6：默认只打印分支和改动；提交、推送都需要显式传参
 $TOOL register finalize RUN [--commit] [--push]
 ```
+
+`new` 默认用当前解释器探测注册表；工具环境没有 Torch 时，必须指定准备好的
+`test_python`。它也需要 pytest 及规格中 CPU 测试所需的模型依赖。Ruff 在工具环境中运行。
+控制器与待注册代码可以分开存放：`new --repository /abs/clean-checkout` 指定干净的模型仓库，
+默认使用控制器所在仓库。这样可以验证尚未提交的工具链，同时从已提交的模型基线建立 worktree。
+`run` 命令本身表示调用方已经确认 `sites.md`；`--yes` 可显式记录确认。
+首次 `run` 可以更换 `test_python` 并重新探测，此后解释器和 agent 固定，`resume` 不接受覆盖。
+`--push` 需要同时传 `--commit`，或此前已经完成提交。
 
 `register new` 也可以不用规格文件，直接用命令行参数：
 
@@ -109,6 +119,7 @@ budget:
    ```
    同时 `embodiinfer/backend/torch/ops.py` 中不能已有同名函数。
 3. **工作目录干净。** `git status --porcelain` 为空，然后记录 `BASE=$(git rev-parse HEAD)`。
+   基线中的已有符号链接按链接目标文本记录完整性，不跟随目标；选定的源码和测试仍须是普通文件。
 4. **建立两个 worktree。** 主检出目录在整个过程中不被修改：
    ```bash
    git worktree add --detach RUN/base "$BASE"                        # 基线，步骤 4 的有效性检查用
@@ -126,14 +137,17 @@ budget:
   - 调用点在策略方法里时，可以直接用 `self._kernels`（`embodiinfer/policies/pi05/modeling_pi05.py:574`）。
   - 调用点在自由函数里时，需要新增 `kernels` 参数。控制器会列出同一文件中调用这个函数的位置，智能体要把参数一路传过去。
 
-结果写入 `sites.json`，并生成给人看的 `sites.md`，内容是每个调用点的源码片段和 preserve 条件。然后命令停下。调用方确认无误、或直接修改 `sites.json` 之后，再运行 `register run`。传 `--yes` 可以跳过确认。
+结果写入 `sites.json`，并生成给人看的 `sites.md`，内容是每个调用点的源码片段和 preserve 条件。
+然后命令停下。调用方确认无误、或直接修改 `sites.json` 的补充说明之后，再运行 `register run`。
+源文件、函数、表达式、站点 ID 和自动提取的基线 guard 不可删改；更换这些输入需要新建运行。
+传 `--yes` 可显式记录确认，`new` 始终在此停下，不会自动打开智能体。
 
 ### 步骤 3：智能体修改（`register run`）
 
 **运行机制**与现有调优流程相同：控制器用 Humanize2 运行一个可恢复的 flow `operator_registration`，结构参照 `scripts/kernel_tuning/flow.py`；启动方式与 `scripts/kernel_tuning/__main__.py` 中的 `_execute` 一致：
 
 ```python
-Hmz(workspace=RUN / "workspace").run(
+Hmz(workspace=RUN).run(
     flow=Path("scripts/kernel_tuning/registration/flow.py"),
     task=f"Register {op} and route its call sites through the registry",
     agents={"coder": AGENT},
@@ -151,6 +165,11 @@ Hmz(workspace=RUN / "workspace").run(
 - 一次已完成迁移的 diff 作为示例：`git show 449ebe2 -- embodiinfer/`；
 - `sites.json`；
 - 下面的规则全文。
+
+固定版 Humanize2 的 `LocalEnv.derive_subdir` 只接受子目录，所以 SDK 的 workspace
+设为 `RUN`，再派生 `worktree` 给智能体。框架日志归档到 `RUN/workspace/`；
+`humanize.json` 记录实际 epic 及归档路径。源码快照和规则文件会校验哈希。
+浅克隆中缺少示例提交 `449ebe2` 时，明确记录缺失，继续使用当前源码和测试示例。
 
 **每次尝试分两轮：**
 
@@ -200,7 +219,7 @@ Hmz(workspace=RUN / "workspace").run(
 | C2 结构 | ① `backend/torch/ops.py` 中有 `def <op>`，带注解和 docstring，且不导入 `embodiinfer.models`/`policies`/`engine`；② `layers/ops.py` 中有对应的 `register_lazy_op` 行；③ 每个调用点已改为注册表调用，原表达式只出现在 preserve 分支中；④ 在 `test_python` 中验证：`available_ops()["<op>"]` 包含 `torch`、`get_op("<op>")` 就是参考实现、`KernelSelection("none").prepare()` 成功、`KernelSelection("torch").resolve("<op>")` 返回参考实现 | `ast` + 子进程 |
 | C3 格式 | 改动文件通过 `ruff check` 和 `ruff format --check` | `ruff` |
 | C4 测试 | 规格 `tests` 中的测试和 `REGISTRATION.json` 列出的新测试全部通过 | `test_python -m pytest <files> -q`，在 `RUN/worktree` 中运行 |
-| C5 测试有效性 | 把新测试复制到 `RUN/base`，以 `PYTHONPATH=RUN/base` 运行，结果必须失败，以此证明这些测试确实依赖本次改动 | `test_python -m pytest` |
+| C5 测试有效性 | 把新测试复制到 `RUN/base`，以 `PYTHONPATH=RUN/base` 逐个运行，每个测试的所有参数化实例必须执行并断言失败；通过、跳过、收集失败或依赖异常均不算有效证据 | `test_python` 内调用 `pytest.main`，保存 JUnit 报告 |
 
 ### 步骤 5：反馈重做
 
@@ -267,7 +286,10 @@ results/kernel_tuning/register/<run_id>/
   patch.diff  SUMMARY.md
 ```
 
-`resume` 会从 `manifest.json` 记录的阶段继续，已经通过的阶段不再重跑。规格变了就要新建一次运行。
+`resume` 会结合 `manifest.json` 和 Humanize2 的状态台账继续，已经通过的阶段在源码和
+`REGISTRATION.json` 哈希未变时不再重跑。规格变了就要新建一次运行。
+同次执行中的 repair 沿用会话；进程中断后从记录的阶段继续，新会话会收到规格、已有计划和反馈。
+基线测试复制前先记入恢复台账，失败、取消和下次恢复时均还原这些测试文件。
 
 ## 6. 现有工具链的复用
 
@@ -282,7 +304,7 @@ results/kernel_tuning/register/<run_id>/
 
 `profile`、`capture-ops`、`calibrate`、`tune-all`、`install`、`verify` 不在本流程内使用。它们属于调优阶段，或者需要 GPU。
 
-## 7. 需要新写的代码
+## 7. 代码布局
 
 | 文件 | 内容 |
 |---|---|
@@ -294,6 +316,7 @@ results/kernel_tuning/register/<run_id>/
 | `registration/prompts.py` | `plan`、`implement`、`repair` 三种 prompt |
 | `registration/flow.py` | Humanize2 flow `operator_registration` |
 | `registration/finalize.py` | 生成 `SUMMARY.md`，提交和推送 |
+| `registration/cli.py` | 参数解析、运行环境校验、Humanize2 启动 |
 | `__main__.py` | 增加 `register` 子命令组：`new`、`run`、`resume`、`status`、`finalize` |
 | `tests/kernel_tuning/test_registration.py` | CPU 测试，覆盖：规格校验；在示例源码上定位调用点；用合成仓库测 C1；构造缺参考实现、错进循环、原表达式残留等情况测 C2；C5 能识别在基线上也通过的测试；用 Humanize2 自带的假智能体（同 `tests/kernel_tuning/test_flow.py`）跑通"失败 → 反馈 → 修复 → 通过"并验证 `resume` |
 
@@ -306,3 +329,7 @@ results/kernel_tuning/register/<run_id>/
 - **每次只注册一个算子，不支持把多个相邻算子融合成一个。**
 - **策略需要已有 `kernels` 传参链。** 必须已经有 `KernelSelection` 和类似 `_op` 的 helper，目前只有 pi0.5 具备。其他策略要先人工接入一次。
 - **智能体写出的补丁可能检查全过但结构不好**（例如传参链过长），仍然需要人工审阅。
+- **新测试必须单独列出函数 node ID。** 不接受整个文件、已有测试或挑选部分参数化实例。
+  新符号的导入放在函数内部，先断言符号存在，避免用缺失导入代替有效的基线断言失败。
+- **目录和哈希检查不等同于安全沙箱。** 智能体和测试继承运行用户的权限；控制器隐藏 CUDA/ROCm
+  设备，禁止运行 GPU 测试，但这不是对任意不受信代码的操作系统隔离。

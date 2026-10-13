@@ -240,7 +240,16 @@ class RunStore:
         scratch.mkdir(parents=True, exist_ok=False)
         shutil.copytree(self.task.root, scratch / "task")
         shutil.copyfile(self.solution_path(self.manifest["best"]), scratch / "incumbent.json")
-        atomic_json(scratch / "feedback.json", self.manifest["attempts"][-5:])
+        feedback = []
+        for previous in self.manifest["attempts"][-5:]:
+            record = dict(previous)
+            if previous.get("solution_digest"):
+                # A rejected kernel is not the incumbent. Give the next agent
+                # its verified source as well as its timings, so it can learn
+                # from failed launch configurations instead of guessing them.
+                record["solution"] = read_json(self.solution_path(previous["id"]))
+            feedback.append(record)
+        atomic_json(scratch / "feedback.json", feedback)
         atomic_json(scratch / "environment.json", self.manifest["environment"])
         return candidate, archive, scratch
 
