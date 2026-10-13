@@ -338,6 +338,24 @@ def _gated_gelu_impl(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.gelu(gate, approximate="tanh") * up
 
 
+def _prepare_compiled_inference_helpers() -> None:
+    """Stabilize helper lookups before tracing the compiled prefix tower.
+
+    The prefix tower is itself wrapped in ``torch.compile``.  Lazily adding
+    helper wrappers while Dynamo traces that outer function invalidates its
+    global-dictionary guard and needlessly consumes one cache entry per helper.
+    Creating the four lazy wrappers up front preserves the same compiled
+    operators and numerics while keeping that guard stable across layouts.
+    """
+    for helper in (
+        _apply_rope_impl,
+        _gated_residual_impl,
+        _rmsnorm_math,
+        _gated_gelu_impl,
+    ):
+        _inference_helper(helper, True)
+
+
 @dataclass
 class Pi05Prefix:
     """pi0.5 prefix state: our own per-layer (K, V) cache + the pad mask.
@@ -517,13 +535,16 @@ class Pi05Policy(FlowVLAPolicy):
         weight_only = optimizations is not None and optimizations.mlp_weights is not None
         if isinstance(checkpoint, str):
             from .checkpoints import load_checkpoint
+            from .checkpoints.openpi import OpenPiConfig
 
-            self._lerobot, self.openpi_config = load_checkpoint(
+            self._lerobot, processor_config = load_checkpoint(
                 checkpoint,
                 load_device="cpu" if weight_only else load_device,
                 checkpoint_config=checkpoint_config,
                 low_cpu_mem_usage=low_cpu_mem_usage or weight_only,
             )
+            if isinstance(processor_config, OpenPiConfig):
+                self.openpi_config = processor_config
         else:
             self._lerobot = checkpoint.eval()
         self.checkpoint = checkpoint if isinstance(checkpoint, str) else None
@@ -998,6 +1019,7 @@ class Pi05Policy(FlowVLAPolicy):
             prefix_encoder = _COMPILED_PREFIX_ENCODERS.get(policy_key)
             if prefix_encoder is None:
                 _prepare_fused_projection_weights(self._prefix_tower)
+                _prepare_compiled_inference_helpers()
 
                 def encode_tower(hidden, positions, attention_mask):
                     return self._tower_forward(
