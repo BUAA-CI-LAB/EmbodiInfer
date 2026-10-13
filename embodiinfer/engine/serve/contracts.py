@@ -13,6 +13,17 @@ from typing import Any, Protocol, runtime_checkable
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
+# Versioned wire names.  EmbodiRun has shipped both prefixes during the
+# migration, therefore requests accept the canonical ``vvla`` name and the
+# newer ``embodiinfer`` alias while responses keep the legacy spelling.
+SESSION_SCHEMA = "vvla.policy.session.v1"
+STEP_SCHEMA = "vvla.policy.step.v1"
+RESET_SCHEMA = "vvla.policy.reset.v1"
+RPC_SCHEMA = "vvla.policy.rpc.v1"
+SESSION_SCHEMA_ALIASES = frozenset({SESSION_SCHEMA, "embodiinfer.policy.session.v1"})
+STEP_SCHEMA_ALIASES = frozenset({STEP_SCHEMA, "embodiinfer.policy.step.v1"})
+RPC_SCHEMA_ALIASES = frozenset({RPC_SCHEMA, "embodiinfer.policy.rpc.v1"})
+
 
 class ServeError(RuntimeError):
     def __init__(self, status: int, code: str, message: str):
@@ -181,7 +192,7 @@ def parse_step(
     if metadata_body is None:
         raise ServeError(400, "invalid_multipart", "metadata part is required")
     metadata = parse_json(metadata_body, "metadata")
-    if metadata.get("schema") != "vvla.policy.step.v1":
+    if metadata.get("schema") not in STEP_SCHEMA_ALIASES:
         raise ServeError(400, "unsupported_schema", "unsupported step schema")
     session_id = _identifier(metadata.get("session_id"), "session_id")
     request_id = _identifier(metadata.get("request_id"), "request_id")
@@ -233,7 +244,7 @@ def parse_structured_step(
     """Validate a transport-neutral structured policy step payload."""
 
     metadata = _object(payload, "step request")
-    if metadata.get("schema") != "vvla.policy.step.v1":
+    if metadata.get("schema") not in STEP_SCHEMA_ALIASES:
         raise ServeError(400, "unsupported_schema", "unsupported step schema")
     session_id = _identifier(metadata.get("session_id"), "session_id")
     request_id = _identifier(metadata.get("request_id"), "request_id")
@@ -285,8 +296,15 @@ __all__ = [
     "BatchServingAdapter",
     "ModelAction",
     "ModelResult",
+    "RPC_SCHEMA",
+    "RPC_SCHEMA_ALIASES",
+    "RESET_SCHEMA",
     "RawImage",
     "RawPolicyRequest",
+    "SESSION_SCHEMA",
+    "SESSION_SCHEMA_ALIASES",
+    "STEP_SCHEMA",
+    "STEP_SCHEMA_ALIASES",
     "ServeError",
     "ServingAdapter",
     "payload_fingerprint",

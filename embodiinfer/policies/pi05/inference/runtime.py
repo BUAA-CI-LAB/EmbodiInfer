@@ -344,11 +344,20 @@ class Pi05FlowDecoder(FlowActionDecoder):
         num_steps: int,
         bucket: int,
         graphs: GraphManager | None,
+        *,
+        guidance=None,
     ) -> torch.Tensor:
-        """Return model-space actions using cached schedules for CUDA eval without autograd."""
+        """Return model-space actions using cached schedules for CUDA eval without autograd.
+
+        RTC guidance deliberately takes the generic eager path: soft RTC needs a
+        Jacobian-vector product through the velocity field and cannot be served
+        by the native cached schedule or a captured loop.
+        """
         policy = self.policy
         if state is None:
             raise ValueError("Flow decoding requires an initial state")
+        if guidance is not None and guidance.enabled:
+            return super().integrate(state, prefix, num_steps, bucket, graphs, guidance=guidance)
         if not policy._native_enabled() or state.device.type != "cuda":
             return super().integrate(state, prefix, num_steps, bucket, graphs)
         if state.shape[0] != bucket:

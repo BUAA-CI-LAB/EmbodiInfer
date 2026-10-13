@@ -39,6 +39,7 @@ class _Staged:
     real_B: int
     request_ids: list[str]
     num_steps: int
+    rtc_guidance: object | None = None
 
 
 class _StageTimer:
@@ -144,31 +145,54 @@ class EngineCore:
             return policy.execution_dtype
         return torch_dtype(self.config.dtype)
 
-    def _integrate(self, x: torch.Tensor | None, prefix, num_steps: int, bucket: int) -> torch.Tensor:
+    def _integrate(
+        self,
+        x: torch.Tensor | None,
+        prefix,
+        num_steps: int,
+        bucket: int,
+        rtc_guidance: object | None = None,
+    ) -> torch.Tensor:
         """Produce the action chunk from the staged prefix via the policy's decoder.
 
         Model-agnostic: for a flow policy the decoder runs the N-step denoise loop
         (with the active CUDA-graph mode); for a single-pass policy it does one
         forward. The engine only supplies the staged state, the graph manager, and
         the bucket — it does not know how the chunk is produced."""
-        return self.policy.decoder.produce_chunk(x, prefix, num_steps, bucket, self._graphs)
+        if rtc_guidance is None or not bool(getattr(rtc_guidance, "enabled", False)):
+            # Keep the pre-RTC call shape for third-party decoders that implement
+            # the original ActionDecoder contract; synchronous execution remains
+            # source-compatible and bit-identical.
+            return self.policy.decoder.produce_chunk(x, prefix, num_steps, bucket, self._graphs)
+        return self.policy.decoder.produce_chunk(
+            x, prefix, num_steps, bucket, self._graphs, guidance=rtc_guidance
+        )
 
     def _prefill(
-        self, batch: PolicyBatch, num_steps: int | None, generator: torch.Generator | None
+        self,
+        batch: PolicyBatch,
+        num_steps: int | None,
+        generator: torch.Generator | None,
+        rtc_guidance: object | None = None,
     ) -> _Staged:
         """Compute-bound stage: pad, move to device, encode the multimodal prefix
         once, and draw the initial noise. Padding + device/dtype move are the
         policy's / batch's concern; the engine stays agnostic to the batch layout."""
         real_B = batch.batch_size
         num_steps = num_steps or self.config.num_steps or self.pcfg.default_num_steps
-        bucket = self.config.resolve_bucket(real_B) if self._graphs is not None else real_B
+        active_rtc = rtc_guidance is not None and bool(getattr(rtc_guidance, "enabled", False))
+        bucket = (
+            real_B
+            if active_rtc
+            else (self.config.resolve_bucket(real_B) if self._graphs is not None else real_B)
+        )
         batch = self.policy.pad(batch, bucket)
         batch = batch.to(self.device, self.dtype)
         prefix = self.policy.encode_prefix(batch)  # eager prefill, once
         # The decoder stages its own initial state: flow seeds noise, a single-pass
         # policy seeds nothing. The engine stays agnostic to what generation needs.
         x = self.policy.decoder.init_state(bucket, generator)
-        return _Staged(prefix, x, bucket, real_B, list(batch.request_ids), num_steps)
+        return _Staged(prefix, x, bucket, real_B, list(batch.request_ids), num_steps, rtc_guidance)
 
     def _pack(
         self,
@@ -284,13 +308,16 @@ class EngineCore:
         generator: torch.Generator | None = None,
         *,
         session_ids: Sequence[SessionKey] | None = None,
+        rtc_guidance: object | None = None,
     ) -> list[ActionChunk]:
         if self.policy.is_recurrent:
+            if rtc_guidance is not None:
+                raise UnsupportedRecurrentModeError("recurrent policies do not support RTC guidance")
             return self._execute_recurrent(batch, num_steps, generator, session_ids)
         timer = _StageTimer(self.device)
-        st = self._prefill(batch, num_steps, generator)
+        st = self._prefill(batch, num_steps, generator, rtc_guidance)
         timer.mark_prefill_complete()
-        x = self._integrate(st.x, st.prefix, st.num_steps, st.bucket)
+        x = self._integrate(st.x, st.prefix, st.num_steps, st.bucket, st.rtc_guidance)
         latency_ms, timing = timer.finish()
         return self._pack(x, st, latency_ms, timing)
 
@@ -329,6 +356,7 @@ class EngineCore:
         next_batch: PolicyBatch | None,
         num_steps: int | None,
         generator: torch.Generator | None,
+        rtc_guidance: object | None = None,
     ) -> tuple[list[ActionChunk] | None, _Staged | None]:
         """One depth-1 pipeline step: overlap ``prev``'s denoise (stream A) with
         ``next_batch``'s prefill (stream B, allocations isolated in a MemPool so the
@@ -343,14 +371,29 @@ class EngineCore:
         """
         if self.policy.is_recurrent:
             raise UnsupportedRecurrentModeError("recurrent policies do not support pipelined execution")
+        # RTC's correction is eager (soft guidance differentiates through the
+        # velocity field), so do not overlap it with a CUDA-graph replay.
+        if prev is not None and bool(getattr(prev.rtc_guidance, "enabled", False)):
+            x = self._integrate(prev.x, prev.prefix, prev.num_steps, prev.bucket, prev.rtc_guidance)
+            prev_actions = self._pack(x, prev, 0.0)
+            staged = (
+                self._prefill(next_batch, num_steps, generator, rtc_guidance)
+                if next_batch is not None
+                else None
+            )
+            return prev_actions, staged
         if not self._overlap_ready():
             prev_actions = None
             if prev is not None:
                 t0 = now_ns()
-                x = self._integrate(prev.x, prev.prefix, prev.num_steps, prev.bucket)
+                x = self._integrate(prev.x, prev.prefix, prev.num_steps, prev.bucket, prev.rtc_guidance)
                 sync_if_cuda(self.device)
                 prev_actions = self._pack(x, prev, (now_ns() - t0) / 1e6)
-            staged = self._prefill(next_batch, num_steps, generator) if next_batch is not None else None
+            staged = (
+                self._prefill(next_batch, num_steps, generator, rtc_guidance)
+                if next_batch is not None
+                else None
+            )
             return prev_actions, staged
 
         if self._stream_a is None:
@@ -362,11 +405,11 @@ class EngineCore:
         x = None
         if prev is not None:
             with torch.cuda.stream(sA):  # denoise prev (graph replay)
-                x = self._integrate(prev.x, prev.prefix, prev.num_steps, prev.bucket)
+                x = self._integrate(prev.x, prev.prefix, prev.num_steps, prev.bucket, prev.rtc_guidance)
         staged = None
         if next_batch is not None:  # prefill next, isolated so it can't alias the replay
             with torch.cuda.stream(sB), torch.cuda.use_mem_pool(self._prefill_pool):
-                staged = self._prefill(next_batch, num_steps, generator)
+                staged = self._prefill(next_batch, num_steps, generator, rtc_guidance)
         if prev is not None:
             sA.synchronize()
         if next_batch is not None:
@@ -380,6 +423,8 @@ class EngineCore:
         batches: list[PolicyBatch],
         num_steps: int | None = None,
         generator: torch.Generator | None = None,
+        *,
+        rtc_guidance: Sequence[object | None] | None = None,
     ) -> list[list[ActionChunk]]:
         """Execute a sequence of batches, overlapping each batch's denoise with the
         next batch's prefill (see :meth:`_pipeline_step`). Returns one
@@ -395,15 +440,25 @@ class EngineCore:
         """
         if self.policy.is_recurrent:
             raise UnsupportedRecurrentModeError("recurrent policies do not support pipelined execution")
-        if len(batches) <= 1 or not self._overlap_ready():
-            return [self.execute(b, num_steps, generator) for b in batches]
+        plans = [None] * len(batches) if rtc_guidance is None else list(rtc_guidance)
+        if len(plans) != len(batches):
+            raise ValueError("rtc_guidance must supply exactly one entry per batch")
+        if (
+            len(batches) <= 1
+            or not self._overlap_ready()
+            or any(bool(getattr(plan, "enabled", False)) for plan in plans)
+        ):
+            return [
+                self.execute(b, num_steps, generator, rtc_guidance=plan)
+                for b, plan in zip(batches, plans, strict=True)
+            ]
         results: list[list[ActionChunk]] = []
         prev: _Staged | None = None
-        for b in batches:
-            prev_actions, prev = self._pipeline_step(prev, b, num_steps, generator)
+        for b, plan in zip(batches, plans, strict=True):
+            prev_actions, prev = self._pipeline_step(prev, b, num_steps, generator, plan)
             if prev_actions is not None:
                 results.append(prev_actions)
-        prev_actions, _ = self._pipeline_step(prev, None, num_steps, generator)  # drain the last
+        prev_actions, _ = self._pipeline_step(prev, None, num_steps, generator, None)  # drain the last
         if prev_actions is not None:
             results.append(prev_actions)
         return results
