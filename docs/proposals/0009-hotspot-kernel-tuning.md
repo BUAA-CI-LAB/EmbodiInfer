@@ -298,8 +298,7 @@ reproduces them.
 Status (2026-10-12): steps 1–3 are implemented for pi0.5; the loop was proven
 on Jetson Thor instead of an RTX 4090 (§9), and the `thor` profile ships one
 tuned operator. Qwen R2R and StreamVLN call sites, step 4 and an RTX 4090
-profile are not done; neither is shape-range tuning (§10). Step 4's registration
-loop is designed in [0010](0010-agent-operator-registration.md).
+profile are not done; neither is shape-range tuning (§10).
 
 New tooling lives in `scripts/kernel_tuning/` and `benchmarks/kernel_tuning/`.
 Existing 0008 commands keep working and are not extended. No public symbol is
