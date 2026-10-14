@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from hmz.flows import (
-    Agent,
     AgentCollection,
     Budget,
     BudgetExceeded,
@@ -35,6 +34,7 @@ from scripts.kernel_tuning.contracts import (
     validate_measurement,
     validate_solution,
 )
+from scripts.kernel_tuning.permissions import Coder, session_agent
 from scripts.kernel_tuning.prompts import implementation_prompt, plan_prompt
 from scripts.kernel_tuning.runner import evaluate
 
@@ -42,7 +42,7 @@ from scripts.kernel_tuning.runner import evaluate
 class Agents(AgentCollection):
     """An existing coding agent, selected by an explicit hmz agent specification."""
 
-    coder: Agent
+    coder: Coder
 
 
 class Envs(EnvCollection):
@@ -74,6 +74,7 @@ async def kernel_tuning(
         store.manifest = ledger
     store.verify()
     store.recover()
+    coder = session_agent(agents["coder"], unfenced=bool(store.manifest.get("unfenced")))
     cfg = store.task.settings
     base_elapsed = store.manifest["elapsed_seconds"]
     started = time.monotonic()
@@ -135,7 +136,7 @@ async def kernel_tuning(
             session = None
             try:
                 work_env = await envs["workspace"].derive_subdir(subdir=candidate)
-                session = await agents["coder"].spawn(env=work_env)
+                session = await coder.spawn(env=work_env)
                 for stage, prompt in (
                     ("plan", plan_prompt(store.task)),
                     ("implement", implementation_prompt(store.task)),
@@ -146,7 +147,7 @@ async def kernel_tuning(
                     seconds = min(cfg.search.agent_timeout_seconds, remaining())
                     (archive / f"{stage}-prompt.txt").write_text(prompt, encoding="utf-8")
                     reply = await asyncio.wait_for(
-                        agents["coder"].run(
+                        coder.run(
                             prompt,
                             session=session,
                             budget=Budget(duration=timedelta(seconds=seconds), graceful=False),

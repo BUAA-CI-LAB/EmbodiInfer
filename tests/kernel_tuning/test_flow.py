@@ -227,3 +227,17 @@ def test_crash_during_attempt_preparation_remains_counted(store, monkeypatch) ->
     resumed.save()
     assert resumed.manifest["attempts"][0]["status"] == "interrupted"
     assert resumed.manifest["streak"] == 1
+
+
+@pytest.mark.parametrize("unfenced", [False, True])
+def test_sessions_run_under_the_recorded_fence(store, candidate, unfenced: bool) -> None:
+    """Fenced runs keep hmz's default grant; only a recorded --unfenced run widens it."""
+    from scripts.kernel_tuning.permissions import FENCED, UNFENCED
+
+    store.manifest["unfenced"] = unfenced
+    store.save()
+    coder = fake_coder(store, candidate, [8, 9, 9])
+    run_fake(store, coder)
+    assert coder.sessions
+    expected = UNFENCED if unfenced else FENCED
+    assert all(session.permission == expected for session in coder.sessions)

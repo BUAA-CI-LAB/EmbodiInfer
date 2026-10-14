@@ -49,6 +49,7 @@ def create(
     agent: str,
     overrides: dict[str, Any],
     hardware_notes: Path | None,
+    unfenced: bool = False,
 ) -> Path:
     """Generate every task into a new batch directory and record the plan."""
     if not operators:
@@ -74,6 +75,7 @@ def create(
             "schema_version": 1,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "agent": agent,
+            "unfenced": unfenced,
             "overrides": overrides,
             "items": items,
         },
@@ -147,7 +149,13 @@ def preflight(root: Path, names: list[str] | None = None) -> dict[str, str | Non
 
 
 def create_model(
-    capture: ModelCapture, output: Path, *, agent: str, overrides: dict[str, Any], hardware_notes: Path | None
+    capture: ModelCapture,
+    output: Path,
+    *,
+    agent: str,
+    overrides: dict[str, Any],
+    hardware_notes: Path | None,
+    unfenced: bool = False,
 ) -> Path:
     """Freeze one model capture and all tasks in a batch requiring a complete preflight."""
     from .discovery.tasks import render_model
@@ -186,6 +194,7 @@ def create_model(
             "schema_version": 2,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "agent": agent,
+            "unfenced": unfenced,
             "overrides": overrides,
             "model": capture.manifest["target"],
             "capture_identity": capture.identity,
@@ -299,6 +308,8 @@ def execute(root: Path, *, launcher: Launcher = launch) -> dict[str, Any]:
                 "--output",
                 str(root / "runs"),
             ]
+            if batch.get("unfenced"):
+                command.append("--unfenced")
         item["status"] = "running"
         atomic_json(root / "batch.json", batch)
         try:
@@ -367,6 +378,7 @@ def write_summary(root: Path) -> list[dict[str, Any]]:
         f"Agent: `{batch['agent']}`. Improvements are weighted mean latency against the production",
         "baseline, from the weakest paired round. Exported kernels still need review and",
         "integration before runtime use.",
+        *(["", "Agents ran **unfenced** (no Humanize2 Landlock fence)."] if batch.get("unfenced") else []),
         "",
         "| operator | status | attempts | promoted | improvement | baseline ms | best ms | detail |",
         "|---|---|---|---|---|---|---|---|",

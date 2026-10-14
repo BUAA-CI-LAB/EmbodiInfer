@@ -183,6 +183,31 @@ def test_cli_validates_agent_and_resume_arguments(tmp_path: Path, capsys) -> Non
     assert "| swiglu | pending |" in capsys.readouterr().out
     assert main(["tune-all", "--resume", str(root), "--set", "device=cuda:1"]) == 2
     assert "--resume continues the recorded batch" in capsys.readouterr().err
+    assert main(["tune-all", "--resume", str(root), "--unfenced"]) == 2
+    assert "--resume continues the recorded batch" in capsys.readouterr().err
+
+
+def test_unfenced_batch_starts_every_run_unfenced(tmp_path: Path) -> None:
+    root = batch.create(
+        select(["rms_norm"]),
+        tmp_path / "batches",
+        agent="claude/fake:low",
+        overrides={},
+        hardware_notes=None,
+        unfenced=True,
+    )
+    commands: list[list[str]] = []
+
+    def record(argv: list[str], log: Path) -> int:
+        commands.append(argv)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("stopped before archiving\n", encoding="utf-8")
+        return 1
+
+    batch.execute(root, launcher=record)
+    assert commands and commands[0][3] == "run" and "--unfenced" in commands[0]
+    assert "unfenced" in (root / "summary.md").read_text(encoding="utf-8")
+    assert read_json(new_batch(tmp_path / "default", ["rms_norm"]) / "batch.json")["unfenced"] is False
 
 
 def test_cli_generate_writes_overridden_tasks(tmp_path: Path, capsys) -> None:

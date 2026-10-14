@@ -10,7 +10,15 @@ import shutil
 import sys
 from pathlib import Path
 
-from .artifacts import REPOSITORY, RunStore, atomic_json, run_lock, runtime_identity
+from .artifacts import (
+    REPOSITORY,
+    UNFENCED_HELP,
+    RunStore,
+    atomic_json,
+    run_lock,
+    runtime_identity,
+    warn_unfenced,
+)
 from .contracts import HMZ_REVISION, ContractError, TaskPackage, read_json
 from .discovery.contracts import ModelCapture
 from .runner import evaluate
@@ -39,6 +47,7 @@ def _execute(store: RunStore, *, resume: bool) -> dict:
         remaining = store.task.settings.search.max_seconds - store.manifest["elapsed_seconds"]
         if remaining <= 0 or store.manifest["status"] == "completed":
             raise ContractError("Run budget already exhausted; start a new run with a new task contract")
+        warn_unfenced(store.manifest)
         epic = store.root / "humanize.json"
         running = Hmz(workspace=store.root / "workspace").run(
             flow=Path(__file__).with_name("flow.py"),
@@ -178,11 +187,14 @@ def _tune_all(args: argparse.Namespace) -> int:
             or args.set
             or args.hardware_notes
             or args.agent
+            or args.unfenced
             or args.captured
             or args.estimated
             or args.catalog
         ):
-            raise ContractError("--resume continues the recorded batch; omit selection, --set, and --agent")
+            raise ContractError(
+                "--resume continues the recorded batch; omit selection, --set, --agent, and --unfenced"
+            )
         root = args.resume.resolve(strict=True)
     else:
         agent = args.agent or ""
@@ -192,6 +204,7 @@ def _tune_all(args: argparse.Namespace) -> int:
             "agent": agent,
             "overrides": parse_overrides(args.set),
             "hardware_notes": args.hardware_notes,
+            "unfenced": args.unfenced,
         }
         if args.catalog:
             operators, notes = apply_file(
@@ -247,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("task", type=Path)
     run.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec; overrides tuning.yaml")
     run.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning")
+    run.add_argument("--unfenced", action="store_true", help=UNFENCED_HELP)
     for name in ("resume", "status"):
         commands.add_parser(name).add_argument("run", type=Path)
     export = commands.add_parser("export", help="Export best verified source and evidence; no execution")
@@ -264,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     tune_all.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec for every operator")
     tune_all.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning/batches")
     tune_all.add_argument("--resume", type=Path, metavar="BATCH", help="Continue an existing batch directory")
+    tune_all.add_argument("--unfenced", action="store_true", help=UNFENCED_HELP)
     mode = tune_all.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Only generate and validate the tasks")
     mode.add_argument("--preflight-only", action="store_true", help="Stop after measuring the baselines")
@@ -456,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                 from .batch import verify_model_task
 
                 model_batch = verify_model_task(task)
-            store = RunStore.create(task, args.output, agent)
+            store = RunStore.create(task, args.output, agent, unfenced=args.unfenced)
             if model_batch is not None:
                 store.manifest["model_batch"] = str(model_batch)
                 item = read_json(model_batch / "batch.json")["items"][task.root.name]

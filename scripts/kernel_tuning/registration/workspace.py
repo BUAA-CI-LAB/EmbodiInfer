@@ -290,13 +290,21 @@ class RegistrationRun:
             self.manifest["base_overlay"] = {}
             self.save()
 
-    def prepare(self, agent: str, python: str | None = None) -> None:
-        """Freeze reviewed call sites and build context before the first agent turn."""
+    def prepare(self, agent: str, python: str | None = None, *, unfenced: bool = False) -> None:
+        """Freeze reviewed call sites and build context before the first agent turn.
+
+        The agent, test interpreter and ``unfenced`` choice are frozen together;
+        resume always reuses them.
+        """
         self.recover_base()
         self.verify()
         if self.manifest["sites_hash"]:
-            if agent != self.manifest["agent"] or (python and python != self.manifest["test_python"]):
-                raise ContractError("Agent/test_python is frozen; resume without overrides")
+            if (
+                agent != self.manifest["agent"]
+                or (python and python != self.manifest["test_python"])
+                or unfenced != bool(self.manifest.get("unfenced"))
+            ):
+                raise ContractError("Agent/test_python/unfenced is frozen; resume without overrides")
             return
         review = read_json(self.root / "sites.json")
         validate_review(review, locate(self.base, self.spec))
@@ -320,6 +328,7 @@ class RegistrationRun:
         (context / "RULES.md").write_text(RULES, encoding="utf-8")
         self.manifest.update(
             agent=agent,
+            unfenced=unfenced,
             test_python=python or self.manifest["test_python"],
             confirmed=True,
             sites_hash=file_hash(self.root / "sites.json"),

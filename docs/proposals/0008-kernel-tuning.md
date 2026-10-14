@@ -446,7 +446,10 @@ is not evidence for another; no new performance claim is made here.
   requires POSIX and Python 3.12+ in a separate tool environment; model runtimes
   retain their own dependency pins and Python support floor.
 - Agents and kernels execute with process permissions. Workspace bounds and
-  artifact digests are integrity checks, not an OS security sandbox.
+  artifact digests are integrity checks, not an OS security sandbox. Humanize2's
+  default session fence needs Linux Landlock; `--unfenced` (frozen per run or
+  batch) drops it on hosts without Landlock and leaves isolation to a dedicated
+  account or container.
 
 ## 11. Automated tuning workflow
 
@@ -551,7 +554,9 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all 
 ```
 
 Use `--dry-run` to generate tasks only, or `--preflight-only` to measure baselines
-without starting agents. If a preflight-only batch will later resume search,
+without starting agents. On a host whose kernel lacks Landlock, add `--unfenced`
+when creating the batch and run it under an isolated account
+([CONTRIBUTING](../../CONTRIBUTING.md#optional-kernel-tuning-tools)). If a preflight-only batch will later resume search,
 specify its agent when creating it. A normal run starts agents only after every
 baseline passes. Default limits apply per task: 20 attempts, two active hours,
 or five consecutive failures/non-improvements.

@@ -166,6 +166,13 @@ whole-model bit-exact verification before merge.
 Humanize2 agents may execute commands without interactive approval; the scratch
 directory and content hashes are not an OS sandbox. Use an appropriate isolated
 account/container on the target host when needed.
+By default Humanize2 fences each agent session (workdir writable, rest of the
+machine read-only), which needs Linux Landlock: kernel 5.13+ built with
+`CONFIG_SECURITY_LANDLOCK` and listed in `/sys/kernel/security/lsm`. Some vendor
+kernels, such as Jetson L4T, omit it. On such hosts pass `--unfenced` to `run`,
+`tune-all` or `register run`; the choice is frozen into the run, and resume reuses
+it. Unfenced agents can write anything their account can, so run them only under
+a dedicated account without `sudo` or `docker` group membership, or in a container.
 
 CPU tests for the tooling use official Humanize2 fake agents and fake evaluators,
 without a coding-agent account or GPU stack:

@@ -11,7 +11,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.kernel_tuning.artifacts import REPOSITORY, atomic_json, run_lock, runtime_identity
+from scripts.kernel_tuning.artifacts import (
+    REPOSITORY,
+    UNFENCED_HELP,
+    atomic_json,
+    run_lock,
+    runtime_identity,
+    warn_unfenced,
+)
 from scripts.kernel_tuning.contracts import ContractError
 
 from .finalize import finalize
@@ -41,6 +48,7 @@ def add_parser(commands: Any) -> None:
     run.add_argument("--agent", required=True)
     run.add_argument("--set", action="append", default=[], metavar="test_python=/abs/python")
     run.add_argument("--yes", action="store_true", help="Explicitly confirm the reviewed sites")
+    run.add_argument("--unfenced", action="store_true", help=UNFENCED_HELP)
     for name in ("resume", "status"):
         actions.add_parser(name).add_argument("run", type=Path)
     finish = actions.add_parser("finalize", help="Print verified branch/patch; optionally commit or push")
@@ -82,6 +90,7 @@ def execute(run: RegistrationRun, *, resume: bool) -> dict[str, Any]:
         run.manifest.update(status="exhausted", stop_reason="max_seconds")
         run.save()
         return run.manifest
+    warn_unfenced(run.manifest)
     # LocalEnv cannot derive an absolute path or '..'. Root it at RUN, then give
     # only RUN/worktree to the agent. Archive framework journals in workspace/.
     running = Hmz(workspace=run.root).run(
@@ -153,7 +162,7 @@ def dispatch(args: argparse.Namespace) -> int:
                         run.root / "test-runtime.log",
                     )
                 )
-                run.prepare(args.agent, python)
+                run.prepare(args.agent, python, unfenced=args.unfenced)
             elif not run.manifest["sites_hash"]:
                 raise ContractError("Use register run RUN --agent ... to confirm the call sites first")
             try:

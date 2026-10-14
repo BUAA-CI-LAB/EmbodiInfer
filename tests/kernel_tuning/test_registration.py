@@ -858,3 +858,31 @@ def test_route():
     assert [r["check"] for r in results] == ["C1", "C2", "C3", "C4", "C5"]
     assert all(r["passed"] for r in results)
     assert not (base / NEW_TEST).exists()
+
+
+@pytest.mark.parametrize("unfenced", [False, True])
+def test_flow_sessions_run_under_the_recorded_fence(
+    registration_run, humanize, monkeypatch, unfenced: bool
+) -> None:
+    from scripts.kernel_tuning.permissions import FENCED, UNFENCED
+
+    run = registration_run
+    run.manifest["unfenced"] = unfenced
+    run.save()
+
+    async def check(*args, **kwargs):
+        return [{"check": "C1", "passed": True, "details": {}}], None
+
+    monkeypatch.setattr("scripts.kernel_tuning.registration.flow.run_checks", check)
+    coder = scripted_coder(run, humanize)
+    assert fake_flow(run, humanize, coder)["status"] == "passed"
+    expected = UNFENCED if unfenced else FENCED
+    assert coder.sessions and all(session.permission == expected for session in coder.sessions)
+
+
+def test_unfenced_choice_is_frozen_with_the_agent(registration_run) -> None:
+    run = registration_run
+    assert run.manifest["unfenced"] is False
+    with pytest.raises(ContractError, match="frozen"):
+        run.prepare("codex/fake:low", unfenced=True)
+    run.prepare("codex/fake:low")

@@ -19,6 +19,21 @@ from typing import Any
 from .contracts import ContractError, TaskPackage, digest, read_json, tree_hashes
 
 REPOSITORY = Path(__file__).resolve().parents[2]
+UNFENCED_HELP = (
+    "Grant the coding agent every Humanize2 scope so no Landlock fence is needed; "
+    "run only under a dedicated unprivileged account or container"
+)
+
+
+def warn_unfenced(manifest: dict[str, Any]) -> None:
+    """Say on stderr, before any agent starts, that the run relies on outside isolation."""
+    if manifest.get("unfenced"):
+        print(
+            "kernel_tuning: WARNING: agent sessions are unfenced; they may write anywhere this "
+            "account can. Use a dedicated unprivileged account or container.",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def atomic_json(path: Path, value: Any) -> None:
@@ -127,8 +142,12 @@ class RunStore:
             raise ContractError("Task snapshot no longer matches its manifest")
 
     @classmethod
-    def create(cls, task: TaskPackage, output: Path, agent: str) -> RunStore:
-        """Snapshot a task and baseline under a fresh, collision-resistant run ID."""
+    def create(cls, task: TaskPackage, output: Path, agent: str, *, unfenced: bool = False) -> RunStore:
+        """Snapshot a task and baseline under a fresh, collision-resistant run ID.
+
+        ``unfenced`` is frozen into the manifest: every start and resume of the run
+        opens agent sessions without Humanize2's Landlock fence.
+        """
         task.verify()
         output = output.resolve()
         if output == task.root or task.root in output.parents:
@@ -164,6 +183,7 @@ class RunStore:
             "tool_digest": digest(source_hashes),
             "tool_runtime": runtime_identity(),
             "agent": agent,
+            "unfenced": unfenced,
             "baseline_digest": digest(baseline),
             "environment": None,
             "elapsed_seconds": 0.0,

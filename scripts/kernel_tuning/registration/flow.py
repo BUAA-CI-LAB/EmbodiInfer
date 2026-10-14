@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from hmz.flows import (
-    Agent,
     AgentCollection,
     Budget,
     BudgetExceeded,
@@ -24,6 +23,7 @@ from hmz.flows import (
 
 from scripts.kernel_tuning.artifacts import atomic_json
 from scripts.kernel_tuning.contracts import ContractError
+from scripts.kernel_tuning.permissions import Coder, session_agent
 from scripts.kernel_tuning.registration.checks import run_checks
 from scripts.kernel_tuning.registration.finalize import write_outputs
 from scripts.kernel_tuning.registration.prompts import prompt
@@ -33,7 +33,7 @@ from scripts.kernel_tuning.registration.workspace import RegistrationRun, source
 class Agents(AgentCollection):
     """One explicitly selected coding-agent harness."""
 
-    coder: Agent
+    coder: Coder
 
 
 class Envs(EnvCollection):
@@ -66,6 +66,7 @@ async def operator_registration(
         ledger["elapsed_seconds"] = max(ledger["elapsed_seconds"], run.manifest["elapsed_seconds"])
         ledger["base_overlay"] = {}
         run.manifest = ledger
+    coder = session_agent(agents["coder"], unfenced=bool(run.manifest.get("unfenced")))
     cfg = run.spec.budget
     elapsed, started = run.manifest["elapsed_seconds"], time.monotonic()
 
@@ -133,13 +134,13 @@ async def operator_registration(
                     if remaining() <= 0:
                         raise TimeoutError("Registration duration exhausted")
                     if session is None:
-                        session = await agents["coder"].spawn(env=work_env)
+                        session = await coder.spawn(env=work_env)
                     previous_feedback = run.manifest.get("feedback")
                     instruction = prompt(run, stage, previous_feedback)
                     (archive / f"{stage}-prompt.txt").write_text(instruction, encoding="utf-8")
                     seconds = min(cfg.agent_timeout_seconds, remaining())
                     reply = await asyncio.wait_for(
-                        agents["coder"].run(
+                        coder.run(
                             instruction,
                             session=session,
                             budget=Budget(duration=timedelta(seconds=seconds), graceful=False),

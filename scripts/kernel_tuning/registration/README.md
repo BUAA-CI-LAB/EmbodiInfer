@@ -20,6 +20,8 @@
 - **工具环境**：Python ≥ 3.12，并已安装 Humanize2 和 Ruff，与 `tune-all` 共用：
   `uv sync --project scripts/kernel_tuning --python 3.12 --frozen`。
   `run` 和 `resume` 只能在 POSIX 系统上执行；`new`、`status`、`finalize` 不启动智能体。
+  Humanize2 默认用 Linux Landlock 给智能体会话加 fence。如果内核没有 Landlock（例如 Jetson L4T），
+  需要在 `register run` 时加 `--unfenced`，并在没有 `sudo`、不在 `docker` 组的专用账号或容器中运行。
   启动后工具环境的包版本（`hmz`、`pydantic`、`pyyaml`、`psutil`）被记录下来，变化后需要新建运行。
 - **测试解释器 `test_python`**：一个已准备好的模型运行环境，需包含 Torch、pytest，以及规格中 CPU
   测试需要的模型依赖。所有需要导入 `embodiinfer` 的检查都在这个解释器的子进程中执行。工具环境自带
@@ -155,11 +157,11 @@ $TOOL register new --model pi05 --op linear \
 
 ### 4.3 `register run`：启动智能体
 
-`run RUN --agent HARNESS/MODEL:EFFORT [--set test_python=…] [--yes]` 执行一次即视为确认调用点，然后：
+`run RUN --agent HARNESS/MODEL:EFFORT [--set test_python=…] [--yes] [--unfenced]` 执行一次即视为确认调用点，然后：
 
 1. 恢复并校验运行目录（见 4.6）。
 2. 用当前或新指定的 `test_python` 在 `RUN/base` 上重新做预检。
-3. 将 `sites.json` 与 BASE 上重新定位的结果比对，然后冻结 agent、`test_python` 和 `sites.json` 哈希，状态变为 `ready`。
+3. 将 `sites.json` 与 BASE 上重新定位的结果比对，然后冻结 agent、`test_python`、`unfenced` 和 `sites.json` 哈希，状态变为 `ready`。
 4. 建立只读上下文 `RUN/context/`，内容如下：
    - `AGENTS.md`；
    - `embodiinfer/backend/torch/ops.py`、`embodiinfer/layers/ops.py`；
@@ -171,7 +173,7 @@ $TOOL register new --model pi05 --op linear \
    智能体的 `LocalEnv` 是从中派生出的 `RUN/worktree`；框架日志归档到 `RUN/workspace/`，
    实际的 epic 路径记录在 `humanize.json` 中。
 
-`run` 只能执行一次。之后使用 `resume`，它不接受更换 agent 或 `test_python`。
+`run` 只能执行一次。之后使用 `resume`，它不接受更换 agent、`test_python` 或 `unfenced`。
 
 **每次尝试的阶段：**
 
