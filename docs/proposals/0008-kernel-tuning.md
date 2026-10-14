@@ -372,7 +372,8 @@ whole-model parity each have distinct reference paths and evidence.
 
 Implemented components are the Humanize2 Flow/archive, discovery and registry
 capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
-loader, install, model verification, and the CPU registration controller. The
+loader, install, model verification, the CPU registration controller, and an
+opt-in `--unfenced` agent mode for hosts without Landlock (Section 11.1). The
 pi0.5 call sites are integrated; the tuned profile directory currently contains
 the loader but no committed hardware profile. Historical target-machine checks
 are not new validation performed by this documentation change.
@@ -402,8 +403,10 @@ must be checked by model benchmarks before becoming performance claims.
 CPU tests under `tests/kernel_tuning/` cover task validation, Humanize2 fake-agent
 execution, failed/interrupted attempts, budgets/resume, evidence tampering,
 preflight barriers, replay layouts/mutations/RNG, calibration, hotspot attribution,
-installation, model-gate arithmetic and registration repair. Registry tests also
-cover preference, fallback, profile mismatch and digest checks.
+installation, model-gate arithmetic and registration repair. Fake-agent sessions
+also check that runs keep Humanize2's default permission unless `unfenced` is
+recorded, and that batches and registration freeze that choice. Registry tests
+also cover preference, fallback, profile mismatch and digest checks.
 
 GPU and checkpoint tests must use their markers and matching isolated model
 runtime. Required evidence includes production-baseline correctness, changed-input
@@ -488,6 +491,61 @@ subsequent profiling warmup and measurement window.
   --serving-config results/kernel_tuning/pi05-serving.json
 ```
 
+#### Agent hosts without Landlock (`--unfenced`)
+
+By default Humanize2 fences every coding-agent session: the session workdir is
+writable, the rest of the machine is read-only, and the network stays on. On
+Linux the fence is enforced with Landlock, which requires kernel 5.13 or later
+built with `CONFIG_SECURITY_LANDLOCK=y` and listed as active. Check the target
+host before starting agents:
+
+```bash
+uname -r                                  # 5.13 or later
+cat /sys/kernel/security/lsm              # must list landlock
+zcat /proc/config.gz 2>/dev/null | grep LANDLOCK || grep LANDLOCK /boot/config-$(uname -r)
+```
+
+If Landlock is compiled in but inactive, add it to the kernel's `lsm=` boot
+parameter. Some vendor kernels omit it entirely; for example, Jetson L4T R36
+ships with `# CONFIG_SECURITY_LANDLOCK is not set`, and enabling it means
+rebuilding the kernel and its out-of-tree modules. Without Landlock, every agent
+session is refused with
+`HarnessSandboxed: ... fencing it from outside needs Landlock`.
+
+On such hosts, pass `--unfenced` when the run is created. Its sessions are then
+granted every Humanize2 scope, which needs no fence:
+
+| Command | Where to pass it | On resume |
+| --- | --- | --- |
+| `run TASK --agent ... --unfenced` | when the run is created | `resume RUN` reuses it; no flag is accepted |
+| `tune-all ... --agent ... --unfenced` | when the batch is created; every operator run inherits it | `tune-all --resume BATCH` rejects `--unfenced` |
+| `register run RUN --agent ... --unfenced` | when the reviewed sites are confirmed | `register resume RUN` reuses it; another `register run` is refused |
+
+The choice is recorded as `unfenced` in the run's `manifest.json` (and the batch's
+`batch.json`, whose `summary.md` notes it), and a warning is printed to stderr
+before agents start. Runs created without the flag keep Humanize2's default
+fence exactly, so the flag cannot widen an existing run.
+
+An unfenced agent can read and write everything its account can, including the
+repository checkout, the run archive and the evaluator source. Digests still stop
+a tuning run whose task, controller/evaluator source or winning evidence changed,
+and a registration run whose specification, BASE checkout or context changed, but
+they are integrity checks, not a sandbox. Run unfenced agents only under a
+dedicated account without `sudo`, `docker` group membership or access to other
+users' files, or inside a container that mounts only what the run needs. Give
+that account the device groups the evaluator needs (for example `video` and
+`render` on Jetson), its own tooling environment and GPU runtime, and its own
+coding-agent login.
+
+A refused session is recorded as a failed attempt, not as a run error. A tuning
+run can therefore still finish with `status: completed` and
+`stop_reason: max_candidates`, and registration retries it as agent feedback
+until its attempts are `exhausted`. The batch `summary.md` shows only the stop
+reason. After starting on a new host, check the first attempt for
+`HarnessSandboxed` before leaving a long run unattended:
+`attempts[].decision.reasons` in the run's `manifest.json` (for a batch, under
+`runs/`), or `attempts/*/feedback.json` for registration.
+
 ### 11.2 Profile and select operators
 
 Profile with the production configuration. This example uses BF16, ten denoise
@@ -555,10 +613,11 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all 
 
 Use `--dry-run` to generate tasks only, or `--preflight-only` to measure baselines
 without starting agents. On a host whose kernel lacks Landlock, add `--unfenced`
-when creating the batch and run it under an isolated account
-([CONTRIBUTING](../../CONTRIBUTING.md#optional-kernel-tuning-tools)). If a preflight-only batch will later resume search,
-specify its agent when creating it. A normal run starts agents only after every
-baseline passes. Default limits apply per task: 20 attempts, two active hours,
+when creating the batch and run it under an isolated account; see
+[Agent hosts without Landlock](#agent-hosts-without-landlock---unfenced). If a
+preflight-only batch will later resume search, specify its agent (and
+`--unfenced`, if needed) when creating it. A normal run starts agents only after
+every baseline passes. Default limits apply per task: 20 attempts, two active hours,
 or five consecutive failures/non-improvements.
 
 Inspect the batch's `summary.md` / `summary.json` and each task's run evidence.
