@@ -139,8 +139,18 @@ pi05 = { requires-python = ">=3.12" }
 embodiinfer-serve = "embodiinfer.engine.serve.http_server:main"
 embodiinfer-http-serve = "embodiinfer.engine.serve.http_server:main"
 embodiinfer-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
+# Compatibility aliases for existing deployments; dropped once the RLinf
+# rollout integration migrates to the embodiinfer entry points.
+vvla-serve = "embodiinfer.engine.serve.http_server:main"
+vvla-http-serve = "embodiinfer.engine.serve.http_server:main"
+vvla-wireless-serve = "embodiinfer.engine.serve.wireless_server:main"
+
 [tool.setuptools.packages.find]
-include = ["embodiinfer*"]
+include = ["embodiinfer*", "vvla"]
+
+[tool.setuptools.package-data]
+"embodiinfer.backend.cuda" = ["csrc/*.cu", "csrc/*.cuh", "csrc/*.cpp"]
+"embodiinfer.policies.pi05.inference" = ["calibration/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

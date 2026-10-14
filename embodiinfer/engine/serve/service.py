@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any
 
 from .contracts import (
+    SESSION_SCHEMA_ALIASES,
     ModelAction,
     RawPolicyRequest,
     ServeError,
@@ -73,10 +74,11 @@ class PolicyService:
 
     def open_session(self, request: Mapping[str, Any]) -> dict[str, Any]:
         # Schema strings are the wire contract with clients: every payload is
-        # tagged "embodiinfer.<area>.<name>.v<version>" and is validated
-        # verbatim. Bumping a shape requires a new ".vN" suffix, never a silent
-        # change to an existing one.
-        if request.get("schema") != "embodiinfer.policy.session.v1":
+        # tagged "embodiinfer.<area>.<name>.v<version>". Requests may still use
+        # the legacy "vvla.*" spelling (see the *_SCHEMA_ALIASES sets);
+        # responses always carry the canonical name. Bumping a shape requires a
+        # new ".vN" suffix, never a silent change to an existing one.
+        if request.get("schema") not in SESSION_SCHEMA_ALIASES:
             raise ServeError(400, "unsupported_schema", "unsupported session schema")
         robot_id = _identifier(request.get("robot_id"), "robot_id")
         action_space = _identifier(request.get("action_space"), "action_space")

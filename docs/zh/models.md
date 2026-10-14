@@ -72,6 +72,31 @@ StreamVLN 使用原生 W8A8 FP8。Thor 使用原生 W8A8 FP8 和原生 NVFP4。
 [架构指南](architecture.md#cuda-graph-capture)介绍 CUDA Graph 捕获机制；
 [多 GPU 并行](parallelism.md)介绍跨设备批处理和张量并行。
 
+### Pi05 的 Orin W4A16 preset
+
+使用 `make_policy("pi05", checkpoint=..., device_type="orin", preset="w4a16",
+calibration="/models/pi05-gptq/manifest.json")` 选择校准后的 group64 GPTQ 权重。
+两套 MLP 使用 INT4 权重、BF16 激活；attention 保留 FP32 QK/softmax，vision
+保留原 attention，仍执行完整十步 diffusion。它与 Blackwell 的 NVFP4 是不同格式。
+
+加载时先在 CPU 校验 checkpoint 和校准包，再释放原 BF16 MLP 并放置到 GPU，
+避免同时保留两份 MLP 权重。推理权重由外部校准包提供；不支持训练回退，refit 后
+需要重新校准。当前配方覆盖 SM87、B1/H10/十步及 cuBLASLt 12.6.4。
+部署前需单独验证任务成功率，算子逐位一致不等于 INT4 与 BF16 的任务质量相同。
+配置与数值约定见[英文模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
+
+`w8a8-w4a16` 则使用原生整数 W8A8 prefix MLP，action expert 保持 GPTQ W4A16。
+CUDA 编码融合通道缩放、H128 旋转、BF16 舍入和逐 token INT8 量化；整数 GEMM
+融合缩放和精确 BF16 GeGLU。每个 stream/graph 持有独立工作区。
+Prefix QK 使用私有 cuBLAS TF32 handle，softmax 保持 FP32，概率/PV 保持原 BF16；
+action QK 保持严格 FP32，vision 不变，不修改全局 Torch 精度设置。
+
+先用 `scripts/prepare_pi05_mlp_bundle.py --prefix INT8_MANIFEST --action GPTQ_MANIFEST
+--output BUNDLE` 组合已完成的独立校准产物，再传入 `preset="w8a8-w4a16",
+calibration=BUNDLE`。部署需保留两份被引用的权重目录。bundle 绑定 checkpoint、
+manifest 和 shard 摘要，运行时不重新校准或回退到未经校准的量化。
+此配方需要 Triton，仍限定 SM87、B1/H10/完整十步；量化与 TF32 都需要单独验证任务质量。
+
 ## 路线图 {#roadmap}
 
 **SmolVLA** 和基础 **OpenVLA** 模型是计划新增的模型。OpenVLA-OFT
@@ -93,6 +118,9 @@ StreamVLN 使用原生 W8A8 FP8。Thor 使用原生 W8A8 FP8 和原生 NVFP4。
 π0.5 支持 Python 批处理以及跨会话的 HTTP/WirelessComm 批处理。
 请使用
 [适配器 JSON](serving.md#adapter-json)配置相机名称和状态字段，再通过 `--max-batch` 设置批次上限。
+
+原生 Pi05 decoder 只提供确定性推理接口，不声明 `RLDecoder` 的采样或可微
+对数概率重算能力。
 
 对于 PI0.5，`attention="eager"` 还会选择参考投影布局：各相机
 视角单独编码，Q/K/V 与 gate/up 投影保持分离。

@@ -43,6 +43,9 @@ $ pytest tests/ -q
 
 ## Checklist
 
+- [ ] My PR title and every introduced commit follow the
+      [commit policy](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/CONTRIBUTING.md#commit-messages-and-sign-off),
+      and every author/coauthor has supplied their own DCO `Signed-off-by`.
 - [ ] New models follow the flow in
       [`CONTRIBUTING.md`](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/CONTRIBUTING.md)
       and have a design document under `docs/proposals/`.

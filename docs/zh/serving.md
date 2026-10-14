@@ -162,11 +162,15 @@ HTTP 与 WirelessComm 遵循相同的会话和推理步骤规则。
 
 ## 接入 RLinf 训练
 
-[BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/embodiinfer-rollout-backend)
-的 `embodiinfer-rollout-backend` 分支已将 EmbodiInfer 注册为 rollout 后端
-（`rollout.model.model_type` = `embodiinfer` / `embodiinfer_gr00t` / `embodiinfer_openvla_oft` /
-`embodiinfer_lingbotvla`）：EmbodiInfer 在 PPO/GRPO 内提供 rollout，actor 使用原生模型。
+[BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/vvla-rollout-backend)
+的 `vvla-rollout-backend` 分支已将 EmbodiInfer 注册为 rollout 后端
+（`rollout.model.model_type` = `vvla` / `vvla_gr00t` / `vvla_openvla_oft` /
+`vvla_lingbotvla`）：EmbodiInfer 在 PPO/GRPO 内提供 rollout，actor 使用原生模型。
 适配器通过 EmbodiInfer 的策略工厂函数创建模型，通过 refit API 更新权重。
 这些集成覆盖 LIBERO 上的 π0.5、GR00T 和 OpenVLA-OFT，以及 RoboTwin 上的 LingBot-VLA。
+
+这些 `vvla` 前缀的 rollout 模型名连同它们依赖的 `import vvla` 路径，都是早于包
+改名的历史命名；在废弃 shim 的保护下继续可用，待该分支迁移到 `embodiinfer`
+前缀的模型名后再移除。
 
 权重更新流程见 [refit 接口用法](api.md#zero-copy-refit)。

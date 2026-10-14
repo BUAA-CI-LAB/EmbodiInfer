@@ -185,12 +185,17 @@ from its binding and deployment configuration.
 
 ## Registering EmbodiInfer as a rollout backend
 
-The fork [BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/embodiinfer-rollout-backend)
-registers EmbodiInfer as a rollout backend on its `embodiinfer-rollout-backend` branch
-(`rollout.model.model_type` = `embodiinfer` / `embodiinfer_gr00t` /
-`embodiinfer_openvla_oft` / `embodiinfer_lingbotvla`): EmbodiInfer serves rollout inside PPO/GRPO,
+The fork [BUAA-CI-LAB/RLinf](https://github.com/BUAA-CI-LAB/RLinf/tree/vvla-rollout-backend)
+registers EmbodiInfer as a rollout backend on its `vvla-rollout-backend` branch
+(`rollout.model.model_type` = `vvla` / `vvla_gr00t` /
+`vvla_openvla_oft` / `vvla_lingbotvla`): EmbodiInfer serves rollout inside PPO/GRPO,
 the actor uses the native model. The adapters use EmbodiInfer's policy factory
 and refit API for model construction and weight updates. The integrations cover
 π0.5, GR00T, and OpenVLA-OFT on LIBERO, and LingBot-VLA on RoboTwin.
+
+The `vvla` rollout model types and the `import vvla` path they rely on are the
+historical names that branch predates the package rename with; they keep working
+through the deprecated import shim and are dropped once that branch migrates to
+`embodiinfer`-prefixed model types.
 
 See [refit integration patterns](api.md#zero-copy-refit) for the weight-update lifecycle.

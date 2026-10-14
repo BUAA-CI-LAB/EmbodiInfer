@@ -10,10 +10,12 @@ from embodiinfer.policies.cosmos.modeling_cosmos import CosmosDiffusionDecoder
 from embodiinfer.policies.decoder import (
     ActionDecoder,
     AutoregressiveDecoder,
+    FlowActionDecoder,
     FlowDecoder,
     ParallelDecoder,
     RLDecoder,
 )
+from embodiinfer.policies.pi05.inference.runtime import Pi05FlowDecoder
 from embodiinfer.types import Observation
 
 
@@ -107,6 +109,10 @@ def _observation():
 
 
 def test_decoder_capability_tree_matches_runtime_contracts():
+    assert issubclass(FlowActionDecoder, ActionDecoder)
+    assert not issubclass(FlowActionDecoder, RLDecoder)
+    assert issubclass(Pi05FlowDecoder, ActionDecoder)
+    assert not issubclass(Pi05FlowDecoder, RLDecoder)
     assert issubclass(FlowDecoder, RLDecoder)
     assert issubclass(ParallelDecoder, RLDecoder)
     assert issubclass(AutoregressiveDecoder, ActionDecoder)

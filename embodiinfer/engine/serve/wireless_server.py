@@ -10,17 +10,17 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from .batching import BatchedServingAdapter
-from .contracts import ServeError, parse_structured_step
+from .contracts import RPC_SCHEMA, RPC_SCHEMA_ALIASES, ServeError, parse_structured_step
 from .factory import add_policy_arguments, build_serving_adapter
 from .service import PolicyService
 
 if TYPE_CHECKING:
     from wireless_comm import Comm, Peer
 
-RPC_SCHEMA = "embodiinfer.policy.rpc.v1"
 # Wire-identity magic tags for the WirelessComm handshake. The hex values spell
 # out the service name (request "EMBI", response "EMBJ"), so the request and
-# response pairing stays obvious at the byte level.
+# response pairing stays obvious at the byte level. They match the tags the
+# EmbodiRun deployment client already speaks.
 REQUEST_TAG = 0x454D4249  # b"EMBI"
 RESPONSE_TAG = 0x454D424A  # b"EMBJ"
 
@@ -230,7 +230,7 @@ class WirelessPolicyServer:
     ) -> tuple[str, str]:
         if not isinstance(metadata, Mapping):
             raise ServeError(400, "invalid_rpc", "RPC metadata is required")
-        if metadata.get("schema") != RPC_SCHEMA or metadata.get("kind") != "request":
+        if metadata.get("schema") not in RPC_SCHEMA_ALIASES or metadata.get("kind") != "request":
             raise ServeError(400, "invalid_rpc", "unsupported RPC envelope")
         rpc_id = metadata.get("rpc_id")
         method = metadata.get("method")

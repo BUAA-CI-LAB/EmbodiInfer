@@ -397,6 +397,26 @@ def test_pi05_factory_takes_chunk_dimensions_from_loaded_checkpoint(monkeypatch)
         modeling_pi05._build_pi05(checkpoint="test", action_horizon=50)
 
 
+def test_openpi_rlinf_factory_accepts_explicit_shorter_inference_horizon(monkeypatch):
+    from embodiinfer.policies.pi05 import Pi05OptimizationConfig, modeling_pi05
+
+    class LoadedPolicy:
+        def __init__(self, config, **kwargs):
+            self.config = config
+            self._lerobot = SimpleNamespace(
+                config=SimpleNamespace(max_action_dim=32, chunk_size=50, num_inference_steps=10)
+            )
+
+    monkeypatch.setattr(modeling_pi05, "Pi05Policy", LoadedPolicy)
+    options = Pi05OptimizationConfig(numerics="openpi_rlinf", activation="gelu_pytorch_exact")
+    policy = modeling_pi05._build_pi05(checkpoint="test", action_horizon=10, optimizations=options)
+    assert policy.config.action_horizon == 10
+    assert policy._lerobot.config.chunk_size == 50
+    for values in ({}, {"optimizations": options, "action_horizon": 51}):
+        with pytest.raises(ValueError, match="conflicts with checkpoint"):
+            modeling_pi05._build_pi05(checkpoint="test", **{"action_horizon": 10, **values})
+
+
 @pytest.mark.parametrize("valid_weights", [True, False])
 @pytest.mark.parametrize("storage", ["pytorch", "orbax"])
 def test_openpi_formats_share_strict_loading(openpi_recipe, tmp_path, monkeypatch, valid_weights, storage):
