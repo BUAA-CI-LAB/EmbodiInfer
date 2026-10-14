@@ -12,6 +12,18 @@ import torch
 from torch.nn import functional as F
 
 
+def linear(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor:
+    """Apply the native Torch affine projection without mutating any input.
+
+    ``x`` is ``[..., in_features]``, ``weight`` is ``[out_features, in_features]``,
+    and optional ``bias`` is ``[out_features]``. The result is
+    ``[..., out_features]`` and retains ``x.dtype`` for same-dtype operands
+    outside autocast. Preserve the exact ``F.linear`` path, operand layouts,
+    bias handling, and autograd semantics; do not cast or reshape operands.
+    """
+    return F.linear(x, weight, bias)
+
+
 def gated_residual(residual: torch.Tensor, update: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
     """Return ``residual + update * gate``."""
     return residual + update * gate
