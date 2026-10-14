@@ -162,3 +162,134 @@ CUDA 测试用不同观测连续重放图，检验 prefix 更新和完整去噪�
 限制：Engine 仍将整个 policy 移到 CUDA，不能保留已有 CPU 词嵌入 offload；
 这次部署测量约增加 1 GiB 的 GPU 分配。原生嵌入不承诺不同硬件/融合后端逐位
 一致；源码迁移后的实权重回放与此前部署分支的性能测量分别记录。
+
+## 2026-10-14: opt-in whole-request capture
+
+### Scope and ownership
+
+The new Pi05 policy/factory option `request_cuda_graph=False` is default-off.
+With native CUDA inference, no gradients, and an engine full-loop graph manager,
+setting it to True selects prefix plus the unchanged denoising schedule in one
+graph. It removes the public-prefix clone and loop-input K/V copies between two
+captures, and uses one replay submission. It does not remove the K/V copies
+needed by an attention implementation inside that graph. It changes no checkpoint,
+dtype, quantization option, solver, flow timestep, or action horizon. There is no
+warm-start or cross-frame observation reuse. The 4090 real-weight acceptance
+passed the fixed-input byte-equality gate. The isolated request graph has shown
+no stable full-request latency benefit, so it remains default-off.
+
+The model-independent `ActionDecoder.supports_request_execution(graphs)` and
+`decode_request(state, batch, num_steps, bucket, graphs)` capability gives a
+prepared stateless request to its decoder. The engine never examines Pi05 fields.
+The backend's `CapturedRequest` owns CUDA capture serialization, current-stream
+restoration, independent output cloning and teardown. Pi05 owns camera/token
+compaction, prefix construction, flow schedule and finalization. Other models can
+implement the capability but do not automatically inherit a tested optimization;
+each must supply its own capturable forward and static-buffer adapter.
+
+Only synchronous stateless `EngineCore.execute` without RTC guidance uses the capability. Recurrent
+session transactions, rollout/RL, explicitly staged and overlapped execution,
+`encode_prefix(return_hidden=True)`, and direct two-stage calls retain their
+existing contracts. Disabling the option, CUDA graphs, full-loop graphs or native
+CUDA execution keeps the previous route. No exception is swallowed to retry a
+partly consumed request. Capability detection precedes noise generation. Pi05
+prefill is deterministic in this mode; drawing initial noise before rather than
+after prefill consumes exactly the same generator state.
+
+### Lifetime, keys and failure behavior
+
+Each policy instance owns an eight-entry request LRU. Keys include all compacted
+image/token/mask/state tensor shapes, strides, devices and dtypes, mask validity,
+steps, stream identity, policy version and Torch precision/determinism/SDPA backend
+configuration. A runtime lock protects input updates and graph selection. Each
+stream owns separate graph inputs and operator scopes; captured outputs are cloned
+on that stream before its next replay. A caller transferring results to another
+stream must use normal Torch stream/event synchronization. Applications must not
+change process-global backend flags or weights concurrently with a request.
+Autocast with cached casts is rejected before capture because cached weight
+lifetimes are not graph-owned; explicit `cache_enabled=False` is required.
+Changing shape/mode selects a new capture; direct replay rejects a wrong stream,
+closed graph or changed execution signature. Direct requests require the configured
+horizon/action dimension. The implementation never silently truncates a state.
+
+Both loop and request graphs pin their timestep/modulation tuples and static
+suffix-attention tensors independently of shared caches. This prevents evicted
+schedule inputs from becoming dangling CUDA addresses. Refit, training changes
+and device/dtype migration synchronize and clear all derived captures before
+releasing operator storage. Eviction releases only the evicted scope. Failed
+capture resets storage and restores the caller's stream, including capture-end
+exceptions. The process capture lock is shared with generic engine graph capture.
+
+The graph's intermediate prefix is private. Public `encode_prefix` retains its
+owned-clone behavior, and no borrowed prefix escapes to another session/request.
+This deliberately avoids exposing a cross-request lease API or imposing Pi05 K/V
+layout on the engine. It is one optional combined capture, rather than an unsafe
+removal of the existing public-prefix clones.
+
+### Acceptance and timing
+
+The frozen gate is byte equality, including source dtype, at every prefix K/V,
+every action-expert input/time/velocity/integration step, normalized actions and
+explicitly restored physical actions; nonfinite values fail. Report max absolute,
+RMS and relative L2 error, baseline repeatability, and gripper threshold flips
+with explicitly declared physical-channel decision semantics. FP32 diagnostics
+are separate observations and cannot relax the gate. Instrumented captures add
+snapshot nodes only for diagnostics and must agree with uninstrumented outputs.
+The reusable implementation is `benchmarks/numerical_validation.py`, with Pi05
+adapter `benchmarks/pi05-benchmark/validate_nonquant.py`. The separate engineering
+matrix `ablate_nonquant.py` measures existing norm fusion, K/V workspaces, unused
+prefix-tail skipping and action-context reuse, then adds the new request capture.
+The former four switches already existed on main; their measurements are controls,
+not new runtime implementations.
+The native non-quantized `lerobot` norm repair preserves Triton's adaptive
+reduction instead of substituting the Torch-mean fusion. Alternative numerical
+and calibrated recipes retain their existing contract; no quantization is added
+or enabled by this change. Final action arrays also match an independent
+unpatched main run, whose 218 package files match the pinned Git objects.
+Paired baseline and candidate calls alternate
+order, and independent repeats reverse the initial order. Profiler samples are
+kept out of all latency summaries.
+
+Timing uses warmed, uninstrumented captures, fixed host thread counts and one
+explicit CUDA stream, synchronization before and after each full request, and raw
+samples plus linear-interpolated P50/P95. Capture/setup and warmup are excluded and
+reported separately. Full-request wall time includes prepared CPU batch H2D,
+encoding, all steps, action D2H/packing and declared affine restoration; it excludes
+camera decode/tokenization/network/robot execution. The combined graph has no
+measured prefill/decode split: engine metadata reports `request_ms` and
+`e2e_ms`, not invented stage timings. Engine metadata itself retains the
+historic pre-packing boundary; the benchmark's outer timer includes packing and
+restoration. Sequential phase-order measurements are not causal speedup evidence;
+repeat in fresh processes and reverse run order before reporting performance.
+
+CPU tests cover routing, same generator/steps, error propagation, stream/mode checks
+and mocked lifecycle. Marked GPU tests cover real replay, input changes, output
+ownership, multiple streams/policies, cache eviction, operator-scope release, failure
+recovery and refit. On N40 RTX 4090, 216 subsystem checks and five norm-contract checks passed in
+the CUDA environment, followed by
+real `pi05_robotwin_sx_v051` acceptance on two recorded three-camera frames and
+two fixed noise seeds. The native 50x32/10-step schedule and 14 restored action
+dimensions were retained. Prefix K/V, every denoising step, clean captures,
+repeated/changed requests, owned outputs, separate streams, in-memory refit and
+capture recovery passed zero tolerance. FP32 promotion is an untimed diagnostic;
+its temporary packed MLP copies are released after each use without changing the
+GEMM shapes or arithmetic. It does not approve or relax the primary gate. No
+closed-loop success rate or different-model speedup follows from these checks.
+
+### Deployment boundary
+
+The original patch used `cc4d16229a662b0e40b55fd08a3b7b8640d383f1`; this change is
+integrated on `4650e8eadb0c2a461c46991be7d715b726928157`. It does not
+update an EmbodiRun submodule or rename a service contract. This source accepts
+`vvla.policy.step.v1`, `vvla.policy.session.v1`, `vvla.policy.rpc.v1`
+and WirelessComm tags `0x56564C41` / `0x56564C42`. EmbodiRun's separately
+pinned `1d4221ab` deployment may use `embodiinfer.policy.*` and
+`0x454D4249` / `0x454D424A`. Python package aliases do not make these
+wire formats interchangeable. Current main accepts `embodiinfer.policy.*` request
+schema aliases, while its primary responses and transport tags retain the legacy
+values. Alias acceptance alone cannot certify a client's response parser.
+`scripts/check_serving_compatibility.py` conservatively compares primary literals in
+exact selected client source files and optionally the EmbodiRun gitlink without
+changing either checkout. Passing literal comparison is necessary but not
+sufficient; live session/step/reset, payload, authentication, checkpoint and
+model-environment tests must also pass before deployment.

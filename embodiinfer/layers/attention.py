@@ -63,12 +63,18 @@ class SplitKVAttentionBackend(AttentionBackend, Protocol):
         key_padding_mask: torch.Tensor | None = None,
         scaling: float | None = None,
         dropout_p: float = 0.0,
+        *,
+        num_splits: int | None = None,
     ) -> torch.Tensor:
         """Return BHSD output without concatenation; zero in the shared mask keeps a key.
 
         The floating padding mask is [B, 1, 1, cached_length + current_length].
         It is shared across queries and does not represent arbitrary additive biases.
         Each batch row must contain at least one valid key.
+        ``num_splits=None`` leaves backend launch defaults unchanged. An explicit
+        count requests a supported KV reduction partition count; unsupported
+        values must fail rather than silently fall back. A changed reduction
+        order requires workload-specific numerical validation.
         """
         ...
 

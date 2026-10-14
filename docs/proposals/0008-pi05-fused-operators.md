@@ -51,6 +51,14 @@ and device changes invalidate derived vision casts, projection packs and graphs.
 Residual/norm/encoding fusion requires compatible operator implementations;
 `norm_quant: null` selects separate execution for reference comparisons.
 
+For non-quantized `lerobot` native execution, cached AdaRMS and gated residuals
+retain the original Triton arithmetic. The strict CUDA fusion follows Torch's
+mean reduction and cannot promise byte equality against Triton's reduction tree.
+Prefix and other Torch-reference normalization can still use that fusion.
+Alternative numerical and calibrated recipes retain their existing contracts.
+The real-weight zero-tolerance gate and independent unchanged-main comparison
+are recorded in the [Pi05 benchmark](../../benchmarks/pi05-benchmark/README.md).
+
 The `openpi_rlinf` numerical contract follows RLinf's inference implementation:
 exact GELU, BF16 vision encoder/projector with FP32
 patch and position embeddings, FP32 time/RoPE factors, BF16 query prescaling,

@@ -1,5 +1,112 @@
 # PI0.5 Benchmark
 
+## 非量化整请求捕获与精度验收（2026-10-14）
+
+本次新增默认关闭的 `request_cuda_graph=True`：在 native CUDA 推理和
+`EngineConfig(use_cuda_graph=True, capture_full_loop=True)` 下，将 prefix 与原完整
+去噪循环合成一个图，省去两图边界的公开 KV clone/copy。通用捕获管理负责 stream、
+精度模式、独立返回值和销毁；Pi05 负责静态输入、调度、refit 失效与有界缓存。
+checkpoint、混合 BF16/FP32、初始噪声、solver、动作长度和执行范围保持不变。
+原两阶段、RTC、流水线与其他模型后端继续使用原契约。
+
+`norm_fusion`、`kv_workspace`、`prefix_kv_only`、`reuse_action_context` 已存在于 main，
+本次对它们做单项和递增组合测量。本次实际修复是 native AdaRMS 的参考选择：native
+缓存路径采用 Triton 归约，Torch-mean 合约的 CUDA norm fusion 不能直接替代它。
+修复限于非量化 `lerobot`；其他数值/校准配方保留原契约。修复后的 native
+自适应 norm/residual 保留原 Triton 算术；prefix 的 Torch-reference
+融合仍可使用。此前差异没有通过放宽门槛处理，也不据此断言闭环任务精度退化。
+设计与生命周期见 [0001 提案](../../docs/proposals/0001-static-loop-capture.md)。
+
+### 固定门槛与实测范围
+
+基线为未修改的 `4650e8eadb0c2a461c46991be7d715b726928157`。独立 main GPU 参考的
+218 个包内文件逐一与 Git 对象 SHA256 匹配；四组最终动作对本分支 baseline、norm
+修复、组合和 request graph 的 16 项字节比较均通过。基线自身重复误差为零。
+逐层 prefix K/V、每步 AE 输入/time/velocity/积分状态、最终归一化与物理动作的门槛
+预先固定为 `maxabs=RMS=relativeL2=0` 且源 dtype/字节一致；非有限值失败。
+修复后的 norm 与两条组合链全部通过，包括诊断快照与正常捕获输出一致性。
+
+环境：单 RTX 4090、driver 550.90.07、Torch 2.7.1+cu118、Transformers 5.3.0、
+LeRobot 0.5.1；checkpoint `pi05_robotwin_sx_v051` 的模型 SHA256 为
+`9a5381c3260fc58fdb4b90d17b93f9090bcbfbcd8e0287f9bf2acea2477a2bc3`。
+保留 255 个 BF16 和 558 个 FP32 参数张量，B1、50×32 动作、完整十步去噪，
+按 checkpoint mean/std 恢复其中 14 个物理动作通道。两条录制流各一帧、三相机，
+seed 1000/2026，共四组输入；夹具 SHA256 为
+`d46ad7ac88d8a9ebda9cdcbac7be126e4e1cf9f8e71c50ec6bc88d0e5858a7d7`。
+夹爪通道 6/13 的 `>0.5` 仅是显式诊断分类，均无翻转；控制器仍使用连续坐标。
+录制输入与权重不随仓库分发，这些结果不建立其他观测、batch、模型或闭环成功率保证。
+
+真实模型的变输入/重复请求、返回值不 alias、非默认 stream、多 policy、refit 后旧图
+失效以及注入捕获失败恢复均通过；另有 216 项 CUDA 环境子系统测试和五项 norm 契约回归通过。
+最终 runtime 的八份动作数组再次逐字节匹配独立 main，重复误差为零。FP32 全模型提升仅作诊断：与 checkpoint 原精度的归一化
+动作 maxabs 为 0.00938–0.01165，不改变主验收门槛。为控制显存，诊断释放临时
+packed MLP 副本；GEMM 形状与算术保持不变，生产/计时路径不使用该策略。
+
+### 完整请求计时
+
+每个配对实验在同一 GPU 上交替 A/B 与 B/A，预热每组五次，两轮各 60 次；不同
+作业各自重测本地 baseline。同步 wall 覆盖准备好的 CPU batch → H2D → prefix →
+全部去噪 → D2H/EngineCore 打包 → checkpoint 反归一化，包含所有边界拷贝。
+不含图像解码/tokenization、网络、加载、冷编译/capture、warmup 或机器人执行。
+下表均来自未启用 profiler 的测量；不同作业的绝对延迟不能横向求加速比。
+
+| 同卡配对（P50 / P95，ms） | baseline | candidate |
+|---|---:|---:|
+| 新 request graph 单独，完整请求 | 79.661 / 79.709 | 79.690 / 79.733 |
+| 同作业，仅 GPU graph replay | 78.953 / 78.979 | 78.958 / 78.988 |
+| 已有 KV+prefix+context，norm 关闭，轮 1 | 75.073 / 75.118 | 73.013 / 73.053 |
+| 同组合，轮 2 | 75.086 / 75.125 | 73.040 / 73.063 |
+| 修复 norm + 已有四开关 + 新 request graph，轮 1 | 77.445 / 77.499 | 74.622 / 74.664 |
+| 同组合，轮 2 | 77.440 / 77.489 | 74.638 / 74.729 |
+| 已有四开关含 norm 修复 → 再加 request graph，轮 1 | 74.842 / 74.871 | 74.672 / 74.702 |
+| 同增量，轮 2 | 74.838 / 74.901 | 74.685 / 74.723 |
+
+最后组合较各自 native baseline 的约 3.6% 包含 main 已有机制，不是本次新增实现
+的独立收益。已有 prefix 单项的两轮 P50 为 77.853→76.217、77.856→76.228 ms。
+request graph 的独立结果没有稳定的完整请求收益；组合中的小增量也不能推广到其他
+工作负载。因此新开关保持关闭，不能把这批数据写成普遍加速或精度无损保证。
+
+### 复现入口与协议边界
+
+在匹配的 Pi05 独立环境中使用可信、同 checkpoint 的 CPU 预处理夹具：
+
+```bash
+python benchmarks/pi05-benchmark/validate_nonquant.py --checkpoint /models/pi05 --inputs /data/inputs.pt --out devlocal/nonquant/request --physical-action-dim 14 --gripper-index 6 --gripper-threshold 0.5 --gripper-comparison gt --fp32-diagnostic
+python benchmarks/pi05-benchmark/ablate_nonquant.py --checkpoint /models/pi05 --inputs /data/inputs.pt --out devlocal/nonquant/matrix --stages baseline kv kv_prefix kv_prefix_context kv_prefix_context_request --physical-action-dim 14 --gripper-indices 6 13 --gripper-threshold 0.5 --gripper-comparison gt
+```
+
+维数、夹爪语义和统计必须按实际部署声明；上例对应本次诊断，不能猜测其他机器的
+阈值。输出包含逐量 maxabs/RMS/relativeL2、原始张量/计时、源码和输入摘要。
+`--profile` 单独导出 Torch CUDA trace；`--profile-cuda-range` 为 Nsight 发出每配置
+一个 `cudaProfilerStart/Stop` 窗口，必须检查外部 kernel 记录后才算采集成功。当前
+Torch/CUPTI 环境的 graph replay 在 profiler 退出时复现超时，相关尝试不构成证据。
+Profiler 观测开销不进入上表。
+
+另用现有 Nsight Systems 2023.4.4 的 CUDA graph node trace 成功采集 baseline、
+修复 norm 的四开关组合和加入 request graph 的组合，各覆盖四次预热后的完整请求。
+有实际 kernel 记录，非 CPU 时间线替代。三窗口 kernel 次数为
+33,892 / 31,036 / 31,008，GEMM 占各自 kernel 累计时长的 70.5% / 71.7% / 71.7%。
+组合再加入 request graph 时，D2D 拷贝事件由 1,328 降到 1,060，符合消除边界
+缓冲拷贝的机制；H2D/D2H 事件均保留。该观察不等同于稳定 wall 收益。
+已有 prefix-tail 跳过让两种大 prefix GEMM 各从 72 次降至 68 次，属于已有开关的
+效果。kernel 计数和累计时长用于定位计算与拷贝成本，不冒充完整请求延迟。
+
+
+通用同精度 split-KV 调优在 `benchmarks/attention_split.py`，显式选择
+`--splits 1 2 4 8 16` 并事先声明 `--atol` / `--rtol`。改变归约顺序可能被严格门槛
+拒绝；production 默认选择保持不变，没有自动推广。微内核结果不能替代动作验收。
+
+本次不修改协议或 EmbodiRun gitlink。main 的 primary schema/transport tag 仍为
+`vvla.policy.*` 和 `0x56564C41/42`；接受 `embodiinfer.policy.*` 请求别名，不代表其
+响应能被不同客户端解析。EmbodiRun `1d4221ab` 线的 EMBI/EMBJ 不可盲目混用。
+可用只读预检核对实际客户端：
+
+```bash
+python scripts/check_serving_compatibility.py --client-source /path/to/actual/client.py --embodirun /path/to/EmbodiRun
+```
+
+预检不修改子模块，实际客户端缺失时只报告未验证。
+
 ## Orin NX 原生 W8A8 prefix / W4A16 action（2026-10-12）
 
 新增 opt-in `preset="w8a8-w4a16"`，部署参数与权重 bundle 见[模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
