@@ -5,13 +5,15 @@ from __future__ import annotations
 import io
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
 
+from embodiinfer.engine.async_inference.contracts import ASYNC_SCHEMA, AsyncInferencePlan
+from embodiinfer.engine.async_inference.serving import batch_rtc_guidance, plan_from_request
 from embodiinfer.engine.core import EngineCore
 from embodiinfer.engine.serve.contracts import (
     ModelAction,
@@ -73,7 +75,11 @@ def _image_name(value: str) -> str:
     for suffix in (".jpeg", ".jpg", ".png"):
         if lowered.endswith(suffix):
             return stem[: -len(suffix)]
-    return stem
+    # Feature names such as ``observation.images.image`` are wire identifiers,
+    # not file paths.  Preserve the complete key when there is no filename
+    # suffix so it continues to match the adapter configuration; only strip a
+    # directory when the client actually sent a file name.
+    return value if "/" in value else stem
 
 
 def _load_raw_image(image: RawImage, width: int, height: int, *, processor: Pi05Processor) -> np.ndarray:
@@ -167,6 +173,10 @@ class Pi05ServingAdapter(ServingAdapter):
         self._width = int(self._policy_cfg.image_resolution[0])
         self._height = int(self._policy_cfg.image_resolution[1])
         self._lock = threading.Lock()
+        # RTC compares in model space. Keep the full model horizon; EmbodiRun
+        # sends the executed offset of each replan so the cache can be sliced at
+        # the exact physical handover point even when ``return_steps`` is lower.
+        self._last_model_chunk: dict[str, torch.Tensor] = {}
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -184,6 +194,11 @@ class Pi05ServingAdapter(ServingAdapter):
             "image_resolution": [self._width, self._height],
             "execution_mode": "serialized_b1",
             "max_batch_size": 1,
+            "async_inference": {
+                "schema": ASYNC_SCHEMA,
+                "rtc": self._core.policy.decoder.supports_rtc_guidance,
+                "committed_prefix_source": "session_cache",
+            },
         }
 
     def infer(self, request: RawPolicyRequest) -> ModelResult:
@@ -203,6 +218,7 @@ class Pi05ServingAdapter(ServingAdapter):
         with self._lock:
             prepared = []
             rows = []
+            plans: list[AsyncInferencePlan | None] = []
             for index, request in enumerate(requests):
                 try:
                     state_vec = self._state_vector(request.state)
@@ -211,22 +227,85 @@ class Pi05ServingAdapter(ServingAdapter):
                     batch = self._processor.prepare(state_vec, named_images, request.instruction)
                     if batch.batch_size != 1:
                         raise ValueError("pi05 processor must prepare one row per request")
+                    plan = self._resolve_rtc_plan(plan_from_request(request), request.session_id)
                     batch.request_ids = [request.request_id]
                     prepared.append(batch)
-                    rows.append((index, state_vec))
+                    rows.append((index, state_vec, request.session_id))
+                    plans.append(plan)
                 except (TypeError, ValueError) as error:
                     outcomes[index] = error
             if not prepared:
                 return outcomes
-            chunks = self._core.execute(Pi05Batch.concatenate(prepared))
+            batched = Pi05Batch.concatenate(prepared)
+            guidance = (
+                batch_rtc_guidance(
+                    plans,
+                    action_horizon=int(self._policy_cfg.chunk_size),
+                    action_dim=int(self._policy_cfg.max_action_dim),
+                )
+                if any(plan is not None and plan.rtc is not None and plan.rtc.enabled for plan in plans)
+                else None
+            )
+            chunks = (
+                self._core.execute(batched)
+                if guidance is None
+                else self._core.execute(batched, rtc_guidance=guidance)
+            )
             if len(chunks) != len(rows):
                 raise RuntimeError("pi05 model returned an incorrect number of action chunks")
-            for (index, state_vec), chunk in zip(rows, chunks, strict=True):
+            for (index, state_vec, session_id), chunk in zip(rows, chunks, strict=True):
                 try:
-                    outcomes[index] = self._result(chunk, state_vec)
+                    result = self._result(chunk, state_vec)
+                    # RTC conditions on the *model's full action horizon*, even
+                    # when the transport returns a shorter execution chunk. The
+                    # client sends an offset into this cache at every replan.
+                    # Caching only ``return_steps`` makes H=50/s=10 impossible
+                    # for adapters that return ten actions per HTTP response.
+                    cached = chunk.actions
+                    if cached.numel() and torch.isfinite(cached).all():
+                        if not hasattr(self, "_last_model_chunk"):
+                            self._last_model_chunk = {}
+                        self._last_model_chunk[session_id] = cached.detach().cpu().clone()
+                    outcomes[index] = result
                 except (TypeError, ValueError, RuntimeError) as error:
                     outcomes[index] = error
         return outcomes
+
+    def _resolve_rtc_plan(
+        self, plan: AsyncInferencePlan | None, session_id: str
+    ) -> AsyncInferencePlan | None:
+        """Resolve an RTC request from the server's model-space session cache.
+
+        Explicit prefixes are accepted only when the request marks
+        ``model_space=true``. The normal EmbodiRun path sends
+        ``cache_start_index``, the executed offset in the previous full model
+        chunk, and therefore cannot accidentally send robot-space actions to the
+        denoiser. Requests from older clients fall back to slicing by
+        ``inference_delay`` for wire compatibility.
+        """
+        if plan is None or plan.rtc is None or plan.rtc.prev_chunk_left_over is not None:
+            return plan
+        cached = getattr(self, "_last_model_chunk", {}).get(session_id)
+        cache_start_index = (
+            plan.rtc.inference_delay if plan.rtc.cache_start_index is None else plan.rtc.cache_start_index
+        )
+        explicit_cache_offset = plan.rtc.cache_start_index is not None
+        if cached is None:
+            # ``cache_start_index=0`` is the bootstrap request.  A positive
+            # explicit offset means the execution side has already consumed a
+            # previous model chunk, so losing that session cache must fail
+            # loudly rather than silently changing the benchmark to ordinary
+            # synchronous denoising.
+            if explicit_cache_offset and cache_start_index > 0:
+                raise ValueError("RTC cache_start_index requires a previous model chunk for this session")
+            return plan
+        if cache_start_index >= int(cached.shape[0]):
+            if explicit_cache_offset and cache_start_index > 0:
+                raise ValueError("RTC cache_start_index must be smaller than the cached model horizon")
+            return plan
+        remaining = cached[cache_start_index:]
+        grid = tuple(tuple(float(value) for value in row) for row in remaining.tolist())
+        return replace(plan, rtc=replace(plan.rtc, prev_chunk_left_over=grid, model_space=True))
 
     def _result(self, chunk: ActionChunk, state_vec: torch.Tensor) -> ModelResult:
         rows = max(1, min(int(self._config.return_steps), int(chunk.actions.shape[0])))
@@ -258,8 +337,7 @@ class Pi05ServingAdapter(ServingAdapter):
         )
 
     def reset(self, session_id: str) -> None:
-        # pi0.5 policy itself is stateless across sessions in deploy mode
-        _ = session_id
+        getattr(self, "_last_model_chunk", {}).pop(session_id, None)
 
     def _state_vector(self, state: Mapping[str, Any]) -> torch.Tensor:
         """Read literal feature keys first, retaining legacy nested-path support."""

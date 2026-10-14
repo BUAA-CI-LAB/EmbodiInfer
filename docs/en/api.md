@@ -104,6 +104,105 @@ inputs and decoder state. Explicit dtypes still cast uniformly; CPU remains FP32
 See the [AGX comparison](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md#agx-orin-mixed-precision-2026-09-17)
 for measured latency, output parity and the CPU-offload memory tradeoff.
 
+## Pi05 fused operator configuration
+
+```python
+from embodiinfer import EngineConfig, make_policy
+from embodiinfer.engine import EngineCore
+
+policy = make_policy(
+    "pi05",
+    checkpoint="/models/pi05",
+    device_type="4090",
+    preset="strict",
+)
+engine = EngineCore(
+    policy,
+    EngineConfig(device="cuda", dtype="auto", capture_full_loop=True),
+)
+```
+
+This enables strict normalization/residual fusion and K/V workspace reuse with
+the existing attention and MLP implementation. Deployment selects a complete
+preset; see
+[supported profiles and precision contracts](models.md#opt-in-fused-operators).
+The policy factory supplies the required native inference options. CUDA Graph
+decoding remains controlled by `EngineConfig`; `prefix_cuda_graph=False` can
+disable prefix capture independently.
+Full-checkpoint parity and task quality remain deployment gates, including for
+the strict operator route; component parity alone does not establish them.
+
+For the complete optimized recipe on Thor:
+
+```python
+import torch
+
+torch.set_float32_matmul_precision("highest")
+policy = make_policy(
+    "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
+    device_type="thor", preset="nvfp4-fp8", low_cpu_mem_usage=True,
+)
+engine = EngineCore(
+    policy, EngineConfig(device="cuda", dtype="auto", max_batch_size=1, use_cuda_graph=True, capture_full_loop=True),
+)
+```
+
+Choose `device_type="spark"` on SM121. A preset is a complete recipe: `strict`
+preserves LeRobot numerical semantics, while `bf16` and explicit format pairs
+select the optimized `openpi_rlinf` inference plan. Pair names are ordered
+**prefix MLP – action MLP**: `bf16-fp8`, `nvfp4-bf16`, `nvfp4-fp8`.
+The factory configures native inference/embeddings, enables prefix capture by
+default, and sets horizon/denoising steps to 10 for optimized presets. Their
+request layout requires B1. Numerical semantics are declared by the recipe;
+they are not guessed from checkpoint filenames.
+
+The bundled calibration covers prefix NVFP4 and action FP8 for
+RLinf-Pi05-LIBERO-SFT on Thor/Spark with `openpi_rlinf` numerics. Other checkpoints
+or tower/format pairs need their own `calibration` data path. Custom numerical
+contracts use an explicitly constructed configuration.
+Unsupported formats and missing calibration are rejected explicitly.
+
+The demo accepts the same deployment choices:
+
+```bash
+python examples/pi05_inference.py --ckpt /models/RLinf-Pi05-LIBERO-SFT \
+  --device-type thor --preset nvfp4-fp8 --envs 1
+```
+
+A custom calibration JSON identifies `schema_version: 2`, `numerics`, `activation`,
+`checkpoint_sha256`, and `devices`. Ranges are stored under
+`devices[device]["prefix" or "action"]["fp8" or "nvfp4"]`. Each requested pair
+contains 18 layer records using the `MlpLayerPrecision` fields; records may retain
+BF16 projections for protection. The resolved configuration instead contains
+`prefix_layers` and `action_layers` for execution.
+Calibration supplies only ranges and protected formats. For custom numerical
+contracts or operator ablations, construct `Pi05OptimizationConfig` directly or
+load a resolved JSON with `from_json`, then pass it as `optimizations=` instead of
+`preset=`. The factory also supplies native policy options for this path.
+`Pi05OptimizationConfig.from_preset("thor", "nvfp4-fp8")` expands a preset for
+inspection; `config.to_json(path)` exports the complete resolved configuration.
+Internal inference imports moved to `pi05.inference`; callers use the public
+`embodiinfer.policies.pi05` exports.
+
+Select or extend an implementation through the shared operator layer:
+
+```python
+from embodiinfer.layers import OperatorBackends, normalization_backends
+from embodiinfer.policies.pi05 import Pi05OptimizationConfig
+
+# MyRMSNorm implements NormalizationBackend and declares OperatorCapabilities.
+normalization_backends.register("my_rmsnorm", MyRMSNorm)
+config = Pi05OptimizationConfig(
+    operators=OperatorBackends(normalization="my_rmsnorm", norm_quant=None),
+)
+```
+
+The registries also expose `register_lazy(name, module, class_name)` and
+`available()`. Direct reuse by another model uses
+`normalization_backends.get(name, OperatorRequest(device, dtype))`, then creates
+fixed-layout plans. The nested JSON `operators` mapping has the same field names
+as `OperatorBackends`. See [prepared operator lifetimes](architecture.md#prepared-operator-interfaces).
+
 ## Generating RL rollouts
 
 The rollout surface is available only for policies whose decoder implements

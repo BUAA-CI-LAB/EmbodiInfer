@@ -57,6 +57,27 @@ directories instead retain their verified Torch 2.13 CUDA 13.2 (Thor) / CUDA 12.
 (4090) environments, prepared with their own `setup_env.py` and requirements files.
 `--group benchmark` adds the public-data reader dependencies to a uv environment.
 
+## Pi05 fused CUDA operators
+
+The opt-in `Pi05OptimizationConfig` kernels compile on first use, outside CUDA
+Graph capture. CUDA sources are included in the wheel. Provide a CUDA toolkit
+with `nvcc` that supports the target GPU; set `CUDA_HOME` when several toolkits
+are installed. Native NVFP4 needs Blackwell and a toolkit supporting its SM target
+and FP4 conversions. BF16/FP8 component checks also run on Ada with CUDA 12.6.
+Triton is required for paired GEMMs/query-major softmax; use the version matched
+to the installed Torch CUDA wheel.
+
+Calibrated FP8/NVFP4 GEMMs use `torch.nn.functional.scaled_mm` and scaling recipes
+tested with Torch 2.13. The core uv lock remains unchanged; mixed precision is
+an optional route in a separately prepared, matching Pi05 environment such as
+the [offline benchmark environment](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
+BF16 normalization/K/V fusion does not require that mixed GEMM API.
+
+Native builds use a locked, atomic cache under `$XDG_CACHE_HOME/embodiinfer/cuda`
+(default `~/.cache/embodiinfer/cuda`), keyed by CUDA sources, compiler and GPU
+architecture. Override it with `EMBODIINFER_CUDA_CACHE_DIR`. Importing the core
+package does not compile kernels or require these optional capabilities.
+
 ## OpenPI and Orbax checkpoint helper
 
 For OpenPI PyTorch or Orbax checkpoints, add the preparation/tokenizer helpers to

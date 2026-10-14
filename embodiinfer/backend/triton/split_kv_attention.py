@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import torch
 
+from ..split_kv_plan import plan_split_kv
 from .capability import triton_capability
 
 try:
@@ -141,6 +142,8 @@ def split_kv_attention(
     suffix_value: torch.Tensor,
     mask: torch.Tensor | None,
     scaling: float,
+    *,
+    num_splits: int | None = None,
 ) -> torch.Tensor:
     """Attend to two BHSD K/V blocks without concatenation or KV-head repetition.
 
@@ -148,6 +151,8 @@ def split_kv_attention(
     padding mask [batch, 1, 1, cached + current]: zero keeps a key, nonzero masks
     it. Per-query masks, arbitrary additive biases, causality and dropout are
     outside this kernel's contract. Outputs for entirely masked queries are undefined.
+    ``num_splits=None`` preserves the existing launch geometry. Explicit split
+    counts are profiling candidates and can change floating-point reduction order.
     """
     if triton is None or query.device.type != "cuda":
         raise RuntimeError("split-KV attention requires CUDA and Triton")
@@ -176,8 +181,14 @@ def split_kv_attention(
         raise ValueError("split-KV padding mask must be [batch, 1, 1, cached + current]")
     if mask is not None and not mask.is_floating_point():
         raise TypeError("split-KV padding mask must use floating zero for valid keys")
-    splits, block_m, block_n = (4, 16, 64) if size <= 64 else (1, 32, 64)
-    part_length = triton.cdiv(prefix + size, splits * block_n) * block_n
+    if num_splits is None:
+        # Keep the legacy launch setup on the default hot path.
+        splits, block_m, block_n = (4, 16, 64) if size <= 64 else (1, 32, 64)
+        part_length = triton.cdiv(prefix + size, splits * block_n) * block_n
+    else:
+        plan = plan_split_kv(size, prefix, num_splits=num_splits)
+        splits, block_m, block_n = plan.num_splits, plan.block_m, plan.block_n
+        part_length = plan.partition_length
     partial = torch.empty(
         (batch, heads, splits, size, width),
         device=query.device,
@@ -259,9 +270,13 @@ class TritonSplitKVAttention:
         key_padding_mask: torch.Tensor | None = None,
         scaling: float | None = None,
         dropout_p: float = 0.0,
+        *,
+        num_splits: int | None = None,
     ) -> torch.Tensor:
         """Attend to cached/current K/V blocks without copying or concatenating them."""
         if dropout_p != 0.0:
             raise ValueError("triton_split_kv does not support dropout")
         scaling = q.shape[-1] ** -0.5 if scaling is None else scaling
-        return split_kv_attention(q, cached_k, cached_v, k, v, key_padding_mask, scaling)
+        return split_kv_attention(
+            q, cached_k, cached_v, k, v, key_padding_mask, scaling, num_splits=num_splits
+        )

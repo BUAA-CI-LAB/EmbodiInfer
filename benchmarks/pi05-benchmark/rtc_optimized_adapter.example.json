@@ -1,0 +1,21 @@
+{
+  "policy_kwargs": {
+    "native_inference": true,
+    "prefix_cuda_graph": true,
+    "prefix_attention": "triton",
+    "denoise_attention": "triton",
+    "compile_backend": "inductor"
+  },
+  "state_fields": [
+    "observation.state"
+  ],
+  "image_fields": [
+    "observation.images.image",
+    "observation.images.wrist_image"
+  ],
+  "image_keys": {
+    "observation.images.image": "observation.images.image",
+    "observation.images.wrist_image": "observation.images.image2"
+  },
+  "return_steps": 50
+}

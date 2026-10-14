@@ -53,6 +53,10 @@ class UnsupportedRecurrentModeError(EmbodiInferError):
     """The first recurrent implementation was asked to use an unsupported runtime mode."""
 
 
+class UnsupportedAsyncGuidanceError(EmbodiInferError):
+    """A decoder was handed RTC prefix guidance it cannot apply."""
+
+
 class ReplicaExecutionError(EmbodiInferError):
     """A data-parallel replica failed to execute one or more requests.
 

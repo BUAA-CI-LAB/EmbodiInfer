@@ -13,7 +13,9 @@ Contract (``attend``):
                 backend handles the repeat, so callers pass K/V at their native
                 head count and need not materialize the expansion themselves.
     attn_mask : additive float mask broadcastable to ``[B, 1, seq_q, seq_k]``, or
-                ``None``
+                ``None``. Specialized backends document and reject unsupported
+                masks: query-major takes Boolean validity masks, folded Flash
+                takes ``None`` only.
     scaling   : softmax scale; ``None`` -> ``head_dim ** -0.5`` (SDPA default)
     returns   : ``[B, num_heads, seq_q, head_dim]`` (the caller transposes /
                 reshapes as it sees fit)
@@ -61,12 +63,18 @@ class SplitKVAttentionBackend(AttentionBackend, Protocol):
         key_padding_mask: torch.Tensor | None = None,
         scaling: float | None = None,
         dropout_p: float = 0.0,
+        *,
+        num_splits: int | None = None,
     ) -> torch.Tensor:
         """Return BHSD output without concatenation; zero in the shared mask keeps a key.
 
         The floating padding mask is [B, 1, 1, cached_length + current_length].
         It is shared across queries and does not represent arbitrary additive biases.
         Each batch row must contain at least one valid key.
+        ``num_splits=None`` leaves backend launch defaults unchanged. An explicit
+        count requests a supported KV reduction partition count; unsupported
+        values must fail rather than silently fall back. A changed reduction
+        order requires workload-specific numerical validation.
         """
         ...
 
@@ -174,4 +182,13 @@ register_lazy_attention(
     "triton_split_kv",
     "embodiinfer.backend.triton.split_kv_attention",
     "TritonSplitKVAttention",
+)
+register_lazy_attention(
+    "query_major", "embodiinfer.backend.torch.query_major_attention", "QueryMajorAttention"
+)
+register_lazy_attention(
+    "query_major_cuda", "embodiinfer.backend.torch.query_major_attention", "QueryMajorCudaAttention"
+)
+register_lazy_attention(
+    "folded_flash", "embodiinfer.backend.torch.query_major_attention", "FoldedFlashAttention"
 )
