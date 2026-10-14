@@ -70,7 +70,7 @@ def test_bf16_intermediate_rounding_is_observable() -> None:
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("language", ["triton", "cuda"])
-def test_default_adapter_builds_multi_file_solution(tmp_path: Path, language: str) -> None:
+def test_default_adapter_builds_multi_file_solution(example_task: Path, language: str) -> None:
     """Optional target-host smoke test for both builders, with tiny declared cases."""
     import shutil
 
@@ -85,8 +85,7 @@ def test_default_adapter_builds_multi_file_solution(tmp_path: Path, language: st
         pytest.importorskip("triton")
     elif shutil.which("nvcc") is None:
         pytest.skip("requires the CUDA toolkit")
-    task = tmp_path / "task"
-    shutil.copytree(REPOSITORY / "benchmarks/kernel_tuning/tasks/gated_residual", task)
+    task = example_task
     definition = {
         "name": "vector_add_test",
         "op_type": "elementwise",

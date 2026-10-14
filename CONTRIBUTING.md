@@ -65,7 +65,8 @@ they are not a claim of native Windows coding-agent support.
 ```bash
 uv sync --project scripts/kernel_tuning --python 3.12 --frozen
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning --help
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check benchmarks/kernel_tuning/tasks/gated_residual
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --catalog gated_residual --output results/kernel_tuning/tasks
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check results/kernel_tuning/tasks/gated_residual
 ```
 
 To tune one model, capture its existing preparation forward and calibrate numerical
@@ -139,8 +140,7 @@ plan before applying it. When inheriting system packages, verify that the instal
 actually reuses them; do not reinstall the GPU stack just to add the evaluator.
 For a custom evaluator, install only its declared dependencies plus PyYAML.
 
-See the [approved contract](docs/proposals/0008-kernel-tuning.md) and the
-[gated residual task](benchmarks/kernel_tuning/tasks/gated_residual/README.md).
+See the [approved contract](docs/proposals/0008-kernel-tuning.md).
 The [Chinese workflow guide](docs/proposals/0008-kernel-tuning.md#11-自动化调优使用说明)
 explains task inputs, the full tuning loop, stopping conditions, and saved results.
 The controller snapshots task inputs, saves all attempts, and exports improving

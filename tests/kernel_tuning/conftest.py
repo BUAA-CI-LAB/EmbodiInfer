@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
+import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts.kernel_tuning.artifacts import REPOSITORY, RunStore
+from scripts.kernel_tuning.artifacts import RunStore
 from scripts.kernel_tuning.contracts import TaskPackage
 
 yaml = pytest.importorskip("yaml", reason="requires the optional kernel-tuning tooling environment")
@@ -46,11 +46,88 @@ def create_adapter(task):
 '''
 
 
+GATED_RESIDUAL_REFERENCE = """import torch
+
+def run(residual, update, gate):
+    product = (update * gate).to(update.dtype)
+    return (residual + product).to(residual.dtype)
+"""
+
+GATED_RESIDUAL_DEFINITION = {
+    "name": "gated_residual_bf16",
+    "op_type": "elementwise",
+    "description": "Residual plus a gated update, with BF16 product rounding before addition.",
+    "axes": {"B": {"type": "var"}, "T": {"type": "var"}, "H": {"type": "var"}, "G": {"type": "var"}},
+    "inputs": {
+        "residual": {"shape": ["B", "T", "H"], "dtype": "bfloat16"},
+        "update": {"shape": ["B", "T", "H"], "dtype": "bfloat16"},
+        "gate": {"shape": ["B", "G", "H"], "dtype": "bfloat16"},
+    },
+    "outputs": {"output": {"shape": ["B", "T", "H"], "dtype": "bfloat16"}},
+    "constraints": ["G == 1 or G == T", "B > 0", "T > 0", "H > 0"],
+    "reference": GATED_RESIDUAL_REFERENCE,
+}
+
+GATED_RESIDUAL_WORKLOADS = {
+    "broadcast-small": {"B": 1, "T": 16, "H": 1024, "G": 1},
+    "broadcast-wide": {"B": 2, "T": 32, "H": 2048, "G": 1},
+    "token-gate-tail": {"B": 1, "T": 17, "H": 1000, "G": 17},
+}
+
+GATED_RESIDUAL_TUNING = {
+    "schema_version": 1,
+    "language": "triton",
+    "agent": "",
+    "evaluator_python": "python",
+    "device": "cuda:0",
+    "target_hardware": ["cuda"],
+    "seeds": [0, 1, 2],
+    "precision": {"mode": "bit_exact", "matmul_precision": "highest", "allow_tf32": False},
+    "timing": {"mode": "eager", "warmup": 10, "iterations": 100, "trials": 3, "paired_rounds": 2},
+    "acceptance": {"min_improvement": 0.03, "max_regression": 0.05},
+    "search": {
+        "max_candidates": 20,
+        "max_seconds": 7200,
+        "patience": 5,
+        "agent_timeout_seconds": 600,
+        "evaluation_timeout_seconds": 300,
+    },
+    "profile": False,
+}
+
+
 @pytest.fixture
-def task_dir(tmp_path: Path) -> Path:
-    """Make a portable task using a fake measurement adapter and explicit Python."""
+def example_task(tmp_path: Path) -> Path:
+    """Write a hand-written BF16 gated residual task package with synthetic workloads."""
     path = tmp_path / "task"
-    shutil.copytree(REPOSITORY / "benchmarks/kernel_tuning/tasks/gated_residual", path)
+    path.mkdir()
+    (path / "README.md").write_text("# Gated residual BF16 test task\n", encoding="utf-8")
+    (path / "definition.json").write_text(json.dumps(GATED_RESIDUAL_DEFINITION, indent=2), encoding="utf-8")
+    (path / "baseline.py").write_text(GATED_RESIDUAL_REFERENCE, encoding="utf-8")
+    inputs = {name: {"type": "random"} for name in GATED_RESIDUAL_DEFINITION["inputs"]}
+    (path / "workloads.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "definition": GATED_RESIDUAL_DEFINITION["name"],
+                    "workload": {"uuid": uuid, "axes": axes, "inputs": inputs},
+                    "solution": None,
+                    "evaluation": None,
+                }
+            )
+            + "\n"
+            for uuid, axes in GATED_RESIDUAL_WORKLOADS.items()
+        ),
+        encoding="utf-8",
+    )
+    (path / "tuning.yaml").write_text(yaml.safe_dump(GATED_RESIDUAL_TUNING), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def task_dir(example_task: Path) -> Path:
+    """Make a portable task using a fake measurement adapter and explicit Python."""
+    path = example_task
     (path / "benchmark.py").write_text(FAKE_BENCHMARK, encoding="utf-8")
     config = yaml.safe_load((path / "tuning.yaml").read_text(encoding="utf-8"))
     config["evaluator_python"] = sys.executable
