@@ -1,5 +1,7 @@
 """CPU bit-exact parity and guarded SigLIP dispatch for tanh GELU."""
 
+import functools
+import math
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -42,8 +44,20 @@ def transformers_tanh(monkeypatch):
     module = ModuleType("transformers.activations")
 
     class PytorchGELUTanh(nn.Module):
+        # Mirrors transformers' GELUTanh, including its Python-formula variant.
+        def __init__(self, use_gelu_tanh_python=False):
+            super().__init__()
+            if use_gelu_tanh_python:
+                self.act = self._python
+            else:
+                self.act = functools.partial(F.gelu, approximate="tanh")
+
+        @staticmethod
+        def _python(x):
+            return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
+
         def forward(self, x):
-            return F.gelu(x, approximate="tanh")
+            return self.act(x)
 
     PytorchGELUTanh.__module__ = module.__name__
     module.PytorchGELUTanh = PytorchGELUTanh
@@ -340,6 +354,7 @@ def test_pi05_gelu_tanh_other_activations_bypass_profile(transformers_tanh):
             custom,
             AlteredGELU(approximate="tanh"),
             AlteredTransformersGELU(),
+            transformers_tanh(use_gelu_tanh_python=True),
             overridden,
             hooked,
             impostor,
@@ -505,3 +520,15 @@ def test_pi05_gelu_tanh_guard_and_fallback_use_one_activation_lookup():
             _equal(actual, expected)
             assert layer.mlp.lookups == 1, "the guard and fallback must use the same activation lookup"
             assert len(calls) == (1 if approximate == "tanh" else 0)
+
+
+def test_pi05_gelu_tanh_real_transformers_activations():
+    """The installed Transformers' SigLIP activation routes; its Python-formula variant does not."""
+    activations = pytest.importorskip("transformers.activations")
+    native, python = activations.ACT2FN["gelu_pytorch_tanh"], activations.ACT2FN["gelu_python_tanh"]
+    # A dense deterministic range: the Python formula rounds differently on part of it.
+    x = torch.linspace(-8, 8, 100001)
+    assert torch.equal(native(x), F.gelu(x, approximate="tanh"))
+    assert not torch.equal(python(x), F.gelu(x, approximate="tanh"))
+    assert pi05._is_gelu_tanh(native)
+    assert not pi05._is_gelu_tanh(python)

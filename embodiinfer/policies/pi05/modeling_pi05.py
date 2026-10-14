@@ -33,6 +33,7 @@ step (never mutated), so there is no HF ``DynamicCache`` to defend against.
 
 from __future__ import annotations
 
+import functools
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -110,6 +111,17 @@ def _is_gelu_tanh(activation: Any) -> bool:
         # sys.modules. Compare the class itself, never its name or a subclass.
         activations = sys.modules.get("transformers.activations")
         if activations is None or type(activation) is not getattr(activations, "PytorchGELUTanh", None):
+            return False
+        # GELUTanh(use_gelu_tanh_python=True) ("gelu_python_tanh") evaluates a
+        # Python formula that is not bit-identical to F.gelu; only the native
+        # partial may use the operator.
+        act = activation.__dict__.get("act")
+        if not (
+            isinstance(act, functools.partial)
+            and act.func is F.gelu
+            and not act.args
+            and act.keywords == {"approximate": "tanh"}
+        ):
             return False
     # Module hooks and instance overrides may change values or gradients.
     return (
