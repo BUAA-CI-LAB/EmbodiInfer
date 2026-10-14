@@ -86,6 +86,12 @@ STAGES = (
         True,
         "kv_prefix_context",
     ),
+    Stage("gelu_only", ("prefix_gelu_fusion",), group="isolated"),
+    Stage(
+        "kv_prefix_context_gelu",
+        ("kv_workspace", "prefix_kv_only", "reuse_action_context", "prefix_gelu_fusion"),
+        predecessor="kv_prefix_context",
+    ),
 )
 
 
@@ -93,7 +99,13 @@ def stage_fields(stage: Stage) -> dict[str, bool] | None:
     """Expand only the tested non-quantized switches; everything else stays default."""
     if not stage.switches and not stage.operator_control:
         return None
-    fields = dict(norm_fusion=False, kv_workspace=False, prefix_kv_only=False, reuse_action_context=False)
+    fields = dict(
+        norm_fusion=False,
+        kv_workspace=False,
+        prefix_kv_only=False,
+        reuse_action_context=False,
+        prefix_gelu_fusion=False,
+    )
     fields.update(dict.fromkeys(stage.switches, True))
     return fields
 

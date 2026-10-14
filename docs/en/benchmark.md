@@ -51,6 +51,18 @@ at B=1 with their respective Torch CUDA builds and drivers.
 
 ## Reproducing a result
 
+The October 14 non-quantized Pi05 prefix GELU/product experiment is separate from
+the offline table above. On one RTX 4090, B1/H50/ten steps with the unchanged
+RoboTwin checkpoint, default-off pointwise fusion improves paired complete-request
+P50 from 70.989 to 70.064 ms and 71.127 to 70.193 ms (about 1.3%). The reference is
+untouched main with its best tested byte-equivalent KV/prefix/context settings;
+their existing gains are part of the baseline. Four cases pass all 280 KV/AE/action
+byte comparisons at zero tolerance. GPU replay has its own timing scope, and the
+first high-variance run, including a long-tail sample, is retained and disclosed.
+See the [Pi05 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md)
+for exact conditions, rejection evidence and limits. This result does not establish
+other models, batches, hardware or closed-loop task quality.
+
 Start with the selected benchmark directory's README. Use its environment,
 checkpoint, dataset preparation, and measurement command to set up your run.
 

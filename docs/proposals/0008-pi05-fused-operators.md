@@ -59,6 +59,18 @@ Alternative numerical and calibrated recipes retain their existing contracts.
 The real-weight zero-tolerance gate and independent unchanged-main comparison
 are recorded in the [Pi05 benchmark](../../benchmarks/pi05-benchmark/README.md).
 
+`prefix_gelu_fusion=False` adds a separate non-quantized pointwise option for
+LeRobot prefix MLPs. It retains the existing gate/up and down GEMMs, using a
+device-local Torch BF16 GELU lookup and the original BF16 product rounding over
+row-strided projection views. The reusable `GatedGeluBackend` registry returns
+fixed-layout plans with ephemeral BF16 output; it constructs no quantizer.
+`OperatorBackends.gated_gelu` selects the implementation. CUDA plans require
+SM80 or newer and warmup before capture. Pi05 owns plans per layer, layout and
+graph/stream scope, releasing them after graph teardown and on refit or migration.
+Action-expert activations and existing numerical/precision recipes retain their
+paths. Combining this option with quantized, paired-GEMM or `openpi_rlinf` recipes
+fails explicitly. No preset enables it and it does not select a horizon or solver.
+
 The `openpi_rlinf` numerical contract follows RLinf's inference implementation:
 exact GELU, BF16 vision encoder/projector with FP32
 patch and position embeddings, FP32 time/RoPE factors, BF16 query prescaling,
