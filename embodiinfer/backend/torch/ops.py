@@ -49,6 +49,16 @@ def gated_gelu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.gelu(gate, approximate="tanh") * up
 
 
+def gelu_tanh(x: torch.Tensor) -> torch.Tensor:
+    """Return exactly ``F.gelu(x, approximate="tanh")`` without mutating ``x``.
+
+    The floating tensor result retains the input's shape, dtype, and device.
+    Preserve native GELU rounding and autograd, including for noncontiguous
+    inputs; do not cast, reshape, or expand the formula into separate operations.
+    """
+    return F.gelu(x, approximate="tanh")
+
+
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]

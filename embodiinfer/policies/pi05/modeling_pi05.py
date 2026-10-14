@@ -33,6 +33,7 @@ step (never mutated), so there is no HF ``DynamicCache`` to defend against.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import Lock
@@ -97,6 +98,29 @@ def _op(kernels: KernelSelection | None, op: str, use_triton: bool):
     """
     selection = _DEFAULT_KERNELS if kernels is None else kernels
     return selection.resolve(op, "triton" if use_triton else "torch")
+
+
+def _is_gelu_tanh(activation: Any) -> bool:
+    """Recognize plain tanh GELU modules whose calls can use the tensor operator."""
+    if type(activation) is nn.GELU:
+        if activation.approximate != "tanh":
+            return False
+    else:
+        # A loaded SigLIP activation already has this optional dependency in
+        # sys.modules. Compare the class itself, never its name or a subclass.
+        activations = sys.modules.get("transformers.activations")
+        if activations is None or type(activation) is not getattr(activations, "PytorchGELUTanh", None):
+            return False
+    # Module hooks and instance overrides may change values or gradients.
+    return (
+        "forward" not in activation.__dict__
+        and "_call_impl" not in activation.__dict__
+        and getattr(activation, "_compiled_call_impl", None) is None
+        and not activation._forward_hooks
+        and not activation._forward_pre_hooks
+        and not activation._backward_hooks
+        and not activation._backward_pre_hooks
+    )
 
 
 # ---- attention math (reimplemented to match HF Gemma exactly) ---------------
@@ -562,7 +586,11 @@ class Pi05Policy(FlowVLAPolicy):
                 activated = _op(self._kernels, "linear", False)(x, layer.mlp.fc1.weight, layer.mlp.fc1.bias)
             else:
                 activated = layer.mlp.fc1(x)
-            activated = layer.mlp.activation_fn(activated)
+            activation_fn = layer.mlp.activation_fn
+            if _is_gelu_tanh(activation_fn):
+                activated = _op(self._kernels, "gelu_tanh", False)(activated)
+            else:
+                activated = activation_fn(activated)
             if type(layer.mlp.fc2) is nn.Linear:
                 h = h + _op(self._kernels, "linear", False)(
                     activated, layer.mlp.fc2.weight, layer.mlp.fc2.bias

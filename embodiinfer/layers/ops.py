@@ -158,6 +158,7 @@ def _select_profile(name: str) -> Any:
 
 
 register_lazy_op("linear", "torch", "embodiinfer.backend.torch.ops", "linear")
+register_lazy_op("gelu_tanh", "torch", "embodiinfer.backend.torch.ops", "gelu_tanh")
 
 
 for _op, _module in (
