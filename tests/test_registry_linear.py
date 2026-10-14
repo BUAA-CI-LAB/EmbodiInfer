@@ -204,19 +204,6 @@ def _track(module):
 
 def _check_module_bypass(make, selection, calls, dtype):
     x = torch.randn(2, 3, 7, dtype=dtype)
-    for swapped in (False, True):
-        first, second = make(7, 5, dtype, False), _track(_dense(7, 9, dtype, False))
-        if swapped:
-            first, second = second, first
-        expected = first(x), second(x)
-        first.route_inputs.clear()
-        second.route_inputs.clear()
-        actual = _pair(x, first, second, selection)
-        assert len(first.route_inputs) == len(second.route_inputs) == 1
-        for result, reference in zip(actual, expected, strict=True):
-            _equal(result, reference)
-        assert calls == []
-
     mlp = _mlp(dtype)
     mlp.down_proj = make(11, 7, dtype, True)
     expected = _original_mlp(mlp, x, fuse=False)
@@ -568,6 +555,37 @@ def test_pi05_linear_subclasses_and_parallel_modules_bypass_profile(monkeypatch)
             pi05._mlp(mlp, x, False, fuse_projections=False, kernels=selection)
         assert calls == []
     assert reductions and all(recorded_group is group for _, recorded_group in reductions)
+
+
+def test_pi05_linear_pair_routes_any_dense_projection_like_base():
+    """BASE packs every non-quantized inference pair into one GEMM, whatever its module type."""
+    selection, calls = _profile()
+
+    class AlteredLinear(nn.Linear):
+        def forward(self, x):
+            return super().forward(x) + 0.5
+
+    def column(k, n, dtype):
+        dense = _dense(k, n * 2, dtype, False)
+        return ColumnParallelLinear.from_linear(dense, TensorParallelContext(2, 1), name="test").eval()
+
+    for dtype in _DTYPES:
+        factories = (lambda k, n, dtype: AlteredLinear(k, n, bias=False, dtype=dtype).eval(), column)
+        for make in factories:
+            for swapped in (False, True):
+                first, second = make(7, 5, dtype), _dense(7, 9, dtype, False)
+                if swapped:
+                    first, second = second, first
+                x = torch.randn(2, 3, 7, dtype=dtype)
+                weight = torch.cat((first.weight, second.weight), dim=0).contiguous()
+                expected = F.linear(x, weight).split((first.out_features, second.out_features), dim=-1)
+                with torch.no_grad():
+                    actual = _pair(x, first, second, selection)
+                assert len(calls) == 1
+                _call_is(calls[0], x, first._vvla_fused_pair_weight, None)
+                for result, reference in zip(actual, expected, strict=True):
+                    _equal(result, reference)
+                calls.clear()
 
 
 def test_pi05_eager_projection_branches_bypass_linear_profile(monkeypatch):

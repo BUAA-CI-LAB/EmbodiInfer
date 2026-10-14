@@ -224,8 +224,6 @@ def _fused_linear_pair(
         )
         fused = packed(x)
         return fused.split((first.out_features, second.out_features), dim=-1)
-    if type(first) is not nn.Linear or type(second) is not nn.Linear:
-        return first(x), second(x)
     weight = getattr(first, "_vvla_fused_pair_weight", None)
     if weight is None or weight.device != first.weight.device or weight.dtype != first.weight.dtype:
         weight = torch.cat((first.weight, second.weight), dim=0).contiguous()
