@@ -24,6 +24,9 @@ from .spec import RegistrationSpec
 
 REFERENCE = "embodiinfer/backend/torch/ops.py"
 REGISTRY = "embodiinfer/layers/ops.py"
+# Call sites already routed through the registry; the agent reads them from the
+# current BASE as a worked example instead of a historical commit.
+ROUTED_EXAMPLE = "embodiinfer/policies/pi05/modeling_pi05.py"
 ARTIFACTS = {"PLAN.md", "REGISTRATION.json"}
 
 
@@ -303,6 +306,7 @@ class RegistrationRun:
             "AGENTS.md",
             REFERENCE,
             REGISTRY,
+            ROUTED_EXAMPLE,
             "tests/test_kernel_ops.py",
             *(s.source for s in self.spec.sites),
         }
@@ -314,11 +318,6 @@ class RegistrationRun:
         from .prompts import RULES
 
         (context / "RULES.md").write_text(RULES, encoding="utf-8")
-        try:
-            example = git(self.base, "show", "449ebe2", "--", "embodiinfer/")
-        except ContractError:
-            example = "The optional migration example 449ebe2 is unavailable in this repository.\n"
-        (context / "migration.diff").write_text(example, encoding="utf-8")
         self.manifest.update(
             agent=agent,
             test_python=python or self.manifest["test_python"],

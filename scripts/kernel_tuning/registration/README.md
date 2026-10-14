@@ -1,89 +1,65 @@
-# 算子注册流程（智能体闭环）
+# 算子注册工具（`register`）
 
-本目录实现 `python -m scripts.kernel_tuning register …` 工具链。设计归属见
+`python -m scripts.kernel_tuning register …` 把一个尚未注册的数学算子接入算子注册表
+（`embodiinfer/layers/ops.py`），并把选定的调用点改为经过注册表调用。设计归属见
 [0009 §4.8](../../../docs/proposals/0009-hotspot-kernel-tuning.md#48-agent-assisted-operator-registration)。
 
-本工具链自动完成"把一个算子接入算子注册表"这一步：
+工具由一个控制器驱动编码智能体，循环执行"计划 → 实现 → CPU 检查 → 反馈修复"，直到全部检查通过或预算用尽。
+最终产物是一个待人工审阅的分支和 `patch.diff`。
 
-1. 调用方选定算子；
-2. 工具定位调用点；
-3. 智能体修改代码、注册算子、编写测试；
-4. 控制器运行检查；
-5. 失败时把信息反馈给智能体重做；
-6. 全部通过后产出一个待审阅的分支。
+注册只改调用路径，不改数值：参考实现必须逐字保留原表达式的算术。以下工作不在本工具范围内：
 
-不在本流程内的工作：
+- 选择要注册的算子和调用点（由调用方指定）；
+- 融合多个相邻算子；
+- 调优、安装 kernel（`tune-all`/`run`、`install`、`verify` 等）；
+- GPU 上的整模型逐位一致验证（合并前必须单独完成，见[合并前](#合并前)）；
+- 合并分支（由人工完成）。
 
-- 调优和安装 kernel：使用现有的 `capture-ops`、`calibrate`、`tune-all`/`run`、`install`、`verify`。
-- GPU 上的整模型逐位一致验证：按 [0009 §6](../../../docs/proposals/0009-hotspot-kernel-tuning.md) 的要求，合并前在目标 GPU 上单独做一次。
-- 合并：由人工完成。
+## 1. 前提条件
 
-本流程的检查全部在 CPU 上运行，因此不需要 GPU。
+- **工具环境**：Python ≥ 3.12，并已安装 Humanize2 和 Ruff，与 `tune-all` 共用：
+  `uv sync --project scripts/kernel_tuning --python 3.12 --frozen`。
+  `run` 和 `resume` 只能在 POSIX 系统上执行；`new`、`status`、`finalize` 不启动智能体。
+  启动后工具环境的包版本（`hmz`、`pydantic`、`pyyaml`、`psutil`）被记录下来，变化后需要新建运行。
+- **测试解释器 `test_python`**：一个已准备好的模型运行环境，需包含 Torch、pytest，以及规格中 CPU
+  测试需要的模型依赖。所有需要导入 `embodiinfer` 的检查都在这个解释器的子进程中执行。工具环境自带
+  Torch 时可以省略，否则必须通过 `--set test_python=/absolute/python` 指定。
+- **干净的仓库**：`git status --porcelain` 必须为空（包括未跟踪文件）。输出目录应放在仓库外或被
+  `.gitignore` 忽略的位置，默认的 `results/kernel_tuning/register` 满足要求。
+- **策略已接入注册表**：调用点所在文件必须已有模块级 `_op` helper，并能拿到 `KernelSelection`。
+  目前只有 pi0.5（`embodiinfer/policies/pi05/modeling_pi05.py`）满足。其他策略需要先人工接入一次。
 
-## 1. 流程总览
-
-```
-选定算子 ──► 定位调用点 ──► 智能体修改 ──► 检查 ──通过──► 产出分支
- (步骤1)      (步骤2)         (步骤3)      (步骤4)          (步骤6)
-                 │                ▲            │
-            调用方确认             └── 反馈 ◄───┘ 失败 (步骤5)
-```
-
-| 步骤 | 工作 | 执行者 | 使用的现有工具 | 产物 |
-|---|---|---|---|---|
-| 1 选定算子 | 校验规格，记录基线 commit，建立 worktree | 控制器 | `git worktree`；在测试环境中调用 `embodiinfer.layers.available_ops` | `spec.json`、`base/`、`worktree/` |
-| 2 定位调用点 | 找到要改的表达式，以及需要保持原样的分支 | 控制器，调用方确认 | 无（`ast`） | `sites.json`、`sites.md` |
-| 3 智能体修改 | 写参考实现、注册、改调用点、写测试 | 智能体 | Humanize2 flow 机制（同 `scripts/kernel_tuning/flow.py`） | worktree 中的改动、`PLAN.md`、`REGISTRATION.json` |
-| 4 检查 | 范围、结构、格式、测试、测试有效性 | 控制器 | `ruff`、`pytest` | `attempts/<N>/checks.json` |
-| 5 反馈重做 | 把失败信息交回智能体 | 控制器 + 智能体 | 同一个 Humanize2 会话 | `attempts/<N>/feedback.json` |
-| 6 产出分支 | 汇总改动，按需提交和推送 | 控制器 | `git` | 分支 `registry/<op>-<run_id>`、`patch.diff`、`SUMMARY.md` |
-
-## 2. 命令
-
-控制器运行在调优工具环境里（Python ≥ 3.12 + Humanize2，POSIX），与 `tune-all` 相同。需要导入 `embodiinfer` 的检查，通过 `test_python` 指定的解释器以子进程运行。
+## 2. 快速开始
 
 ```bash
 TOOL="uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning"
 
-# 步骤 1、2：为选定的算子建立一次运行，打印 sites.md 后停下，等待调用方确认
-$TOOL register new --spec linear.yaml --output results/kernel_tuning/register \
-    --set test_python=/abs/dev/python
+# 1. 建立运行：校验规格、建立 worktree、定位调用点，打印 sites.md 后停下
+$TOOL register new --spec linear.yaml --set test_python=/abs/runtime/python
+#    输出最后一行为 "Run: <RUN 目录>"
 
-# 步骤 3–5：智能体修改、检查、反馈，直到通过或预算用尽
-$TOOL register run RUN --agent 'HARNESS/MODEL:EFFORT' --set test_python=/abs/dev/python
+# 2. 审阅 RUN/sites.md（需要时补充 RUN/sites.json），然后启动智能体循环
+$TOOL register run RUN --agent 'HARNESS/MODEL:EFFORT'
 
-$TOOL register resume RUN   # 中断后继续
-$TOOL register status RUN   # 查看当前阶段和每次尝试的结果
+# 中断后继续；查看状态
+$TOOL register resume RUN
+$TOOL register status RUN
 
-# 步骤 6：默认只打印分支和改动；提交、推送都需要显式传参
+# 3. 导出已验证的补丁；提交和推送都需要显式参数
 $TOOL register finalize RUN [--commit] [--push]
 ```
 
-`new` 默认用当前解释器探测注册表；工具环境没有 Torch 时，必须指定准备好的
-`test_python`。它也需要 pytest 及规格中 CPU 测试所需的模型依赖。Ruff 在工具环境中运行。
-控制器与待注册代码可以分开存放：`new --repository /abs/clean-checkout` 指定干净的模型仓库，
-默认使用控制器所在仓库。这样可以验证尚未提交的工具链，同时从已提交的模型基线建立 worktree。
-`run` 命令本身表示调用方已经确认 `sites.md`；`--yes` 可显式记录确认。
-首次 `run` 可以更换 `test_python` 并重新探测，此后解释器和 agent 固定，`resume` 不接受覆盖。
-`--push` 需要同时传 `--commit`，或此前已经完成提交。
+所有命令都在仓库根目录执行。`run`/`resume` 的退出码在状态为 `passed` 或 `finalized` 时为 0，
+否则为 1。
 
-`register new` 也可以不用规格文件，直接用命令行参数：
+## 3. 规格
 
-```bash
-$TOOL register new --model pi05 --op linear \
-    --site 'embodiinfer/policies/pi05/modeling_pi05.py::_fused_qkv::F.linear(x, weight)' \
-    --site 'embodiinfer/policies/pi05/modeling_pi05.py::_mlp::mlp.down_proj(activated)' \
-    --output results/kernel_tuning/register
-```
-
-## 3. 规格文件
-
-规格文件决定这次运行注册哪个算子、改哪些调用点。
+规格决定本次运行注册哪个算子、修改哪些调用点、用哪些测试回归，以及预算。
 
 ```yaml
-model: pi05                    # 调用点所属的策略
-op: linear                     # 新算子名，要求见步骤 1
-description: >                 # 算子的数学含义，写进智能体的上下文
+model: pi05                    # 调用点所属的策略目录名
+op: linear                     # 新算子名
+description: >                 # 算子的数学含义，写入智能体上下文和 SUMMARY.md
   F.linear(x, weight, bias)：weight 为 [out, in]，bias 可为 None；不改变 dtype。
 sites:                         # 要改的调用点：文件、所在函数、原表达式
   - source: embodiinfer/policies/pi05/modeling_pi05.py
@@ -92,244 +68,290 @@ sites:                         # 要改的调用点：文件、所在函数、�
   - source: embodiinfer/policies/pi05/modeling_pi05.py
     function: _mlp
     expression: "mlp.down_proj(activated)"
-preserve:                      # 必须保持原样的分支；步骤 2 会自动补充候选
-  - "QuantizedLinear 继续走 embodiinfer/layers/linear.py 的量化注册表"
-  - "张量并行下的 RowParallelLinear / ColumnParallelLinear 保持模块调用"
+preserve:                      # 必须保持原样的路径，作为审阅说明交给智能体
+  - "QuantizedLinear 继续走量化注册表"
 tests:                         # 每次检查都要通过的已有 CPU 测试
   - tests/test_kernel_ops.py
-  - tests/test_pi05_components.py
   - tests/test_pi05_cpu_routes.py
-  - tests/test_tensor_parallel.py
 budget:
   max_attempts: 5              # 最多尝试次数
-  agent_timeout_seconds: 1800  # 每轮智能体调用的超时
-  max_seconds: 7200            # 整次运行的时间上限
+  agent_timeout_seconds: 1800  # 单次智能体调用的超时
+  max_seconds: 7200            # 整次运行的累计时长上限，中断后继续累计
 ```
 
-## 4. 各步骤
+校验规则（`spec.py`），不满足时在建立 worktree 之前就报错：
 
-### 步骤 1：选定算子（`register new`）
+- 不允许未知字段。
+- `model` 必须是标识符。
+- `op` 必须是公开的 Python 标识符：不能是关键字，不能以 `_` 开头。
+  它按数学含义命名，不能包含模型名。下游调优工具要求 `embodiinfer.backend.torch.ops` 中的参考函数与算子同名，
+  `install` 也用它作目录名。
+- `sites` 至少一项，且不能重复。
+  - `source` 必须是 `embodiinfer/policies/<model>/` 下的 `.py` 相对路径。
+  - `function` 是函数名，或 `Class.method` 形式的限定名。
+  - `expression` 必须是一个调用表达式，按 `ast.unparse` 规范化后比较。
+- `tests` 是 `tests/` 下的 pytest 节点，默认 `tests/test_kernel_ops.py`。这些文件在 BASE 中必须存在。
+- `budget` 的值必须是正整数。
 
-控制器依次检查以下各项，任何一项不满足就报错退出：
+也可以不写规格文件，直接用命令行参数。此时 `description`、`preserve`、`tests` 和 `budget` 取默认值：
 
-1. **算子名合法。** `op` 必须是 Python 标识符，并按数学含义命名，不能用模型名。原因是现有调优工具要求参考实现位于 `embodiinfer.backend.torch.ops`，且函数名与算子名相同（`scripts/kernel_tuning/regions.py:215-217`、`scripts/kernel_tuning/discovery/tasks.py:95-98`）；`install` 还会用算子名作包目录名（`scripts/kernel_tuning/install.py:177`）。
-2. **算子尚未注册。** 以 `PYTHONPATH=<仓库根目录>` 在 `test_python` 中运行下面的命令，`op` 不能出现在结果里：
-   ```bash
-   python -c "from embodiinfer.layers import available_ops; print(sorted(available_ops()))"
-   ```
-   同时 `embodiinfer/backend/torch/ops.py` 中不能已有同名函数。
-3. **工作目录干净。** `git status --porcelain` 为空，然后记录 `BASE=$(git rev-parse HEAD)`。
-   基线中的已有符号链接按链接目标文本记录完整性，不跟随目标；选定的源码和测试仍须是普通文件。
-4. **建立两个 worktree。** 主检出目录在整个过程中不被修改：
-   ```bash
-   git worktree add --detach RUN/base "$BASE"                        # 基线，步骤 4 的有效性检查用
-   git worktree add -b registry/<op>-<run_id> RUN/worktree "$BASE"   # 智能体只改这里
-   ```
-5. **冻结规格。** 规格和 `BASE` 一起写入 `RUN/spec.json`。
-
-### 步骤 2：定位调用点（`register new` 的后半段）
-
-对每个 `site`，控制器用 `ast` 完成以下工作：
-
-- **定位表达式。** 在 `function` 的函数体中查找与 `expression` 规范化后（`ast.unparse`）相同的表达式，记录行号和列号。找不到，或者找到多处又无法区分时，直接报错。
-- **收集 preserve 候选。** 收集包裹该表达式的 `if` 条件，例如 `isinstance(..., QuantizedLinear)`、`torch.is_grad_enabled()`、`self.attention == "eager"`、`self.tensor_parallel.enabled`，与规格中的 `preserve` 合并。
-- **检查能否拿到 `KernelSelection`。**
-  - 调用点在策略方法里时，可以直接用 `self._kernels`（`embodiinfer/policies/pi05/modeling_pi05.py:574`）。
-  - 调用点在自由函数里时，需要新增 `kernels` 参数。控制器会列出同一文件中调用这个函数的位置，智能体要把参数一路传过去。
-
-结果写入 `sites.json`，并生成给人看的 `sites.md`，内容是每个调用点的源码片段和 preserve 条件。
-然后命令停下。调用方确认无误、或直接修改 `sites.json` 的补充说明之后，再运行 `register run`。
-源文件、函数、表达式、站点 ID 和自动提取的基线 guard 不可删改；更换这些输入需要新建运行。
-传 `--yes` 可显式记录确认，`new` 始终在此停下，不会自动打开智能体。
-
-### 步骤 3：智能体修改（`register run`）
-
-**运行机制**与现有调优流程相同：控制器用 Humanize2 运行一个可恢复的 flow `operator_registration`，结构参照 `scripts/kernel_tuning/flow.py`；启动方式与 `scripts/kernel_tuning/__main__.py` 中的 `_execute` 一致：
-
-```python
-Hmz(workspace=RUN).run(
-    flow=Path("scripts/kernel_tuning/registration/flow.py"),
-    task=f"Register {op} and route its call sites through the registry",
-    agents={"coder": AGENT},
-    params={"run_dir": str(RUN)},
-    budget={"duration": remaining_seconds, "graceful": False},
-    resume=resume,
-)
+```bash
+$TOOL register new --model pi05 --op linear \
+    --site 'embodiinfer/policies/pi05/modeling_pi05.py::_fused_qkv::F.linear(x, weight)' \
+    --site 'embodiinfer/policies/pi05/modeling_pi05.py::_mlp::mlp.down_proj(activated)'
 ```
 
-智能体的工作环境（`LocalEnv`）指向 `RUN/worktree`。只读上下文放在 `RUN/context/`，包括：
+## 4. 流程
 
-- `AGENTS.md`；
-- `embodiinfer/layers/ops.py`、`embodiinfer/backend/torch/ops.py`，以及各调用点所在的文件；
-- `tests/test_kernel_ops.py`，作为测试写法示例；
-- 一次已完成迁移的 diff 作为示例：`git show 449ebe2 -- embodiinfer/`；
-- `sites.json`；
-- 下面的规则全文。
+### 4.1 `register new`：建立运行
 
-固定版 Humanize2 的 `LocalEnv.derive_subdir` 只接受子目录，所以 SDK 的 workspace
-设为 `RUN`，再派生 `worktree` 给智能体。框架日志归档到 `RUN/workspace/`；
-`humanize.json` 记录实际 epic 及归档路径。源码快照和规则文件会校验哈希。
-浅克隆中缺少示例提交 `449ebe2` 时，明确记录缺失，继续使用当前源码和测试示例。
+`new` 的参数：
 
-**每次尝试分两轮：**
+| 参数 | 含义 |
+|---|---|
+| `--spec FILE` 或 `--model/--op/--site` | 规格，二选一 |
+| `--repository PATH` | 要注册进去的干净仓库，默认是控制器所在仓库。控制器代码有未提交改动时，可以指向另一个干净检出 |
+| `--output DIR` | 运行目录的父目录，默认 `results/kernel_tuning/register` |
+| `--set test_python=/abs/python` | 测试解释器，必须是已存在的绝对路径 |
+| `--yes` | 在记录中标记已确认调用点；`new` 仍会停下，不会启动智能体 |
 
-1. **`plan`**：写出 `PLAN.md`，包括：
-   - 算子的数学定义，以及它与原表达式的逐项对应关系；
-   - 函数签名，即哪些参数是张量、哪些是常量；
-   - 每个调用点的改法，以及 `kernels` 如何传到该点；
-   - preserve 分支如何保持不变；
-   - 要新增的测试。
-2. **`implement`**：在 worktree 中完成修改，并写出 `REGISTRATION.json`：
-   ```json
-   {
-     "op": "linear",
-     "reference": "embodiinfer/backend/torch/ops.py::linear",
-     "sites": [{"id": "S1", "file": "embodiinfer/policies/pi05/modeling_pi05.py",
-                "function": "_fused_qkv", "call": "_op(kernels, \"linear\", False)(x, weight)"}],
-     "preserved": [{"site": "S1", "branch": "isinstance(projection, QuantizedLinear)"}],
-     "tests": ["tests/test_kernel_ops.py::test_linear_reference_matches_f_linear"]
-   }
-   ```
+控制器依次执行以下步骤，任何一步失败都会报错，并撤销已经建立的 worktree 和分支：
 
-**智能体必须遵守的规则**（写进 prompt，并由步骤 4 检查）：
+1. 确认仓库干净，记录 `BASE = HEAD`。
+2. 用 `ast` 定位每个调用点（见 4.2），并确认规格中的测试文件存在。
+3. 生成 `run_id`（UTC 时间加随机后缀），建立 `RUN = <output>/<run_id>`。
+4. **预检**：`backend/torch/ops.py` 中不能已有同名函数。然后在 `test_python` 中以 `PYTHONPATH=<仓库>`
+   导入 `embodiinfer.layers.available_ops`，算子不能已经注册，日志写入 `preflight.log`。
+   预检后再次确认仓库仍是干净的 `BASE`。
+5. 建立两个 worktree，主检出在整个过程中不被修改：
+   - `RUN/base`：detached 检出 `BASE`，作为只读基线；
+   - `RUN/worktree`：新分支 `registry/<op>-<run_id>`，智能体只在这里修改。
+6. 写入冻结的 `spec.json`（规格和 BASE）、`sites.json`、`sites.md` 和 `manifest.json`。
+   此时状态为 `awaiting_confirmation`。
 
-1. **参考实现。** 写在 `embodiinfer/backend/torch/ops.py`，函数名等于算子名，带类型注解和说明契约的 docstring，只导入 `torch` 和标准库。参数只能是张量或常量（`int`/`float`/`bool`/`str`/`None`），返回张量或张量元组，不得原地修改输入。
-2. **逐字保留原算术。** 使用相同的 ATen 调用、顺序和中间 dtype 转换。例如不能把 `F.linear` 改写成 `x @ w.T`，不能增删 `.float()`、`.to()`、`.contiguous()`，也不能合并或拆分 GEMM。仓库多处说明过：表达式或形状一变，舍入就会变（`embodiinfer/policies/pi05/modeling_pi05.py:664-666`）。
-3. **注册。** 单独写一行：
-   ```python
-   register_lazy_op("<op>", "torch", "embodiinfer.backend.torch.ops", "<op>")
-   ```
-   只有 Torch 实现的算子不能放进 `embodiinfer/layers/ops.py:160` 那个同时注册 torch 和 triton 的循环。
-4. **调用点。** 使用策略现有的 helper，pi0.5 是 `_op(kernels, "<op>", False)(...)`。只有 Torch 实现时，偏好的实现必须是 `torch`，否则 `get_op` 会抛出 KeyError。`KernelSelection` 用参数传递，不使用全局变量。
-5. **preserve 分支原样保留。** 判断方式只用类型（例如 `type(module) is nn.Linear`），不按模型名分支。
-6. **测试至少覆盖三类：**
-   - 参考实现与原表达式在 CPU 随机输入（FP32 和 BF16）上 `torch.equal`；
-   - 调用点经过注册表，做法是用一个会记录调用的假调优档案，写法见 `tests/test_kernel_ops.py:135-150`；
-   - preserve 分支不经过注册表。
-7. **不能改的内容：** 已有测试的断言、`KernelSelection`、`embodiinfer/backend/triton/tuned/`、`scripts/`、`pyproject.toml`、`uv.lock`。
-8. **允许和禁止的操作：** 可以运行 `ruff` 和 CPU `pytest`；不能运行 GPU 代码，不能 `git commit`，不能安装依赖。
+最后打印 `sites.md` 和 `Run: <RUN>`。
 
-### 步骤 4：检查
+### 4.2 审阅调用点
 
-控制器按顺序执行以下检查，前一项失败时后面的不再执行。所有检查都在 CPU 上运行。凡是需要导入 `embodiinfer` 的检查，都以 `PYTHONPATH=RUN/worktree` 在 `test_python` 中运行，并确认导入的 `embodiinfer.__file__` 位于 worktree 内。这是因为开发环境里 EmbodiInfer 是可编辑安装，不设置的话会导入主检出目录中的旧代码。
+`sites.json` 的每个调用点记录以下内容：
 
-| 检查 | 内容 | 方式 |
+- **位置**：表达式在函数体内必须恰好匹配一处，不进入嵌套函数，记录行号和列号。
+- **guard**：外层 `if` 的条件和分支。包含调用点的分支要改；不包含它的兄弟分支、以及调用点之前
+  会提前 `return` 的分支，标记为 `preserve_body`，这些分支的代码必须原样保留。
+- **`KernelSelection` 的来源**：
+  - 函数已有 `kernels` 参数时用 `kernels`；
+  - 方法所在文件用到 `self._kernels` 时用 `self._kernels`；
+  - 否则需要新增 `kernels` 参数，并由同一文件中列出的调用方逐层传递。
+- **调用方**：同一文件内直接或间接调用该函数的位置。
+- **源码片段**：调用点前后几行。
+
+`sites.md` 是同一份内容的可读版本。审阅时可以：
+
+- 在 `sites.json` 的 `preserve` 中追加说明；
+- 给调用点追加额外字段作为备注。
+
+以下内容不能删改：调用点的 `id`、`source`、`function`、`expression`、`guards`，以及规格中已有的
+`preserve` 条目。需要换调用点时，新建一次运行。
+
+### 4.3 `register run`：启动智能体
+
+`run RUN --agent HARNESS/MODEL:EFFORT [--set test_python=…] [--yes]` 执行一次即视为确认调用点，然后：
+
+1. 恢复并校验运行目录（见 4.6）。
+2. 用当前或新指定的 `test_python` 在 `RUN/base` 上重新做预检。
+3. 将 `sites.json` 与 BASE 上重新定位的结果比对，然后冻结 agent、`test_python` 和 `sites.json` 哈希，状态变为 `ready`。
+4. 建立只读上下文 `RUN/context/`，内容如下：
+   - `AGENTS.md`；
+   - `embodiinfer/backend/torch/ops.py`、`embodiinfer/layers/ops.py`；
+   - `embodiinfer/policies/pi05/modeling_pi05.py`：已经通过 `_op` 和 `KernelSelection`
+     走注册表的调用点，作为改法示例，取自 BASE；
+   - `tests/test_kernel_ops.py`：测试写法示例；
+   - 各调用点所在的源文件、`sites.json`、`RULES.md`。
+5. 启动 Humanize2 flow `operator_registration`（`flow.py`）。Humanize2 的 workspace 设为 `RUN`，
+   智能体的 `LocalEnv` 是从中派生出的 `RUN/worktree`；框架日志归档到 `RUN/workspace/`，
+   实际的 epic 路径记录在 `humanize.json` 中。
+
+`run` 只能执行一次。之后使用 `resume`，它不接受更换 agent 或 `test_python`。
+
+**每次尝试的阶段：**
+
+| 尝试 | 阶段 | 会话 |
 |---|---|---|
-| C1 范围 | `git -C RUN/worktree diff --name-status $BASE` 只涉及：`embodiinfer/backend/torch/ops.py`、`embodiinfer/layers/ops.py`、`sites.json` 中的源文件、`tests/test_kernel_ops.py` 或新的 `tests/test_registry_<op>.py`。已有测试文件只允许新增内容，不允许删改原有行 | `git diff` |
-| C2 结构 | ① `backend/torch/ops.py` 中有 `def <op>`，带注解和 docstring，且不导入 `embodiinfer.models`/`policies`/`engine`；② `layers/ops.py` 中有对应的 `register_lazy_op` 行；③ 每个调用点已改为注册表调用，原表达式只出现在 preserve 分支中；④ 在 `test_python` 中验证：`available_ops()["<op>"]` 包含 `torch`、`get_op("<op>")` 就是参考实现、`KernelSelection("none").prepare()` 成功、`KernelSelection("torch").resolve("<op>")` 返回参考实现 | `ast` + 子进程 |
-| C3 格式 | 改动文件通过 `ruff check` 和 `ruff format --check` | `ruff` |
-| C4 测试 | 规格 `tests` 中的测试和 `REGISTRATION.json` 列出的新测试全部通过 | `test_python -m pytest <files> -q`，在 `RUN/worktree` 中运行 |
-| C5 测试有效性 | 把新测试复制到 `RUN/base`，以 `PYTHONPATH=RUN/base` 逐个运行，每个测试的所有参数化实例必须执行并断言失败；通过、跳过、收集失败或依赖异常均不算有效证据 | `test_python` 内调用 `pytest.main`，保存 JUnit 报告 |
+| 第一次 | `plan` → `implement` → 检查 | 新会话 |
+| 之后 | `repair` → 检查 | 沿用上一次的会话 |
+| 同一项检查连续失败两次后 | `plan` → `implement` → 检查 | 新会话，worktree 保留 |
+| 智能体调用出错之后（超时、没写 `PLAN.md` 等） | `repair` → 检查 | 新会话 |
 
-### 步骤 5：反馈重做
+- `plan`：只写 `PLAN.md`，内容包括数学定义及其与每个原表达式的逐项对应、参数中哪些是张量哪些是常量、
+  `KernelSelection` 如何到达每个调用点、每个 preserve 分支如何保留、要新增哪些测试。
+- `implement` / `repair`：修改代码，并写出 `REGISTRATION.json`：
 
-任何检查失败时，控制器写出 `attempts/<N>/feedback.json`：
+  ```json
+  {
+    "op": "linear",
+    "reference": "embodiinfer/backend/torch/ops.py::linear",
+    "sites": [{"id": "S1", "file": "embodiinfer/policies/pi05/modeling_pi05.py",
+               "function": "_fused_qkv", "call": "_op(kernels, \"linear\", False)(x, weight)"}],
+    "preserved": [{"site": "S1", "branch": "exact original guard"}],
+    "tests": ["tests/test_registry_linear.py::test_reference"]
+  }
+  ```
+
+每轮智能体调用结束后，`PLAN.md` 必须存在且不为空。单轮超时取 `agent_timeout_seconds` 与剩余总时长中较小的一个。
+每个 prompt 都包含冻结的规格、规则全文和上一次的反馈，新开的会话也能独立接手。
+
+**规则摘要**（全文见 `prompts.py` 中的 `RULES`，由检查强制执行）：
+
+1. 参考实现写在 `embodiinfer/backend/torch/ops.py`，函数名等于算子名。带类型注解和说明契约的
+   docstring，只导入 `torch` 和标准库。参数只能是张量或常量，返回张量或张量元组，不原地修改输入。
+2. 逐字保留原算术：ATen 调用、顺序、形状、中间 dtype 转换和 `contiguous` 调用都不变。
+   例如不能把 `F.linear` 改写成 `x @ w.T`，不能合并或拆分 GEMM。
+3. 在 `layers/ops.py` 中单独写一行顶层的
+   `register_lazy_op("<op>", "torch", "embodiinfer.backend.torch.ops", "<op>")`，
+   不放进同时注册 Torch 和 Triton 的循环。
+4. 调用点改为 `_op(kernels, "<op>", False)(...)`，即偏好 Torch 实现。`KernelSelection` 通过参数显式传递，不使用全局变量。
+5. preserve 分支原样保留。区分普通 `nn.Linear` 时用 `type(module) is nn.Linear`，不按模型名分支。
+6. 新增测试覆盖三类行为：
+   - 参考实现与原表达式在 CPU FP32 和 BF16 随机输入上 `torch.equal`；
+   - 调用点经过一个会记录调用的假调优档案；
+   - preserve 分支不经过注册表。
+7. 允许修改的范围见 C1。禁止删改已有测试，禁止安装依赖、运行 GPU 代码、执行 `git commit`/`push`/merge、
+   修改 Git 元数据或运行目录中控制器拥有的文件。
+
+### 4.4 CPU 检查（C1–C5）
+
+控制器按顺序执行检查，前一项失败时后面的不再执行。所有检查子进程都满足以下条件：
+
+- 以 `PYTHONPATH=<检出目录>` 运行，并断言导入的 `embodiinfer` 确实来自该检出目录（开发环境中
+  EmbodiInfer 通常是可编辑安装）；
+- 隐藏 CUDA/ROCm 设备，禁止自动加载 pytest 插件；
+- 超时或取消时终止整个进程组。
+
+| 检查 | 内容 |
+|---|---|
+| C1 范围 | 改动文件取自 `git diff <BASE>` 加上所有未跟踪文件（包括被忽略的，缓存目录除外）。只允许出现：`embodiinfer/backend/torch/ops.py`、`embodiinfer/layers/ops.py`、调用点源文件、`tests/test_kernel_ops.py`、`tests/test_registry_<op>.py`，以及 `PLAN.md`、`REGISTRATION.json`。不允许删除文件。已有测试文件只能新增内容，原有行和顶层语句不变。`KernelSelection` 类不变 |
+| C2 结构 | ① `REGISTRATION.json` 指向正确的算子和参考实现；覆盖每个调用点恰好一次；列出的测试是 BASE 中不存在的新测试函数，位于上述两个测试文件中，不能是文件或单个参数化实例。② 参考函数是模块级同步函数，带 docstring 和合法注解，没有 `*args`/`**kwargs`，所在文件只导入 `torch` 和标准库，函数内没有原地修改。③ `layers/ops.py` 中恰好有一行对应的顶层 `register_lazy_op`。④ 每个调用点都包含报告的 `_op(..., False)` 调用；`kernels` 是函数参数，同一文件内的调用链逐层传递它；guard 及 preserve 分支与 BASE 相同；原表达式只出现在 preserve 分支中，或出现在 `type(x) is nn.Linear` 不成立的那一支。⑤ 在 `test_python` 中确认：`available_ops()` 包含该算子的 `torch` 实现，`get_op` 返回参考实现，`KernelSelection("none").prepare()` 成功，`KernelSelection("torch").resolve` 返回参考实现 |
+| C3 格式 | 改动文件通过 `ruff check` 和 `ruff format --check`（在工具环境中运行） |
+| C4 测试 | 在 `RUN/worktree` 中以 `-m "not gpu"` 运行：规格中的测试一起跑；每个新测试单独跑。新测试必须实际执行，不能被跳过 |
+| C5 有效性 | 把新测试文件复制到 `RUN/base`，逐个运行新测试。每个新测试的所有用例都必须执行，并以断言失败（退出码 1）。通过、跳过、收集错误或依赖缺失都不能作为有效证据 |
+
+检查结果写入 `attempts/<N>/checks.json`，并与当时源码的指纹绑定。中断后恢复时，只有源码字节未变，
+已通过的检查才会复用。检查过程中源码发生变化会被判为失败。
+
+### 4.5 反馈、重试和停止
+
+检查失败时，控制器写出 `attempts/<N>/feedback.json`，下一次尝试的 prompt 会附上它：
 
 ```json
-{
-  "check": "C2",
-  "summary": "调用点 S2 仍直接调用 mlp.down_proj(activated)，且不在 preserve 分支内",
-  "details": {"site": "S2", "file": "embodiinfer/policies/pi05/modeling_pi05.py", "line": 315}
-}
+{"check": "C2", "summary": "S2: original expression remains outside a preserve branch at line 315", "details": {}}
 ```
 
-`details` 的内容随检查而定：
-- C1：越界的文件或被改动的已有测试行；
-- C2：失败的具体检查项；
-- C3、C4：命令输出摘要，截断到固定长度；
-- C5：在基线上仍然通过的测试名。
+智能体调用本身出错时，`check` 为 `agent`。每次尝试结束时，当时的补丁都会保存为 `attempts/<N>/patch.diff`。
 
-**下一次尝试：**
-- 默认在同一个 Humanize2 会话中发出 `repair` prompt，附上 `feedback.json`，智能体在原 worktree 上继续修改；
-- 连续两次在同一项检查失败时，新开一个会话，从 `plan` 重新开始，但 worktree 保留。
+| 结果 | 状态 |
+|---|---|
+| C1–C5 全部通过 | `passed`，记录已验证的源码指纹，并写出 `RUN/patch.diff` 和 `RUN/SUMMARY.md` |
+| 达到 `max_attempts` 或 `max_seconds` | `exhausted`，worktree 保留，供人工接手 |
+| 冻结输入被改动（规格、BASE、`RUN/base`、分支、提交历史、已审阅的调用点、只读上下文），或控制器、运行环境出错 | `failed`，不会转为反馈交给智能体重试 |
+| Ctrl-C 或取消 | `interrupted`，可用 `resume` 继续 |
 
-每次尝试结束时，控制器把 `git -C RUN/worktree diff $BASE` 存为 `attempts/<N>/patch.diff`。
+### 4.6 `resume` 和 `status`
 
-**停止条件：**
-- 全部检查通过：进入步骤 6；
-- 达到 `max_attempts` 或 `max_seconds`：状态记为 `exhausted`，worktree 保留供人工接手；
-- 规格、`BASE` 或 `RUN/base` 被改动：状态记为 `failed`。
+- `status RUN` 打印 `manifest.json`，不加锁，也不启动智能体。
+- `resume RUN` 根据 `manifest.json` 和 Humanize2 的状态台账继续：
+  - 已完成的阶段不重跑；
+  - 已用时长每秒落盘一次，中断不会重置预算；
+  - 状态已是 `passed`、`finalized`、`failed` 或 `exhausted` 时直接返回。
 
-### 步骤 6：产出分支（`register finalize`）
+所有修改运行目录的命令都持有 `RUN/.run.lock`。C5 往 `RUN/base` 复制测试之前，会先把这些文件记入
+`manifest.json` 的 `base_overlay`；任何失败、取消或下一次启动时，都会先用 BASE 还原这些文件。
 
-全部检查通过后，控制器生成两个文件：
+### 4.7 `register finalize`：导出和提交
 
-- `RUN/patch.diff`；
-- `RUN/SUMMARY.md`，内容包括：
-  - 算子定义；
-  - 改动的调用点和保持不变的分支；
-  - 每项检查的命令和结果；
-  - 尝试次数；
-  - 明确写出未做的验证：GPU 整模型逐位一致。
+`finalize` 只接受状态为 `passed` 或 `finalized`、且源码指纹与通过检查时一致的运行。
+它会重新写出 `RUN/patch.diff` 和 `RUN/SUMMARY.md`。补丁不包含 `PLAN.md` 和 `REGISTRATION.json`。
 
-`finalize` 的行为：
+| 参数 | 行为 |
+|---|---|
+| 无 | 打印 worktree 路径、分支名、建议的提交说明和产物路径，不修改 Git |
+| `--commit` | 只暂存通过 C1 的文件（暂存区里有其他文件时报错），在 worktree 中以 `feat: route <model> calls through the <op> registry operator` 提交。提交使用当前 Git 身份，会运行仓库的 hook。状态变为 `finalized` |
+| `--push` | 需要同时传 `--commit`，或此前已经提交。推送前再次确认文件字节与已验证的一致，然后执行 `git push -u origin registry/<op>-<run_id>` |
 
-- 不带参数时，只打印 worktree 路径、分支名和建议的提交说明。
-- `--commit`：在 worktree 中提交到 `registry/<op>-<run_id>`。提交说明遵守 AGENTS.md 的 Git 约定，例如 `feat: route pi0.5 projections through the linear registry operator`。
-- `--push`：执行 `git push -u origin registry/<op>-<run_id>`。
+本工具不提供合并功能。
 
-本工具不提供合并功能。合并前，还需要在目标 GPU 上按 0009 §6 确认 `kernel_profile: none` 时整模型输出与 `BASE` 逐位一致，方法与 commit `449ebe2` 相同。
+#### 合并前
 
-## 5. 运行目录
+CPU 检查不能证明 GPU 上逐位一致。例如 pi0.5 的 native 路径只在 CUDA 上启用，CPU 测试执行不到其中的调用点。
+合并前必须在目标 GPU 上按 [0009 §6](../../../docs/proposals/0009-hotspot-kernel-tuning.md#6-losslessness-and-precision-criterion)
+确认：`kernel_profile: none` 时，整模型输出与 BASE 逐位一致。两边要用相同的 checkpoint、dtype、
+attention 语义、随机种子和噪声、matmul precision、batch 形状和 decode/denoise 步数，并设置
+`TORCHINDUCTOR_DETERMINISTIC=1`。`SUMMARY.md` 的末尾也会写明这一项尚未完成。
+
+## 5. Git 的使用和清理
+
+智能体执行命令时没有交互确认，控制器因此用 Git 做隔离和取证：
+
+- **隔离**：两个 worktree 共享主仓库的对象库，主检出始终不被修改。
+- **基线**：`RUN/base` 固定在 BASE。C5 需要在未修改的代码上运行新测试；还原 overlay 时用
+  `git restore --source=<BASE>`。
+- **防篡改**：每轮都核对 `RUN/base` 的 HEAD 和文件哈希、`RUN/worktree` 的分支和 HEAD。
+  智能体自行提交会导致运行失败。
+- **范围和证据**：C1 用 `git diff` 和 `git ls-files --others` 列出改动；补丁用 `git diff --binary`
+  生成，再补上未跟踪的新文件。
+- **交付**：只有在显式传入 `--commit`/`--push` 时才提交或推送。
+
+运行结束后，worktree 和分支会留在仓库里，需要手动清理：
+
+```bash
+git worktree remove --force RUN/worktree
+git worktree remove RUN/base
+git branch -D registry/<op>-<run_id>      # 已推送或已合并后再删
+rm -rf RUN
+# 如果先删除了 RUN 目录：git worktree prune
+```
+
+## 6. 运行目录
 
 ```
-results/kernel_tuning/register/<run_id>/
-  manifest.json       当前阶段、每次尝试的结果、耗时（atomic_json 写入，run_lock 加锁）
-  spec.json           冻结的规格和 BASE
-  sites.json  sites.md
-  context/            智能体的只读上下文
-  base/               BASE 的 worktree（只读）
-  worktree/           分支 registry/<op>-<run_id> 的 worktree
-  workspace/          Humanize2 的工作区和日志
-  attempts/<N>/       plan/implement/repair 的 prompt 和回复、PLAN.md、REGISTRATION.json、
-                      checks.json、feedback.json、patch.diff
-  patch.diff  SUMMARY.md
+<output>/<run_id>/
+  manifest.json        状态、尝试记录、已用时长、冻结的 agent/test_python、各类哈希
+  spec.json            冻结的规格和 BASE
+  sites.json sites.md  调用点及审阅说明
+  preflight.log        new 的注册表预检；run 的预检写入 test-runtime.log
+  context/             智能体的只读上下文（校验哈希）
+  base/                BASE 的 detached worktree
+  worktree/            分支 registry/<op>-<run_id> 的 worktree
+  workspace/           归档的 Humanize2 日志；humanize.json 记录 epic 路径
+  attempts/<N>/        <stage>-prompt.txt、<stage>-reply.txt、PLAN.md、REGISTRATION.json、
+                       checks.json、feedback.json、patch.diff，以及 registry/ruff/tests/baseline 的日志和 JUnit 报告
+  patch.diff SUMMARY.md 通过后的导出
+  .run.lock
 ```
 
-`resume` 会结合 `manifest.json` 和 Humanize2 的状态台账继续，已经通过的阶段在源码和
-`REGISTRATION.json` 哈希未变时不再重跑。规格变了就要新建一次运行。
-同次执行中的 repair 沿用会话；进程中断后从记录的阶段继续，新会话会收到规格、已有计划和反馈。
-基线测试复制前先记入恢复台账，失败、取消和下次恢复时均还原这些测试文件。
-
-## 6. 现有工具链的复用
-
-| 现有部件 | 用在 | 用法 |
-|---|---|---|
-| Humanize2 flow 机制（`scripts/kernel_tuning/flow.py`、`__main__.py` 中的 `_execute`） | 步骤 3、5 | 新写一个 flow，沿用 `@flow(..., resumable=True)`、`AgentCollection`、`LocalEnv`、`Budget`、`ctx.state` 中的进度台账，以及 `Hmz(...).run(...)` 的启动方式 |
-| `scripts/kernel_tuning/artifacts.py` 中的 `atomic_json`、`run_lock` | 运行目录 | 直接导入 |
-| `scripts/kernel_tuning/runner.py` 的子进程处理（超时、进程组清理） | 步骤 1、4 的子进程 | 照搬这套做法，但启动的是 `test_python` |
-| `embodiinfer.layers`（`available_ops`、`get_op`、`KernelSelection`） | 步骤 1、C2 | 在 `test_python` 子进程中导入 |
-| `ruff`、`pytest` | C3–C5 | 命令行调用 |
-| `git worktree` | 步骤 1、6 | 命令行调用 |
-
-`profile`、`capture-ops`、`calibrate`、`tune-all`、`install`、`verify` 不在本流程内使用。它们属于调优阶段，或者需要 GPU。
+状态的变化顺序为：`awaiting_confirmation` → `ready` → `running` → `passed` → `finalized`。
+中途可能变为 `exhausted`、`failed` 或 `interrupted`。
 
 ## 7. 代码布局
 
 | 文件 | 内容 |
 |---|---|
-| `registration/__init__.py` | 包说明 |
-| `registration/spec.py` | 规格的解析（YAML 或命令行）和校验，生成 `spec.json` |
-| `registration/sites.py` | 用 `ast` 定位调用点、提取 preserve 条件、查找调用链 |
-| `registration/workspace.py` | worktree 的创建和清理、diff、C1 检查 |
-| `registration/checks.py` | C2–C5 检查，生成 `feedback.json` |
-| `registration/prompts.py` | `plan`、`implement`、`repair` 三种 prompt |
-| `registration/flow.py` | Humanize2 flow `operator_registration` |
-| `registration/finalize.py` | 生成 `SUMMARY.md`，提交和推送 |
-| `registration/cli.py` | 参数解析、运行环境校验、Humanize2 启动 |
-| `__main__.py` | 增加 `register` 子命令组：`new`、`run`、`resume`、`status`、`finalize` |
-| `tests/kernel_tuning/test_registration.py` | CPU 测试，覆盖：规格校验；在示例源码上定位调用点；用合成仓库测 C1；构造缺参考实现、错进循环、原表达式残留等情况测 C2；C5 能识别在基线上也通过的测试；用 Humanize2 自带的假智能体（同 `tests/kernel_tuning/test_flow.py`）跑通"失败 → 反馈 → 修复 → 通过"并验证 `resume` |
+| `spec.py` | 规格的解析（YAML 或命令行）和校验 |
+| `sites.py` | 用 `ast` 定位调用点、提取 guard 和调用方，审阅前后比对，生成 `sites.md` |
+| `workspace.py` | `RegistrationRun`：worktree、冻结输入的校验、只读上下文、子进程执行、改动列表、补丁、C1 |
+| `checks.py` | C2–C5 以及检查调度 |
+| `prompts.py` | 规则和 `plan`/`implement`/`repair` prompt |
+| `flow.py` | Humanize2 flow `operator_registration` |
+| `finalize.py` | `SUMMARY.md`、补丁导出、提交和推送 |
+| `cli.py` | `register` 子命令、环境检查、Humanize2 启动 |
 
-工具环境已经包含 `pyyaml`（见 `scripts/kernel_tuning/pyproject.toml`），不需要新增依赖。
+CPU 测试位于 `tests/kernel_tuning/test_registration.py`，使用仓库的临时克隆、真实的 CPU 子进程和
+Humanize2 自带的假智能体，不需要 checkpoint 或 GPU。
 
 ## 8. 限制
 
-- **CPU 检查不能证明 GPU 上逐位一致。** 例如 pi0.5 的 native 路径只在 CUDA 上启用（`embodiinfer/policies/pi05/modeling_pi05.py:565-572`），它上面的调用点在 CPU 测试中执行不到。因此合并前仍需在 GPU 上验证一次（见步骤 6）。
-- **调用点由调用方指定。** 工具只负责定位和确认，不会从热点报告中自动挑选。
-- **每次只注册一个算子，不支持把多个相邻算子融合成一个。**
-- **策略需要已有 `kernels` 传参链。** 必须已经有 `KernelSelection` 和类似 `_op` 的 helper，目前只有 pi0.5 具备。其他策略要先人工接入一次。
-- **智能体写出的补丁可能检查全过但结构不好**（例如传参链过长），仍然需要人工审阅。
-- **新测试必须单独列出函数 node ID。** 不接受整个文件、已有测试或挑选部分参数化实例。
-  新符号的导入放在函数内部，先断言符号存在，避免用缺失导入代替有效的基线断言失败。
-- **目录和哈希检查不等同于安全沙箱。** 智能体和测试继承运行用户的权限；控制器隐藏 CUDA/ROCm
-  设备，禁止运行 GPU 测试，但这不是对任意不受信代码的操作系统隔离。
+- CPU 检查和有限的测试不能证明 GPU 上逐位一致，也不能保证智能体写的测试覆盖了全部行为。
+- 每次运行只注册一个算子，不支持融合。调用点只能位于 `embodiinfer/policies/<model>/` 下，
+  且所在文件必须已有 `_op` 集成。`kernels` 传递链的检查只覆盖同一文件内的调用方。
+- 检查全部通过的补丁仍可能结构不佳（例如传参链过长），需要人工审阅。
+- 目录边界、哈希校验和隐藏加速设备都不构成操作系统级的沙箱。智能体和测试以当前用户的权限运行，
+  必要时请在隔离的账户或容器中运行。

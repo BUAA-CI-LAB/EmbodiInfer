@@ -25,6 +25,7 @@ from scripts.kernel_tuning.registration.spec import RegistrationSpec, load_spec
 from scripts.kernel_tuning.registration.workspace import (
     REFERENCE,
     REGISTRY,
+    ROUTED_EXAMPLE,
     RegistrationRun,
     check_scope,
     check_unregistered,
@@ -383,6 +384,13 @@ def test_integrity_and_baseline_overlay_recovery(registration_run) -> None:
     target.write_text("unexpected", encoding="utf-8")
     with pytest.raises(ContractError, match="RUN/base"):
         recovered.verify()
+
+
+def test_context_example_comes_from_base(registration_run) -> None:
+    """The routed example is a BASE snapshot, never a commit that history may lose."""
+    context = registration_run.root / "context"
+    assert (context / ROUTED_EXAMPLE).read_bytes() == (registration_run.base / ROUTED_EXAMPLE).read_bytes()
+    assert not (context / "migration.diff").exists()
 
 
 def test_spec_tamper_is_fatal(registration_run) -> None:

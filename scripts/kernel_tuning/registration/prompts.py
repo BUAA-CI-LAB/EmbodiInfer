@@ -55,8 +55,9 @@ Frozen specification:
 {json.dumps(run.spec.as_dict(), indent=2, ensure_ascii=False)}
 
 {RULES}
-Read context/sites.json, AGENTS.md, the source snapshots, test_kernel_ops.py and
-migration.diff. Existing PLAN.md and REGISTRATION.json describe previous work.
+Read context/sites.json, AGENTS.md, the source snapshots and test_kernel_ops.py.
+The pi0.5 policy snapshot shows call sites already routed through _op and
+KernelSelection. Existing PLAN.md and REGISTRATION.json describe previous work.
 """
     if stage == "plan":
         return (
