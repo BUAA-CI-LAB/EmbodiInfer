@@ -314,6 +314,20 @@ class EngineCore:
             if rtc_guidance is not None:
                 raise UnsupportedRecurrentModeError("recurrent policies do not support RTC guidance")
             return self._execute_recurrent(batch, num_steps, generator, session_ids)
+        if rtc_guidance is None and self.policy.decoder.supports_request_execution(self._graphs):
+            # Whole-request execution has no observable prefill/decode boundary.
+            # Report a single synchronized request time rather than invent stages.
+            start = now_ns()
+            real_B = batch.batch_size
+            steps = num_steps or self.config.num_steps or self.pcfg.default_num_steps
+            bucket = self.config.resolve_bucket(real_B) if self._graphs is not None else real_B
+            moved = self.policy.pad(batch, bucket).to(self.device, self.dtype)
+            state = self.policy.decoder.init_state(bucket, generator)
+            result = self.policy.decoder.decode_request(state, moved, steps, bucket, self._graphs)
+            sync_if_cuda(self.device)
+            elapsed = (now_ns() - start) / 1e6
+            st = _Staged(None, state, bucket, real_B, list(moved.request_ids), steps)
+            return self._pack(result.actions, st, elapsed, {"request_ms": elapsed, "e2e_ms": elapsed})
         timer = _StageTimer(self.device)
         st = self._prefill(batch, num_steps, generator, rtc_guidance)
         timer.mark_prefill_complete()

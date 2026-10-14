@@ -231,6 +231,13 @@ The checkpoint retains its nominal horizon metadata.
 CUDA Graph configuration belongs to `EngineConfig`; prefix capture remains a
 policy option. Inductor, global quantization and TP are rejected in combination
 with these operator plans. `openpi_rlinf` requires CUDA eval/no-grad inference.
+`request_cuda_graph=True` is an additional, default-off policy option for native
+CUDA execution with `EngineConfig(use_cuda_graph=True, capture_full_loop=True)`.
+It captures prefix encoding and the complete denoising schedule together, keeps
+the intermediate K/V private, and returns owned outputs. Staged, recurrent and
+RTC-guided requests retain their existing paths. This option preserves the
+checkpoint's dtype and the caller's action horizon/step count; it has no preset
+that shortens them. Performance must be checked for the target workload.
 The native Pi05 decoder exposes deterministic generation only; it does not
 implement the `RLDecoder` sampling or differentiable log-probability contract.
 

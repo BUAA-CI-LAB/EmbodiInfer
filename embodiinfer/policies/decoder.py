@@ -43,7 +43,7 @@ from ..types import DecodeTrace
 if TYPE_CHECKING:
     from ..engine.async_inference.rtc import RTCGuidance
     from ..engine.graph import GraphManager
-    from .base import FlowVLAPolicy, MemoryState, PrefixState
+    from .base import FlowVLAPolicy, MemoryState, PolicyBatch, PrefixState
 
 
 @dataclass
@@ -96,6 +96,33 @@ class ActionDecoder(abc.ABC):
         """
         del generator, cancelled
         return DecodeResult(actions=self.produce_chunk(state, prefix, num_steps, bucket, graphs))
+
+    def supports_request_execution(self, graphs: GraphManager | None) -> bool:
+        """Whether this decoder can execute stateless prefill and decode together.
+
+        The default retains two-stage execution. This capability is independent
+        of RL/recurrent decoding and is used only by synchronous ``execute``.
+        A decoder opting in must preserve initial-noise and output semantics.
+        """
+        del graphs
+        return False
+
+    def decode_request(
+        self,
+        state: torch.Tensor | None,
+        batch: PolicyBatch,
+        num_steps: int,
+        bucket: int,
+        graphs: GraphManager | None,
+    ) -> DecodeResult:
+        """Run one prepared stateless request, returning independently owned actions.
+
+        Called only after ``supports_request_execution`` returns true. The
+        engine supplies padded/device-ready inputs and the usual initial state.
+        Unsupported modes must decline the capability before consuming inputs
+        or random state; execution errors are propagated rather than retried.
+        """
+        raise NotImplementedError("This decoder does not support whole-request execution")
 
     @abc.abstractmethod
     def produce_chunk(

@@ -465,6 +465,7 @@ class Pi05Policy(FlowVLAPolicy):
         native_embeddings: bool = False,
         vision_attention: str = "sdpa",
         prefix_cuda_graph: bool = False,
+        request_cuda_graph: bool = False,
         denoise_attention: str = "sdpa",
         prefix_attention: str = "sdpa",
         checkpoint_config: Mapping[str, Any] | None = None,
@@ -498,7 +499,10 @@ class Pi05Policy(FlowVLAPolicy):
         if denoise_attention not in {"sdpa", "triton"} or prefix_attention not in {"sdpa", "triton"}:
             raise ValueError("PI0.5 denoise_attention must be 'sdpa' or 'triton'")
         if (
-            prefix_cuda_graph or denoise_attention != "sdpa" or prefix_attention != "sdpa"
+            prefix_cuda_graph
+            or request_cuda_graph
+            or denoise_attention != "sdpa"
+            or prefix_attention != "sdpa"
         ) and not native_inference:
             raise ValueError("PI0.5 specialized graphs/attention require native_inference=True")
         if native_inference and attention != "sdpa":
@@ -507,6 +511,7 @@ class Pi05Policy(FlowVLAPolicy):
         self._vision_attn = get_attention_backend(vision_attention)
         self.native_inference = native_inference
         self.prefix_cuda_graph = prefix_cuda_graph
+        self.request_cuda_graph = request_cuda_graph
         self.denoise_attention = denoise_attention
         self.prefix_attention = prefix_attention
         self.attention = attention
@@ -1310,6 +1315,7 @@ def _build_pi05(
     native_embeddings: bool = False,
     vision_attention: str = "sdpa",
     prefix_cuda_graph: bool | None = None,
+    request_cuda_graph: bool = False,
     denoise_attention: str = "sdpa",
     prefix_attention: str = "sdpa",
     low_cpu_mem_usage: bool = False,
@@ -1357,6 +1363,7 @@ def _build_pi05(
         native_embeddings=native_embeddings,
         vision_attention=vision_attention,
         prefix_cuda_graph=prefix_cuda_graph,
+        request_cuda_graph=request_cuda_graph,
         denoise_attention=denoise_attention,
         prefix_attention=prefix_attention,
         low_cpu_mem_usage=low_cpu_mem_usage,

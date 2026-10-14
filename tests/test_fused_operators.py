@@ -16,6 +16,67 @@ def _reference_norm(inputs, scale, eps, modulation):
     return plan.normalize(inputs, scale=scale if modulation is None else None, modulation=modulation)
 
 
+def test_operator_norm_keeps_native_adaptive_reference(monkeypatch):
+    from embodiinfer.policies.pi05 import modeling_pi05
+    from embodiinfer.policies.pi05.inference.operators import Pi05OperatorPlans
+
+    plans = Pi05OperatorPlans.__new__(Pi05OperatorPlans)
+    plans.norm = object()
+    plans.config = SimpleNamespace(numerics="lerobot", has_quantized_mlp=False)
+    calls = []
+    monkeypatch.setattr(
+        modeling_pi05, "_rmsnorm", lambda *args: (calls.append(("norm", args[-1])) or ("h", "g"))
+    )
+    monkeypatch.setattr(
+        modeling_pi05, "_gated_residual", lambda *args: (calls.append(("residual", args[-1])) or "r")
+    )
+    assert plans.normalize(None, None, "modulation", native=True) == ("h", "g")
+    assert plans.residual_normalize(None, None, None, "gate", "modulation", native=True) == ("r", "h", "g")
+    assert calls == [("norm", True), ("residual", True), ("norm", True)]
+
+
+@pytest.mark.parametrize(
+    "numerics,quantized,native",
+    [("openpi_rlinf", False, True), ("lerobot", True, True), ("lerobot", False, False)],
+)
+def test_operator_norm_retains_other_fusion_contracts(monkeypatch, numerics, quantized, native):
+    from embodiinfer.policies.pi05.inference.operators import Pi05OperatorPlans
+
+    plans = Pi05OperatorPlans.__new__(Pi05OperatorPlans)
+    plans.norm = object()
+    plans.config = SimpleNamespace(numerics=numerics, has_quantized_mlp=quantized)
+    plan = SimpleNamespace(normalize=lambda *args, **kwargs: ("fused", "gate"))
+    monkeypatch.setattr(plans, "_norm_plan", lambda *args: plan)
+    assert plans.normalize(None, None, "modulation", native=native) == ("fused", "gate")
+
+
+@pytest.mark.gpu
+def test_operator_norm_matches_native_triton_adaptive_reference():
+    from embodiinfer.backend.cuda.normalization import NormFusion
+    from embodiinfer.policies.pi05.inference.operators import Pi05OperatorPlans
+    from embodiinfer.policies.pi05.modeling_pi05 import _gated_residual, _rmsnorm
+
+    plans = Pi05OperatorPlans.__new__(Pi05OperatorPlans)
+    plans.norm = NormFusion()
+    plans.config = SimpleNamespace(numerics="lerobot", has_quantized_mlp=False)
+    torch.manual_seed(79)
+    inputs, update = (torch.randn(1, 50, 1024, device="cuda", dtype=torch.bfloat16) for _ in range(2))
+    modulation = torch.randn(1, 3072, device="cuda")
+    gate = torch.randn(1, 1, 1024, device="cuda", dtype=torch.bfloat16)
+    norm = SimpleNamespace(eps=1e-6)
+    actual = plans.normalize(norm, inputs, modulation, native=True)
+    expected = _rmsnorm(norm, inputs, None, False, modulation, True)
+    assert all(torch.equal(a, b) for a, b in zip(actual, expected, strict=True))
+    residual, normalized, next_gate = plans.residual_normalize(
+        norm, inputs, update, gate, modulation, native=True
+    )
+    expected_residual = _gated_residual(inputs, update, gate, False, True)
+    expected = _rmsnorm(norm, expected_residual, None, False, modulation, True)
+    assert torch.equal(residual, expected_residual)
+    assert torch.equal(normalized, expected[0])
+    assert torch.equal(next_gate, expected[1])
+
+
 def test_half_width_rotary_rejects_invalid_inputs():
     from embodiinfer.backend.torch.rotary import TorchRotary
 

@@ -333,8 +333,13 @@ class Pi05OperatorPlans:
     def normalize(
         self, norm: Any, inputs: torch.Tensor, modulation: torch.Tensor | None, *, native: bool = False
     ) -> tuple:
-        """Apply the original FP32 mean and affine operations with BF16 outputs."""
-        if self.norm is None:
+        """Preserve the selected reference's reduction and BF16 rounding.
+
+        Native cached AdaRMS uses Triton's reduction tree. The strict CUDA
+        fusion matches the Torch mean contract, so it must not replace that
+        native adaptive path merely because both accumulate in FP32.
+        """
+        if self.norm is None or (self._native_norm_reference(native) and modulation is not None):
             from ..modeling_pi05 import _rmsnorm
 
             return _rmsnorm(norm, inputs, None, False, modulation, native)
@@ -352,8 +357,10 @@ class Pi05OperatorPlans:
         *,
         native: bool = False,
     ) -> tuple:
-        """Fuse rounded attention residual, squared values and the following norm."""
-        if self.norm is None:
+        """Fuse Torch-reference residual norms; retain native adaptive arithmetic."""
+        if self.norm is None or (
+            self._native_norm_reference(native) and (modulation is not None or gate is not None)
+        ):
             from ..modeling_pi05 import _gated_residual
 
             residual = _gated_residual(inputs, update, gate, False, native)
@@ -366,6 +373,11 @@ class Pi05OperatorPlans:
             scale=getattr(norm, "weight", None) if modulation is None else None,
             modulation=modulation,
         )
+
+    def _native_norm_reference(self, native: bool) -> bool:
+        # Calibrated/alternative numerical recipes retain their declared fusion
+        # contract; this repair targets non-quantized native LeRobot parity.
+        return native and self.config.numerics == "lerobot" and not self.config.has_quantized_mlp
 
     def _mlp_plan(self, module: Any, *, expert: bool) -> Any:
         from .mlp import IntegerMlpPlan, MlpPlan, WeightOnlyMlpPlan
