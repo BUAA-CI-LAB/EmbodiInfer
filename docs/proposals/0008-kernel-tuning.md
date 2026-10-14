@@ -1,124 +1,283 @@
-# 0008 — Reproducible kernel tuning with Humanize2
+# 0008 — Agent-driven kernel optimization: profiling to whole-model benchmarks
 
-- Status: Accepted
+- Status: Accepted for the existing tuning contracts; end-to-end extensions are partially implemented.
 - Author: EmbodiInfer maintainers
 - Date: 2026-10-02
 
-Implementation: repository CLI, Humanize2 Flow, evaluator, source/evidence archive,
-and isolated tool lock are present. CPU/fake-agent coverage and NVIDIA RTX 5090
-Triton/CUDA C++ builder tests are verified. Thor compilation and performance
-still require validation on that target machine.
-
-For the Chinese workflow guide, required task inputs, and stopping conditions,
-see [Section 11](#11-自动化调优使用说明).
+This is the canonical document for the former proposals 0008 and 0009. It combines
+the Humanize2 search/evaluation contract with the hotspot-to-model workflow.
+Implementation status below is checked against the current source; consolidation
+does not approve pending numerical or runtime changes.
+For executable examples, see [automated tuning workflow](#11-automated-tuning-workflow).
 
 ## 1. Summary
 
-Add repository developer tooling for a serial, agent-driven kernel optimization
-loop. Humanize2 (`hmz`) owns coding-agent execution, budgets, traces, and resume;
-EmbodiInfer supplies the task contract, trusted evaluation, promotion rules, and
-saved operator artifacts. Formal measurement belongs under `benchmarks/` and
-orchestration under `scripts/`. This is model-neutral tooling, not an engine API.
+The workflow is **profile → select → register if needed → capture → calibrate →
+tune → install → verify → benchmark**. Start with the model's production latency,
+choose worthwhile registered operators, let a coding agent improve their kernels,
+and measure the resulting model with a hardware profile. A faster isolated kernel
+is an intermediate result; success requires whole-model correctness and latency
+evidence under fixed conditions.
+
+Humanize2 (`hmz`) owns agent execution, budgets, traces and resume. Repository
+scripts prepare tasks, validate evaluator evidence and install exported sources.
+Formal measurement lives in `benchmarks/`; model-neutral dispatch lives in
+`layers/`; concrete kernels and profile loading live in `backend/`. The engine
+has no tuning scheduler or model-name branches.
+
+| Stage | Current entry point | Current scope |
+|---|---|---|
+| Profile | `profile --output DIR -- DRIVER` | GPU attribution by stage, registry operator, attention backend and module |
+| Select | Read `hotspots.md` and choose operators | Manual; automatic selection and fusion planning are future work |
+| Register | `register new/run/resume/status/finalize` | Agent-assisted registration of one caller-selected operator; pi0.5 routing convention |
+| Capture | `capture-ops --model MODEL --ops OPS ...` | Real arguments and counts of selected registered operators, in eager mode |
+| Calibrate | `calibrate --captured DIR --output NEW_DIR` | Freeze supported numerical contracts before search |
+| Tune | `tune-all`, or `run` for a prepared task | Humanize2 candidate loop with baseline preflight, correctness and paired timing |
+| Install | `install EXPORT --profile NAME` | Python/Triton exports from registry captures only |
+| Verify | `verify --profile NAME --output REPORT -- DRIVER_ARGS` | Whole-model FP32-reference/production-Torch/candidate comparison |
+| Benchmark | Existing model benchmark scripts | Production end-to-end latency; separate configurations for each comparison row |
+
+There is **no `optimize`, `select`, or `benchmark` subcommand** in
+`scripts.kernel_tuning` today. The stages are invoked separately. `tune-all`
+resumes search batches, and `register resume` resumes registration; neither
+resumes the entire end-to-end workflow. pi0.5 is the current integrated policy.
+Qwen R2R/StreamVLN registry integration and committed hardware profiles remain
+outstanding; their discovery/catalog support does not imply profile support.
 
 ## 2. Motivation and current gap
 
-`embodiinfer/backend/triton/norm.py:302` and
-`embodiinfer/backend/triton/split_kv_attention.py:179` contain concrete kernels and
-hand-chosen launch configurations. `embodiinfer/layers/attention.py:78` provides
-runtime registration, but the repository has no general operator task format,
-automated search workflow, or durable archive of verified candidates. A task can
-describe one of these kernels or an independent operator without importing model
-or engine internals into the tuning framework.
+An isolated operator can improve without reducing model latency: its contribution
+may be small, it may already be near launch overhead, or its tuned layout may
+never be selected in production. Profiling and a final model benchmark connect
+search effort to the actual inference path.
+
+The earlier discovery/catalog workflow optimizes each observed ATen call or
+existing backend kernel against its production implementation. It remains useful
+for operator investigations, but its exports do not directly install into a
+hardware profile. The registry workflow uses an explicit Torch reference and
+stable model call sites so verified kernels can reach inference without editing
+the policy on every tuning run.
+
+Current boundaries are visible in `scripts/kernel_tuning/__main__.py` (commands),
+`regions.py` (registry capture), `install.py` (accepted exports), and
+`hotspots.py` (attribution). The remaining gap is automated region selection,
+new fusion integration, shape-range coverage and orchestration across stages.
 
 ## 3. Goals and non-goals
 
-- Accept NVlabs KDA task packages and Triton or CUDA C++ multi-file solutions.
-- Run on one target machine, with an explicitly selected coding agent and model.
-- Freeze precision, workload, timing, and acceptance conditions before search.
-- Save every attempt and export the best verified source with its evidence.
-- Support bounded execution, interruptions, and explicit resume.
+- Optimize a selected model on a prepared target machine with explicit agent,
+  checkpoint, inputs, dtype, precision settings and execution configuration.
+- Freeze workload coverage, numerical gates, timing and acceptance rules before
+  search; retain all attempts and export exact verified source with evidence.
+- Select installed kernels through optional hardware profiles with layout checks
+  and fallback; evaluate the complete profile at model level.
+- Keep the existing discovery/catalog and custom-task workflows usable, with
+  their original contracts and artifact formats.
 
-Runtime registration, deployment, SSH, model-level performance claims, and
-automatic installation of GPU dependencies are outside this change. Hardware
-neutrality describes orchestration: a backend must support the selected hardware;
-CUDA and the default FlashInfer adapter require a compatible NVIDIA environment.
+Robot/simulator communication, task success metrics, deployment orchestration,
+automatic merge, automatic GPU-stack installation and changes to model mathematics
+are outside this workflow. Installing a kernel does not make it the default.
+Multi-GPU, broader batch sizes and unobserved shape ranges need their own coverage
+and measurements; a B=1 capture establishes none of these automatically.
 
 ## 4. Design
 
-Use the [NVlabs wishlist task template](https://github.com/NVlabs/kda/tree/2186cd90dfb3b11f1ec250b4e3f321d72d7e7ef0/example)
-and [minimal flow](https://github.com/NVlabs/kda/blob/ef6ce617693ef0782b3ecb9f37e39bbf10226a90/docs/agent-flow.md).
-Tasks contain `README.md`, `definition.json`, `workloads.jsonl`, `baseline.py`,
-and optionally `benchmark.py`. The definition embeds the mathematical reference
-`run`; `baseline.py::run` supplies the initial performance baseline. The JSON
-schemas remain FlashInfer Trace schemas. Project settings live in `tuning.yaml`.
+### 4.1 Freeze the experiment and profile the production path
 
-Implement a local Humanize2 Flow against
-[`hmz` revision b70d4427](https://github.com/humanfia/humanize/tree/b70d4427f11308442aef20f9b2233dfbbc34a39e).
-The Flow asks an existing coding agent to inspect the task, write a hypothesis
-and executable plan, produce a candidate, then respond to evaluator feedback.
-Agent turns perform source/JSON checks and return the candidate; GPU compilation,
-numerical verification, and timing run only in the separate evaluator. A working
-GPU in the evaluator does not imply that the agent's command environment grants
-GPU or compiler-cache access. Plans describe validation criteria without trying
-to execute that validation inside an agent turn.
-It delegates all agent sessions and cancellation to Humanize2. Domain helpers
-validate tasks, launch a bounded evaluator process, persist candidate evidence,
-and atomically publish the best pointer. No independent coding-agent subprocess
-implementation is introduced.
+Record checkpoint/revision, evaluation input identity, dtype, attention semantics,
+matmul precision and TF32 flags, seeds/noise, batch shape, decode/denoise schedule,
+compile settings and CUDA Graph mode. Use the existing model benchmark for the
+uninstrumented baseline latency, then run `profile` with the same production
+settings to explain where GPU time goes.
 
-The default evaluator reuses FlashInfer Bench 0.1.2 definitions, workload
-materialization, and solution building. Additional gates enforce the configured
-precision contract, workload completeness, graph replay correctness when selected,
-and paired baseline/candidate measurements. A task-owned `benchmark.py` can
-implement the documented structured evaluation interface for other hardware or
-special input semantics. Exit status or printed PASS alone cannot promote a kernel.
+`hotspots.py` instruments model-neutral inference entries and uses
+`torch.profiler` correlation IDs to attribute kernels to policy/decoder stages,
+registry calls, attention backends and module ranges. Repeated layer indices fold
+to `layers.*`. CUDA Graph captures record node labels; replay uses those labels
+when node counts agree, otherwise attribution stays at the replay-time range.
+Compiled regions are attributed to their enclosing range; Python ranges are
+skipped inside tracing. The implementation does not automatically rerun eagerly.
 
-Each task fixes eager or CUDA Graph timing. Promotion requires the weighted mean
-latency to fall by at least 3% and every workload to regress by at most 5%, against
-the incumbent and initial baseline. Weights default to equal. Repeat paired
-measurements before promotion. Stop at 20 attempts, two hours of active execution,
-or five consecutive failures/non-improvements; all limits are configurable.
+Outputs are `hotspots.json`, `hotspots.md`, and optional `trace.json`. They report
+GPU time/share, kernel counts, small-kernel fractions and graph attribution
+coverage. GPU activity sums and profiler-instrumented times are not an
+uninstrumented end-to-end latency measurement. Inspect attribution coverage before
+selecting regions; any separate eager diagnostic run must be labelled as such.
 
-Every timed sample starts from a cold L2 (a 256 MiB buffer is zeroed) with
-freshly copied inputs. CUDA Graph samples queue the flush and the input copy
-ahead of the start event and do not synchronize per sample, so the events bracket
-only the replay's device execution. FlashInfer's `do_bench` synchronizes first;
-its start event then precedes the host launch, adding several microseconds of
-launch latency and scheduler jitter to every sample. On an RTX 5090 that
-inflated microsecond kernels to about 10 µs and let three identical solutions
-differ by up to 53%, far above the 3% promotion threshold. Without it, and with
-1000 iterations (the generated-task default), identical solutions differed by at
-most 4.5% and mostly under 2%. A single trivial kernel replays in about 4.1 µs
-under this protocol, the device's floor; tasks whose baseline is already there
-leave an agent nothing to win, so preflight prints every baseline latency.
-Eager timing still uses FlashInfer's `time_runnable`, including launch cost.
+### 4.2 Select and, if necessary, register an operator
 
-Runs snapshot task files and record source digests, evaluator identity, hardware
-and software fingerprints, precision settings, agent settings, attempts, raw
-measurements, and decisions. Resume requires matching task/tool/environment
-identity. Interrupted attempts remain in the archive and consume an attempt.
-Export reconstructs source files plus the official Solution JSON and evidence.
-Task and artifact hashes detect accidental modifications; they are not an OS
-security sandbox for coding agents or kernels running as the same user.
+Selection is currently manual. Use time share, call frequency, kernel size and
+production dispatch coverage to choose operators. A rough estimate after tuning
+is `sum(call_count * (baseline_latency - candidate_latency))`; compilation,
+overlap and graph execution mean this is not a measured model speedup.
 
-Humanize2 needs Python 3.12+. Install it in a separate tooling environment; the
-evaluator interpreter points to the prepared target-machine runtime (for example
-Thor). EmbodiInfer's Python 3.10 floor and model dependency groups stay intact.
+An existing registered operator proceeds to capture. For an unregistered
+mathematical operator, `register` drives an agent through plan, implementation,
+CPU checks and repair. The caller supplies the operator and exact source
+expressions; the tool does not select hotspots or fuse adjacent operations.
+Its initial integration convention is pi0.5's `_op` helper and explicit
+`KernelSelection` parameters. The full specification, commands and gate details
+are maintained in the [registration guide](../../scripts/kernel_tuning/registration/README.md).
 
-An independent lightweight controller was considered and rejected because the
-approved design explicitly reuses Humanize2. Runtime auto-selection was rejected
-because source review and separate integration are required before deployment.
+Registration preserves the original expression, ATen arithmetic order, casts and
+shapes. Its CPU gates cover file scope, reference/registration/routing structure,
+Ruff, existing and new tests, and new tests failing by assertion on BASE.
+Evidence binds source bytes; interruptions and repairs preserve journaled state.
+The output is a branch, `patch.diff` and `SUMMARY.md`, followed by source review
+and the target-GPU bit-exact integration gate in Section 6. CPU checks do not
+prove whole-model equivalence. Commit/push are explicit finalization options;
+merging is separate.
+
+New fusion regions require a separate reviewed code change with a bit-exact
+Torch default before tuning. Automatic fusion selection and implementation remain
+planned, as described in Section 7.
+
+### 4.3 Capture real workloads and calibrate
+
+`capture-ops` records registry calls on real model inputs, with selected operators
+specified by `--ops`. Run capture eagerly with CUDA Graphs and compilation
+disabled: replayed/compiled regions do not invoke the registry from Python.
+The driver must execute at least `warmup + steps` inference calls. Every requested
+operator must be observed, and the fixture budget must hold its required inputs.
+
+The result uses the model-capture format (`manifest.json`, `operators.json`,
+`coverage.json`, `fixtures/`) with `capture: registry`. Each task uses the Torch
+reference in `embodiinfer/backend/torch/ops.py` as baseline and the implementation
+seen during capture as a starting point. Workload weights are observed call
+counts. Registry tasks currently default to CUDA Graph kernel timing, with an
+uncompiled Torch reference; this is not a per-region Inductor comparison.
+Production compilation is restored for model verification and benchmarking.
+
+Calibrate supported tolerance contracts in the model runtime before generating
+tasks. `calibrate` writes a new immutable capture with `calibration.json`;
+generated tasks carry `numerics.json`. See Section 6 for exact/tolerance selection.
+The capture's layouts must also occur in the compiled production path. Otherwise
+the installed kernel falls back even if its isolated benchmark improves.
+
+### 4.4 Search, evaluate and promote
+
+A task contains `README.md`, `definition.json`, `workloads.jsonl`, `baseline.py`,
+`tuning.yaml`, and optionally trusted `benchmark.py`; replay tasks also include
+layout/fixture contracts. Task and solution schemas reuse NVlabs KDA/FlashInfer
+formats. Humanize2 is pinned in the isolated tooling environment.
+
+The agent reads the task and recent candidate source/evidence, writes a hypothesis
+and executable plan, and produces a candidate. A separate evaluator compiles it,
+checks every workload and times baseline, incumbent and candidate. Feedback drives
+the next attempt, including rejected attempts. Agent turns do source/JSON checks;
+the evaluator owns GPU compilation and validation.
+
+`tune-all` generates tasks and preflights all baselines before opening any model
+batch agent. Missing fixtures, unsupported contracts or a failed baseline block
+the batch. A later individual search failure is recorded and other tasks may
+continue. Each task runs serially in its own `run`/`resume` process.
+
+Promotion requires at least 3% weighted latency improvement and at most 5%
+regression on every workload, against both the initial baseline and incumbent,
+in every paired round. These defaults are configurable before the task freezes.
+All checks must pass; a process exit code or printed PASS is insufficient.
+Defaults stop at 20 attempts, two active hours or five consecutive
+failures/non-improvements. Interruptions consume attempts; downtime is excluded.
+Exhausted runs need a new task/run. Changed task/tool/environment identity
+prevents resume.
+
+CUDA Graph measurements flush a 256 MiB buffer and refresh inputs before the
+start event; events bracket device replay, without per-sample synchronization.
+Eager timing includes launch cost. Compare only under the same timing mode,
+warmup, iterations and paired-round protocol. Optional NCU profiling is separate
+from promotion. [Appendix A](#appendix-a-task-owned-benchmark-interface) specifies
+custom evaluators; [Appendix B](#appendix-b-archive-and-reproduction) specifies
+archives and reproduction.
+
+### 4.5 Install and resolve a hardware profile
+
+`install` accepts an exported registry task from `capture-ops`, with a
+Python/Triton solution and an operator already registered in the current tree.
+ATen-discovery/catalog exports and CUDA C++ solutions are not installable through
+this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/` and
+`profile.json`; overwriting an installed operator requires `--replace`.
+
+The manifest records device name, compute capability, Torch/Triton match keys,
+source digest, verified layout count and kernel-search provenance. CUDA version
+and full experiment conditions belong in the archived evidence as well. The
+installer generates `applies` from verified argument shapes, dtypes, strides and
+constants. Size-one and empty-tensor strides are normalized; other layouts fall
+back to the policy's preferred implementation.
+
+`embodiinfer/layers/ops.py` exposes `register_op`, `register_lazy_op` and
+`KernelSelection`. A policy prepares its selection before compiled execution,
+then resolves a cached callable. `kernel_profile` supports:
+
+| Value | Behavior |
+|---|---|
+| `none` (default) | Preserve existing Torch/Triton preferences |
+| `torch` | Force registered operators to their Torch references |
+| `auto` | Select a profile matching device/capability/Torch/Triton, otherwise use `none` |
+| Explicit name | Select that profile; a missing or incompatible profile raises |
+
+Only operators present in a profile are overridden. Profile loading verifies
+source digests. Backend modules remain pure tensor code with no engine/policy
+imports. Registration and profile loading are runtime contracts; search is
+repository tooling.
+
+### 4.6 Verify the complete model, then benchmark
+
+After installation, `verify` runs the same recorded inputs through an FP32 Torch
+reference, a production-dtype Torch baseline and the selected profile, with the
+same per-input seeds. It applies the model gate in Section 6 and writes a JSON
+report. Its arguments after `--` are driver arguments, not a Python module name.
+
+Installation precedes this check so the candidate can be exercised. **`install`
+does not certify model correctness, and `verify` does not automatically remove a
+failed install or update `profile.json`.** Retain the report with input/checkpoint
+identity and kernel evidence; do not publish a failed profile as verified.
+
+Next use the model's existing benchmark under the frozen production settings.
+Compare `kernel_profile: torch`, existing Triton with `kernel_profile: none`,
+and the candidate profile; record attention choices separately because the
+registry switch does not replace every backend in the model. Measure end-to-end
+mean/P50/P95, available stage splits, and per-operator ablations using separate
+profile configurations. Confirm that measured calls actually select tuned kernels.
+Profiler timings and weighted kernel gains cannot substitute for this run.
+
+### 4.7 Alternatives and compatibility
+
+- A separate agent controller would duplicate Humanize2's sessions, budgets and
+  journals; reuse its Flow instead.
+- Full ATen discovery preserves executed operator coverage but cannot itself
+  establish a new fused region or an installable registry call site. Keep it as
+  a distinct workflow ([Appendix C](#model-scoped-operator-discovery)).
+- Existing Triton is a useful starting point/comparison row; the registry task's
+  baseline remains its frozen Torch reference. Inductor production performance
+  is measured at model level, not assumed from kernel timing.
+- Uncached runtime dispatch adds launch-path overhead; prepare selections before
+  tracing and resolve cached callables.
+- Generated policy changes and default profile promotion require ordinary review;
+  neither search nor installation automatically merges them.
 
 ## 5. Model-agnosticism verdict
 
-This is developer automation and formal measurement, outside the inference
-package. No engine, policy, or layer interface changes. Operator semantics belong
-entirely to each task's definition and workloads. Backend and hardware details
-belong to the evaluator and generated solution, not the orchestration loop.
+Task orchestration, evaluation, registry dispatch and hardware matching are
+model-neutral. Model inputs use existing drivers; model-specific call sites and
+fused-region semantics stay in the owning policy. Reusable mathematical
+references/kernels live under `backend/`, which does not import `models`,
+`policies` or `engine`. The inference engine does not acquire agent dependencies,
+training adapters, environment control or benchmark loops.
 
 ## 6. Losslessness and precision criterion
 
-### Calibrated numerical contracts for discovered operators
+Bit-exact comparison is the default. Registration/routing changes must preserve
+outputs against BASE with `kernel_profile: none`, including whole-model target-GPU
+outputs (`max |delta action| = 0`). Compare the same checkpoint, dtype, attention,
+matmul precision/TF32, batch, seeds/noise and decode/denoise schedule. The tolerant
+`verify` command below is not a substitute for this integration gate.
+
+Calibrated tolerances are an explicit contract for supported arithmetic whose
+accumulation/rounding differs. This document preserves those existing contracts;
+it does not relax assertions or authorize approximate kernels merely because a
+candidate fails.
+
+### Operator gate
 
 Model discovery records execution settings separately from acceptance rules.
 Pure copies, indexing, exact elementwise operations, RNG transitions, and unknown
@@ -159,8 +318,8 @@ threshold in response to a candidate failure.
 Implementation belongs to `scripts/kernel_tuning/discovery/numerics.py` (static
 policy/contract), `benchmarks/kernel_tuning/calibration.py` (trusted reference and
 measurement), discovery recorder/task generation, and the replay evaluator.
-There are no engine, policy, backend, dependency-pin or model-level action-parity
-changes. CPU tests exercise selection, calibration, per-workload bounds, attention
+Calibration itself changes no runtime API or model-level action gate. CPU tests
+exercise selection, calibration, per-workload bounds, attention
 semantics, precision restoration, real/random/boundary coverage, and tampering;
 CUDA/real-checkpoint validation remains a separate target-machine requirement.
 
@@ -178,48 +337,283 @@ that contract, workloads, dtypes, or float32 matmul precision. Graph tasks must
 also replay with changed inputs and compare against fresh reference outputs.
 The evaluator command and full numerical contract are saved with every run.
 
-## 7. Implementation plan
+For registry captures, B is the registered Torch reference in the production
+dtype. Unknown numerical semantics retain the exact contract. Dtype alone is
+never sufficient to choose a tolerance.
 
-Add `scripts/kernel_tuning/` for task validation, artifact storage, Humanize2 Flow,
-and the `python -m scripts.kernel_tuning` developer entry point. Add
-`benchmarks/kernel_tuning/` for measurement and a self-contained task example.
-Document isolated setup in `CONTRIBUTING.md`; keep the optional tool's dependency
-metadata separate from runtime requirements. Results default to the already
-ignored `results/kernel_tuning/`. Nothing automatically registers saved kernels.
+### Model gate
+
+`scripts/kernel_tuning/verify.py` uses FP32 Torch output R, production-dtype
+Torch output B and candidate-profile output C. For each continuous output name,
+compute max-absolute error and RMSE against R for every input, then require:
+
+| Statistic of candidate error | Limit |
+|---|---|
+| Mean max-absolute error | `max(1e-4, 1.25 * mean baseline max-absolute error)` |
+| Mean RMSE | `max(1e-5, 1.25 * mean baseline RMSE)` |
+| Worst max-absolute error | `max(1e-4, 2 * worst baseline max-absolute error)` |
+
+Discrete outputs must equal B on every input. Mismatched output structures and
+incomparable baseline/reference runs fail explicitly. Freeze the evaluation set,
+seed base (default 1000), checkpoint and settings before candidate verification;
+thresholds derive from the baseline and fixed policy constants, never candidate
+error. Record the actual sample count: `--samples` can shorten the run and does
+not establish full-set coverage. For pi0.5, the intended integration evaluation
+includes its frozen cross-task references plus 200 benchmark frames; the CLI does
+not assemble or enforce that set automatically.
+
+When using Inductor, preserve the same compiler configuration/cache conditions;
+use `TORCHINDUCTOR_DETERMINISTIC=1` for reproducible parity as in the pi0.5
+validation workflow. Any unavailable deterministic behavior must be reported,
+not hidden by widening thresholds. FP32 calibration, operator correctness and
+whole-model parity each have distinct reference paths and evidence.
+
+## 7. Implementation status and remaining design
+
+Implemented components are the Humanize2 Flow/archive, discovery and registry
+capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
+loader, install, model verification, and the CPU registration controller. The
+pi0.5 call sites are integrated; the tuned profile directory currently contains
+the loader but no committed hardware profile. Historical target-machine checks
+are not new validation performed by this documentation change.
+
+Remaining work from the merged design:
+
+1. Rank recoverable latency using measured bandwidth/compute/launch floors,
+   rather than GPU time alone; detect adjacent memory-bound fusion candidates.
+2. Add an agent selection flow producing a reviewable `plan.json` (proposed
+   default: at most five regions and a 1% end-to-end contribution threshold).
+   These are design targets, not currently enforced CLI options.
+3. Integrate new fused Torch regions through reviewed, bit-exact code changes;
+   extend registry use to Qwen R2R and StreamVLN.
+4. Cover declared shape ranges, batches and layouts instead of only captured
+   signatures; validate fallback and dispatch coverage.
+5. Add a resumable cross-stage `optimize` orchestrator and bind model verification,
+   evaluation-set identity and benchmark evidence into profile provenance.
+   Today these artifacts must be retained together by the operator.
+
+The proposed roofline bound is `max(bytes / measured bandwidth, FLOPs / measured
+peak)`; recoverable time subtracts the larger of that bound and launch floors.
+Fusion estimates account for eliminated intermediate traffic. These estimates
+must be checked by model benchmarks before becoming performance claims.
 
 ## 8. Test plan
 
-CPU tests use fake coding agents and evaluators to cover actual Flow execution,
-resume, failed attempts, budgets, task tampering, metric completeness, precision
-contracts, regressions, atomic best publication, and export. Static checks cover
-all new Python. GPU evaluator tests are explicitly marked and skip without their
-optional dependencies and hardware. CPU validation does not launch a real coding
-agent or tune kernels. Real agent searches and GPU validation run explicitly on
-a prepared target machine, with their own saved task and measurement conditions.
+CPU tests under `tests/kernel_tuning/` cover task validation, Humanize2 fake-agent
+execution, failed/interrupted attempts, budgets/resume, evidence tampering,
+preflight barriers, replay layouts/mutations/RNG, calibration, hotspot attribution,
+installation, model-gate arithmetic and registration repair. Registry tests also
+cover preference, fallback, profile mismatch and digest checks.
+
+GPU and checkpoint tests must use their markers and matching isolated model
+runtime. Required evidence includes production-baseline correctness, changed-input
+CUDA Graph replay, registration bit-exact integration, profile hit/fallback paths,
+and whole-model verification. CPU/fake-agent passes prove neither GPU kernel
+correctness nor speed. Test future selection/fusion logic when implemented;
+do not describe those planned tests as existing coverage.
 
 ## 9. Benchmark plan
 
-After deployment to a prepared GPU machine, each task records hardware, software,
-dtype, shapes, seeds, warmup, iterations, trials, timing mode, and baseline source.
-Paired trials evaluate the full declared workload set. Record failed and neutral
-attempts as well as improvements. Kernel-level results do not establish model
-latency or action parity; those require the existing model benchmark separately.
+Follow the owning model's benchmark protocol, for pi0.5
+[`benchmarks/pi05-benchmark/README.md`](../../benchmarks/pi05-benchmark/README.md).
+A target experiment is one prepared GPU, B=1, BF16, ten denoise steps, fixed
+LIBERO-10 inputs, production compile settings and full-loop CUDA Graphs. The
+standard config selects 1,600 frames; shortened runs must report their actual
+coverage. Record GPU/driver/CUDA/Torch/Triton, checkpoint/revision, source digests,
+dtype, attention, precision, seeds, batch, warmup, repetitions, step counts and
+all runtime switches for each row.
+
+Report Torch, existing Triton and tuned-profile rows with mean/P50/P95 and stage
+splits, plus operator ablations. An additional Inductor `max-autotune` row is
+useful only where it compiles and passes the same numerical gate. Keep raw
+conditions and measurements with the report. A win on one GPU, shape or batch
+is not evidence for another; no new performance claim is made here.
 
 ## 10. Risks and limitations
 
-Humanize2 and FlashInfer are evolving dependencies; use pinned versions and fail
-explicitly on incompatible contracts. Arbitrary operators may need custom input
-generation or timing through `benchmark.py`. Input coverage bounds correctness;
-finite tests cannot prove an arbitrary generated kernel correct. Thermal state,
-other GPU users, and clock changes can affect timing; paired remeasurement reduces
-but does not remove this uncertainty. User-selected coding agents may execute
-commands without interactive approval; run in a disposable workspace/account
-appropriate to the task. Actual Thor compilation and performance remain target
-machine validation work. The pinned Humanize2 journal uses POSIX primitives: real
-searches run on the Linux target machine; local Windows checks and export are
-supported. CPU tests on Windows adapt only upstream atomic journal file writing.
+- Captured layouts are finite; a production compile can change strides and cause
+  fallback. Check dispatch coverage and benchmark the actual production path.
+- Region selection and fusion remain manual. Large unregistered GEMMs cannot be
+  optimized by `capture-ops` until their routing/reference contract exists.
+- Profile environment matching is strict; upgrades require new validation.
+- CUPTI/graph attribution may be incomplete. Diagnostic eager execution changes
+  the experiment and must be distinguished from production timing.
+- Finite numerical tests do not prove correctness on every input or task success.
+  Thermal state, other GPU users and clocks can affect timing despite pairing.
+- Profile installation and verification are separate; failed verification has
+  no automatic rollback or publication gate in the current installer.
+- Humanize2/FlashInfer use pinned optional dependencies. Real Humanize2 execution
+  requires POSIX and Python 3.12+ in a separate tool environment; model runtimes
+  retain their own dependency pins and Python support floor.
+- Agents and kernels execute with process permissions. Workspace bounds and
+  artifact digests are integrity checks, not an OS security sandbox.
 
-### Task-owned benchmark interface
+## 11. Automated tuning workflow
+
+The following pi0.5 example connects the currently implemented stages. Run these
+commands from the repository root, replacing paths, checkpoint, agent and profile
+names with values for the target machine. Prepare real model weights and benchmark
+data first. Random-weight skeletons support structural exploration but do not
+establish real-model correctness or performance.
+
+### 11.1 Prepare environments and freeze inputs
+
+Use Python 3.12+ for the tooling environment and the model's separate runtime for
+model execution and GPU evaluation. Keep the incompatible pi0.5 and Qwen dependency
+groups in separate environments. See
+[CONTRIBUTING](../../CONTRIBUTING.md#optional-kernel-tuning-tools) for installation
+and evaluator dependencies.
+
+```bash
+uv sync --project scripts/kernel_tuning --python 3.12 --frozen
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning --help
+```
+
+Copy `benchmarks/pi05-benchmark/config.yaml` into the ignored results directory,
+set the local checkpoint, dataset and output paths, and save it as
+`results/kernel_tuning/pi05-benchmark.yaml`. Export the inputs and serving
+configuration. Set `compile_backend`, `kernel_profile` and attention options in
+that configuration's `policy_kwargs` to match the experiment; the exporter does
+not copy every model switch automatically. The input count must cover the
+subsequent profiling warmup and measurement window.
+
+```bash
+/absolute/runtime/python -m benchmarks.kernel_tuning.discovery_inputs pi05 \
+  --config results/kernel_tuning/pi05-benchmark.yaml \
+  --samples 200 \
+  --output results/kernel_tuning/pi05-inputs.pt \
+  --serving-config results/kernel_tuning/pi05-serving.json
+```
+
+### 11.2 Profile and select operators
+
+Profile with the production configuration. This example uses BF16, ten denoise
+steps and a full-loop CUDA Graph. The compile and attention settings in
+`pi05-serving.json` must match the baseline.
+
+```bash
+/absolute/runtime/python -m scripts.kernel_tuning profile \
+  --output results/kernel_tuning/profile-pi05 --warmup 10 --steps 20 --trace \
+  -- -m scripts.kernel_tuning.discovery.drive --policy pi05 \
+  --checkpoint /absolute/checkpoint --device cuda:0 --dtype bfloat16 \
+  --num-steps 10 --capture-full-loop \
+  --adapter-config results/kernel_tuning/pi05-serving.json \
+  --inputs results/kernel_tuning/pi05-inputs.pt
+```
+
+Read `hotspots.md` and manually select registered operators with room for
+improvement. The commands below use `gated_residual` as an example; this does not
+imply that it is a worthwhile tuning target. For an unregistered operator, follow
+the [registration guide](../../scripts/kernel_tuning/registration/README.md),
+complete code review and CPU checks, and verify whole-model bit-exact parity on
+the target GPU before capturing workloads.
+
+### 11.3 Capture workloads and calibrate
+
+Copy the serving configuration to `pi05-eager.json`. Set
+`policy_kwargs.compile_backend` and `policy_kwargs.kernel_profile` to `"none"`,
+while preserving the checkpoint, dtype, attention settings and other mathematical
+semantics. Also disable CUDA Graphs during capture so Python registry calls can
+be recorded.
+
+```bash
+/absolute/runtime/python -m scripts.kernel_tuning capture-ops \
+  --model pi05 --ops gated_residual --warmup 2 --steps 8 \
+  --fixture-bytes 8589934592 --output results/kernel_tuning/captures/pi05-ops \
+  -- -m scripts.kernel_tuning.discovery.drive --policy pi05 \
+  --checkpoint /absolute/checkpoint --device cuda:0 --dtype bfloat16 \
+  --num-steps 10 --no-cuda-graph \
+  --adapter-config results/kernel_tuning/pi05-eager.json \
+  --inputs results/kernel_tuning/pi05-inputs.pt
+
+/absolute/runtime/python -m scripts.kernel_tuning calibrate \
+  --captured results/kernel_tuning/captures/pi05-ops \
+  --output results/kernel_tuning/captures/pi05-ops-calibrated
+```
+
+`--fixture-bytes` sets a storage limit, 8 GiB in this example; it does not
+preallocate that space. If calibration fails, inspect input coverage and the
+reference contract. Do not relax thresholds to make a candidate pass.
+`capture-ops --ops` selects the scope of this capture. Subsequent batch tuning
+must cover every task in that capture, which does not imply coverage of every
+ATen operation in the model.
+
+### 11.4 Run the agent, resume and export
+
+```bash
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
+  --model pi05 --captured results/kernel_tuning/captures/pi05-ops-calibrated \
+  --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+
+# Resume with the printed Batch path; omit agent, selection options and --set.
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
+  --resume results/kernel_tuning/batches/BATCH_ID
+```
+
+Use `--dry-run` to generate tasks only, or `--preflight-only` to measure baselines
+without starting agents. If a preflight-only batch will later resume search,
+specify its agent when creating it. A normal run starts agents only after every
+baseline passes. Default limits apply per task: 20 attempts, two active hours,
+or five consecutive failures/non-improvements.
+
+Inspect the batch's `summary.md` / `summary.json` and each task's run evidence.
+Promoted results are automatically exported to `exports/<task-name>`; use the
+actual directory names in the batch. For individual runs, use `status RUN` to
+inspect progress and `export RUN DESTINATION` to export the result. Proceed to
+installation only when a candidate has been promoted.
+
+### 11.5 Install and verify the whole model
+
+Restore the production serving configuration. Install only a registry export
+produced by the preceding stage. Profile names must be Python identifiers;
+`EXPORT_DIRECTORY` below denotes the actual export directory.
+
+```bash
+/absolute/runtime/python -m scripts.kernel_tuning install EXPORT_DIRECTORY --profile my_gpu
+
+TORCHINDUCTOR_DETERMINISTIC=1 /absolute/runtime/python -m scripts.kernel_tuning verify \
+  --profile my_gpu --output results/kernel_tuning/verify-my_gpu.json \
+  --seed 1000 -- --policy pi05 --checkpoint /absolute/checkpoint \
+  --device cuda:0 --dtype bfloat16 --num-steps 10 --capture-full-loop \
+  --adapter-config results/kernel_tuning/pi05-serving.json \
+  --inputs results/kernel_tuning/pi05-inputs.pt
+```
+
+`verify` switches internally between FP32 Torch, production-dtype Torch and the
+selected profile. It does not automatically roll back an installation that fails
+verification or write verification results into `profile.json`. After the report
+passes, confirm that production layouts select the tuned kernels, and retain the
+checkpoint identity, input digest and evidence from each stage. This tolerance
+gate does not replace the bit-exact gate for registration changes.
+
+### 11.6 Benchmark the whole model and prepare deliverables
+
+Create three configurations from the same pi0.5 benchmark configuration, setting
+`kernel_profile` to `torch`, `none` (the existing Triton path), and `my_gpu`,
+respectively. Give each a distinct `output` path. Keep all other experimental
+conditions identical, including attention selection, inputs, seed, warmup,
+repeats, compilation, CUDA Graphs and denoise steps. `kernel_profile` controls
+registered operators only.
+
+```bash
+TORCHINDUCTOR_DETERMINISTIC=1 /absolute/runtime/python \
+  benchmarks/pi05-benchmark/benchmark.py --config results/kernel_tuning/bench-torch.yaml
+TORCHINDUCTOR_DETERMINISTIC=1 /absolute/runtime/python \
+  benchmarks/pi05-benchmark/benchmark.py --config results/kernel_tuning/bench-triton.yaml
+TORCHINDUCTOR_DETERMINISTIC=1 /absolute/runtime/python \
+  benchmarks/pi05-benchmark/benchmark.py --config results/kernel_tuning/bench-profile.yaml
+```
+
+Deliver reviewable kernel/profile sources, candidate and baseline operator
+evidence, the whole-model correctness report, and all three benchmark
+configurations with raw results. Profiles containing multiple operators should
+also include per-operator ablations. Report hardware and software versions,
+checkpoint, dataset coverage and timing boundaries. Only model-level measurements
+establish end-to-end gains. Installation, committing and enabling a profile by
+default are separate actions. Keep raw experiment data in the results directory
+and formal reports under `benchmarks/`; keep run logs out of `docs/`.
+
+## Appendix A. Task-owned benchmark interface
 
 `benchmark.py` is trusted task code, hashed and snapshotted before search. It
 exports `create_adapter(task)`, where `task` is the import-safe `TaskPackage` from
@@ -288,7 +682,7 @@ incomplete evidence. A custom adapter remains responsible for truthful measureme
 and numerical checks: the controller cannot infer GPU correctness from a boolean.
 The default adapter supplies these checks for deterministic pure tensor operators.
 
-### Archive and reproduction
+## Appendix B. Archive and reproduction
 
 `run` creates a unique directory under `results/kernel_tuning/`; `resume`,
 `status`, and `export` take that directory. It contains the frozen task and tool
@@ -323,55 +717,7 @@ in the task. The new response's request digest reflects relocated paths. This
 executes evaluation, not agent search. Actual Thor compilation and performance
 are not established by CPU/fake-agent tests.
 
-### Generated catalog tasks and batch tuning
-
-Hand-writing a task package per operator does not scale to every core kernel.
-`scripts/kernel_tuning/operators.py` declares each core Triton operator once:
-its eager Torch reference, the production call used as the baseline, the
-model-derived workload shapes, and the numerical contract. `generate --catalog` renders a
-complete task package from an entry. The baseline is the production kernel
-itself: the defining repository module and the repository modules it imports
-are copied byte-for-byte under `vendor/` (absolute `embodiinfer.` imports are
-rewritten to relative ones; package `__init__` files are never copied), and
-`baseline.py` calls it as the engine does. `generated.json` records the
-repository revision and source digests. Structured integer inputs such as
-segment offsets are written as safetensors data inside the task.
-
-The catalog covers the Triton paths of pi0.5 (`ada_rms_norm`, `gated_residual`,
-`gated_gelu`, `rotate_qk`, `split_kv_attention`), the Qwen2.5-VL vision tower of
-the Qwen R2R low-level and panoramic policies (`rotate_half_rope`,
-`segmented_attention`), and StreamVLN's Qwen2 decode path (`rms_norm`,
-`add_rms_norm`, `swiglu`). ActiveVLN runs the Transformers vision tower and an
-eager attention backend, so it currently calls none of these kernels. Workloads
-come from committed captures (see below); the catalog's estimates are only the
-fallback (`--estimated`). All generated tasks time with CUDA Graphs.
-
-Contracts follow the production kernel, not an aspiration. `gated_residual`
-and `rotate_qk` are bit-exact against Torch. The other kernels already round
-differently from eager Torch, so their contract is a tolerance with a stated
-reason: `atol = 2**-10` and `rtol = k * 2**-8`, where `k` counts BF16 roundings
-the production kernel and the eager reference do not share (2 when only the
-final casts differ; 3 for `rms_norm` and `swiglu`; 4 for `gated_gelu` and
-`add_rms_norm`). The `gpu`-marked
-`test_production_baseline_meets_generated_contract` checks every production
-baseline against its contract, including changed-input CUDA Graph replay, and
-prints the fraction of the bound it uses. Every baseline passed on an RTX 4060
-Laptop GPU (Torch 2.6, Triton 3.2; at most 0.85 of its bound) and on an RTX
-5090 (Torch 2.12, Triton 3.7; at most 0.90), and the evaluator preflight passed
-for all ten tasks on both. Re-run both on each target before trusting a
-contract there.
-
-`tune-all --catalog` generates the selected operators into a new batch directory under
-`results/kernel_tuning/batches/`, measures every production baseline with the
-evaluator (preflight), and then runs each operator serially in its own
-`run`/`resume` subprocess. A failed operator does not stop the batch; an
-interrupt does, and `tune-all --resume BATCH` continues it, resuming existing
-run archives. Promoted kernels are exported to `exports/<operator>`, and
-`summary.md`/`summary.json` report attempts, promotions, and the improvement
-over the production baseline from the weakest paired round. Machine-specific
-settings (`evaluator_python`, `device`, budgets) are passed with `--set` at
-generation time, and `--hardware-notes` copies target-hardware notes into each
-task as `HARDWARE.md` for the agent.
+## Appendix C. Other task sources
 
 ### Model-scoped operator discovery
 
@@ -543,55 +889,31 @@ Capture is a single-process preparation facility; it does not certify unvisited
 branches, other worker processes, or checkpoint-level action parity. Existing
 fused kernels count as one call; no new fused operators are proposed or generated.
 
-### Captured catalog workloads
+### Generated catalog tasks and batch tuning
 
-Catalog shapes are estimates. `capture --catalog` replaces them with production traffic:
-it runs an unmodified model script in the model's runtime with every catalog
-kernel wrapped, converts each call to the operator's task axes, scalars, and
-fixed integer inputs, and writes one JSONL row per distinct case with its call
-count. Calls outside a task's semantics (another dtype, broadcast tables,
-custom attention scaling) are counted as skipped with the reason. Kernels
-launched while a CUDA Graph is captured are attached to that graph and counted on
-every replay, so production graph configurations can be captured; compilation
-should be disabled. Captures committed under `benchmarks/kernel_tuning/captures/`
-replace the catalog estimates by default, using each operator's most frequent
-cases weighted by call count; `--captured FILE` selects another capture and
-`--estimated` restores the estimates.
+The legacy catalog in `scripts/kernel_tuning/operators.py` supplies hand-maintained
+operator shapes, entry points, Torch references and fixed numerical contracts.
+`generate --catalog` snapshots production backend sources as the baseline;
+`capture --catalog` records legacy JSONL workload shapes/counts, not registry
+fixtures or full-model coverage. `tune-all --catalog` uses the same Humanize2
+search, promotion and export loop. These exports require separate integration;
+`install` accepts registry exports only.
 
-Shapes depend on the configuration and the inputs, never on weight values.
-`skeleton REPO --revision REV` therefore builds a random-weight copy of a
-Hugging Face checkpoint: it downloads the small files and synthesizes each
-safetensors file from its header, read with an HTTP range request. Benchmark
-scripts then run unchanged on it, with synthetic frames where the policy resizes
-images to a fixed size anyway. Random weights do not reproduce generated text, so
-decode lengths are fixed in the capture configuration.
-
-`benchmarks/kernel_tuning/captures/pi05-libero10.jsonl` comes from
-`benchmarks/pi05-benchmark` on 200 LIBERO-10 frames (10 tasks), with the
-production Triton paths enabled (`native_inference`, Triton prefix and denoise
-attention). It corrected three estimates. The prefix holds two cameras plus a
-48- or 64-token language bucket (560 or 576 tokens, not 968). `split_kv_attention`
-also runs once per layer over the whole prefix with no cached keys (`P=0`,
-`S=576`). The checkpoint's AdaRMS modulation is BF16, not FP32; the catalog now
-declares BF16 (recalibrated: at most 0.79 of its bound on an RTX 5090). At B=1,
-four of the five pi0.5 kernels measure about 4 µs on an RTX 5090, the device's
-launch floor; only `split_kv_attention` (16-35 µs) leaves room to tune.
-
-The Qwen R2R captures (`qwen-r2r-low.jsonl`, `qwen-r2r-panoramic.jsonl`) use
-skeleton checkpoints and synthetic R2R/RxR episodes (the trajectory release is
-gated; episode lengths follow the benchmark READMEs) with `attention_backend:
-triton` and CUDA Graphs on: only the graph path runs EmbodiInfer's Triton vision
-forward. Each call encodes 4 history frames plus the current one: 1,980 patches
-in 46 ragged windows (low-level) or 7,704 patches in 172 windows (panoramic),
-not the estimated uniform 1,024/4,096. The rotary tables are BF16, which makes
-the production RoPE bit-exact; the catalog now declares both. These shapes put
-`segmented_attention` at 357 µs and 1,405 µs and `rotate_half_rope` at 18 µs and
-61 µs on an RTX 5090. The StreamVLN capture (`streamvln-r2r-rxr.jsonl`, skeleton
-weights, decode capped at the five tokens of its fast action path) sees only
-single-row decode calls: `swiglu` never runs on prefill chunks, and all three
-StreamVLN kernels sit at the launch floor.
+The catalog covers pi0.5 norm/activation/RoPE/split-KV kernels, Qwen2.5-VL vision
+RoPE/segmented attention, and StreamVLN norm/activation kernels. `--estimated`
+explicitly opts into estimated shapes. Existing fixed tolerances remain defined
+by the catalog and must pass baseline preflight on the target runtime; they are
+not silently replaced by calibrated discovery contracts.
 
 ```bash
-PYTHONPATH=/path/to/EmbodiInfer /path/to/model-runtime/python -m scripts.kernel_tuning capture --catalog --output pi05.jsonl -- benchmark.py --config capture-config.yaml
-python -m scripts.kernel_tuning tune-all --catalog --model pi05 --captured pi05.jsonl --agent 'HARNESS/MODEL:EFFORT'
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate \
+  --catalog gated_residual --output results/kernel_tuning/tasks
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check \
+  results/kernel_tuning/tasks/gated_residual
 ```
+
+Catalog capture must load EmbodiInfer's backend source from the checkout and run
+the relevant path; importing an unrelated copy or disabling the path that calls
+the target kernel gives incomplete coverage. Use recorded workloads for real
+measurement. Synthetic/estimated workloads and skeleton checkpoints do not prove
+real-checkpoint performance or model correctness.

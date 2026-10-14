@@ -69,7 +69,14 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate 
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check results/kernel_tuning/tasks/gated_residual
 ```
 
-To tune one model, capture its existing preparation forward and calibrate numerical
+For the end-to-end workflow, start with the
+[profiling-to-model-benchmark guide](docs/proposals/0008-kernel-tuning.md#11-automated-tuning-workflow).
+Use `profile` to select registered operators, then `capture-ops`, `calibrate`,
+`tune-all`, `install`, `verify`, and the existing model benchmark. Selection is
+manual; there is no unified `optimize` command. Only registry captures produce
+exports accepted by `install`.
+
+For full operator discovery instead, capture the existing preparation forward and calibrate numerical
 contracts in its model runtime, then generate and preflight every eligible call
 (see [model discovery](docs/proposals/0008-kernel-tuning.md#model-scoped-operator-discovery)):
 
@@ -116,7 +123,7 @@ double precision through task generation and evaluation.
 
 The old catalog workflow remains available explicitly with `generate --catalog`,
 `tune-all --catalog`, and `capture --catalog`. Only that workflow accepts legacy
-JSONL captures, catalog model groups, operator subsets and `--estimated`; it
+JSONL captures, catalog model groups and `--estimated`; it
 does not certify model coverage. Existing JSONL must be recaptured for model tuning.
 
 Run these commands from the repository root. Humanize2 is pinned to a reviewed
@@ -140,12 +147,14 @@ plan before applying it. When inheriting system packages, verify that the instal
 actually reuses them; do not reinstall the GPU stack just to add the evaluator.
 For a custom evaluator, install only its declared dependencies plus PyYAML.
 
-See the [approved contract](docs/proposals/0008-kernel-tuning.md).
-The [Chinese workflow guide](docs/proposals/0008-kernel-tuning.md#11-自动化调优使用说明)
+See the [canonical design and implementation status](docs/proposals/0008-kernel-tuning.md).
+The [workflow guide](docs/proposals/0008-kernel-tuning.md#11-automated-tuning-workflow)
 explains task inputs, the full tuning loop, stopping conditions, and saved results.
 The controller snapshots task inputs, saves all attempts, and exports improving
 solutions with their correctness and timing evidence under `results/kernel_tuning/`.
-Saved operators require a separate review/integration before runtime use.
+Registry exports can be installed into an optional hardware profile, followed by
+whole-model verification, benchmark and review. Other exports require separate
+integration before runtime use; installation alone does not certify a profile.
 For an unregistered operator, the
 [registration workflow](scripts/kernel_tuning/registration/README.md) creates an
 isolated review branch with `register new`, then runs a resumable CPU

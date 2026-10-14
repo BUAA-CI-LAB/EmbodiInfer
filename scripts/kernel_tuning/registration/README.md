@@ -2,7 +2,7 @@
 
 `python -m scripts.kernel_tuning register …` 把一个尚未注册的数学算子接入算子注册表
 （`embodiinfer/layers/ops.py`），并把选定的调用点改为经过注册表调用。设计归属见
-[0009 §4.8](../../../docs/proposals/0009-hotspot-kernel-tuning.md#48-agent-assisted-operator-registration)。
+[0008 §4.2](../../../docs/proposals/0008-kernel-tuning.md#42-select-and-if-necessary-register-an-operator)。
 
 工具由一个控制器驱动编码智能体，循环执行"计划 → 实现 → CPU 检查 → 反馈修复"，直到全部检查通过或预算用尽。
 最终产物是一个待人工审阅的分支和 `patch.diff`。
@@ -282,7 +282,7 @@ $TOOL register new --model pi05 --op linear \
 #### 合并前
 
 CPU 检查不能证明 GPU 上逐位一致。例如 pi0.5 的 native 路径只在 CUDA 上启用，CPU 测试执行不到其中的调用点。
-合并前必须在目标 GPU 上按 [0009 §6](../../../docs/proposals/0009-hotspot-kernel-tuning.md#6-losslessness-and-precision-criterion)
+合并前必须在目标 GPU 上按 [0008 §6](../../../docs/proposals/0008-kernel-tuning.md#6-losslessness-and-precision-criterion)
 确认：`kernel_profile: none` 时，整模型输出与 BASE 逐位一致。两边要用相同的 checkpoint、dtype、
 attention 语义、随机种子和噪声、matmul precision、batch 形状和 decode/denoise 步数，并设置
 `TORCHINDUCTOR_DETERMINISTIC=1`。`SUMMARY.md` 的末尾也会写明这一项尚未完成。
