@@ -25,10 +25,10 @@ def test_operator_norm_keeps_native_adaptive_reference(monkeypatch):
     plans.config = SimpleNamespace(numerics="lerobot", has_quantized_mlp=False)
     calls = []
     monkeypatch.setattr(
-        modeling_pi05, "_rmsnorm", lambda *args: (calls.append(("norm", args[-1])) or ("h", "g"))
+        modeling_pi05, "_rmsnorm", lambda *args: calls.append(("norm", args[-1])) or ("h", "g")
     )
     monkeypatch.setattr(
-        modeling_pi05, "_gated_residual", lambda *args: (calls.append(("residual", args[-1])) or "r")
+        modeling_pi05, "_gated_residual", lambda *args: calls.append(("residual", args[-1])) or "r"
     )
     assert plans.normalize(None, None, "modulation", native=True) == ("h", "g")
     assert plans.residual_normalize(None, None, None, "gate", "modulation", native=True) == ("r", "h", "g")
