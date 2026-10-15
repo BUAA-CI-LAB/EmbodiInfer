@@ -61,6 +61,7 @@ class Pi05OptimizationConfig:
     compact_prefix: bool = False
     prefix_kv_only: bool = False
     reuse_action_context: bool = False
+    prefix_gelu_fusion: bool = False
     mlp_weights: str | None = None
 
     def __post_init__(self) -> None:
@@ -86,6 +87,7 @@ class Pi05OptimizationConfig:
                 self.compact_prefix,
                 self.prefix_kv_only,
                 self.reuse_action_context,
+                self.prefix_gelu_fusion,
             )
         ):
             raise ValueError("Pi05 optimization switches must be booleans")
@@ -104,6 +106,13 @@ class Pi05OptimizationConfig:
                 not isinstance(layer, MlpLayerPrecision) for layer in layers
             ):
                 raise ValueError(f"{name} must be a tuple of MlpLayerPrecision values")
+        if self.prefix_gelu_fusion and (
+            self.numerics != "lerobot"
+            or self.has_quantized_mlp
+            or self.fused_mlp
+            or self.mlp_weights is not None
+        ):
+            raise ValueError("Prefix GELU fusion requires non-quantized LeRobot MLPs with original GEMMs")
         if (
             self.fused_mlp
             and self.mlp_weights is None
