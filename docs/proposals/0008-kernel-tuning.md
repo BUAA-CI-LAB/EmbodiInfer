@@ -144,7 +144,17 @@ The result uses the model-capture format (`manifest.json`, `operators.json`,
 `coverage.json`, `fixtures/`) with `capture: registry`. Each task uses the Torch
 reference in `embodiinfer/backend/torch/ops.py` as baseline and the implementation
 seen during capture as a starting point. Workload weights are observed call
-counts. Registry tasks currently default to CUDA Graph kernel timing, with an
+counts. Each case's output contract (shapes, strides, offsets, dtypes and
+aliases) is taken from the call the model actually made, not from the Torch
+reference: downstream operators' recorded inputs come from that call, so a tuned
+kernel must return the same layout or the next tuned kernel's layout gate stops
+matching. The reference must agree on everything except strides and offsets;
+where its layout differs, the case also records `reference_outputs` and the
+generated baseline copies the reference result into the production layout
+(values unchanged; the copy counts toward baseline time). A production output
+that aliases an input, has an offset or is not dense cannot be rebuilt this way
+and is reported as a capture error. Registry tasks currently default to CUDA
+Graph kernel timing, with an
 uncompiled Torch reference; this is not a per-region Inductor comparison.
 Production compilation is restored for model verification and benchmarking.
 

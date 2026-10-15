@@ -8,6 +8,10 @@ in the discovery format, so ``calibrate``, ``generate`` and ``tune-all`` apply
 unchanged. Each operator's identity has ``kind: registry``: its baseline and
 its FP64 oracle are the Torch reference in ``embodiinfer.backend.torch.ops``,
 and the implementation the model ran is shipped as the agent's starting point.
+Output layouts and aliases come from the call the model made, not from the
+reference: a tuned kernel must hand its consumers what production hands them.
+Where the reference lays its outputs out differently, the generated baseline
+copies them into the production layout (values unchanged).
 
 Record in eager mode (no CUDA graphs, no ``torch.compile``): graph replays and
 compiled regions do not call the registry from Python.
@@ -31,6 +35,28 @@ from .contracts import ContractError, digest, tree_hashes
 from .hotspots import _ENTRIES
 
 REFERENCE_MODULE = "embodiinfer.backend.torch.ops"
+
+
+def _aliases(sources: list[Any], outputs: list[Any]) -> list[list[int]]:
+    """For each output, the positions in ``sources`` that share its storage."""
+    from .discovery.tensors import storage_key
+
+    return [
+        [i for i, value in enumerate(sources) if storage_key(value) == storage_key(output)]
+        for output in outputs
+    ]
+
+
+def _dense(shape: list[int], stride: list[int]) -> bool:
+    """Whether a layout covers exactly its elements once, as ``torch.empty_strided`` can allocate."""
+    if 0 in shape:
+        return True
+    expected = 1
+    for step, size in sorted((step, size) for size, step in zip(shape, stride) if size != 1):
+        if step != expected:
+            return False
+        expected *= size
+    return True
 
 
 def _portable(value: Any) -> Any:
@@ -185,7 +211,15 @@ class OpCapture:
         return self._digests[module]
 
     def record(self, op: str, implementation: Any, function: Any, args: tuple, kwargs: dict) -> Any:
-        """Snapshot one call, derive its output contract from the Torch reference, then run it."""
+        """Snapshot one call, run it once, and take its output contract from that call.
+
+        The output layout, aliases and dtypes recorded for the case are those of the
+        implementation the model actually ran (``function``), so downstream operators
+        and the tuned kernel see the production layout. The Torch reference runs on
+        cloned inputs and must agree on everything except strides and offsets; when
+        its layout differs, the case keeps it as ``reference_outputs`` and the
+        generated baseline returns the production layout.
+        """
         from embodiinfer.layers.ops import get_op
 
         from .discovery.tensors import (
@@ -193,7 +227,6 @@ class OpCapture:
             describe_inputs,
             flatten,
             restore,
-            storage_key,
             tensor_outputs,
             tensor_spec,
         )
@@ -206,8 +239,8 @@ class OpCapture:
             local = clone_inputs(tensors)
             ref_args, ref_kwargs = restore(recipe, local)
             result = reference(*ref_args, **ref_kwargs)
-            outputs = tensor_outputs(result)
-            if not outputs:
+            reference_outputs = tensor_outputs(result)
+            if not reference_outputs:
                 raise ContractError("registry operators must return tensors")
             identity = {
                 "kind": "registry",
@@ -227,29 +260,59 @@ class OpCapture:
             }
             # The first call of each structural case supplies its real inputs;
             # later calls with the same layout only add to the case's count.
+            # Registry operators are pure, so the inputs are unchanged until the call below.
             structure = digest([identity, specs])
             if structure not in self._fixtures:
                 self._fixtures[structure] = self._snapshot(tensors, specs)
+        except (ContractError, RuntimeError, TypeError, ValueError) as exc:
+            self._error(op, exc)
+            return function(*args, **kwargs)
+        # The call the model makes, exactly once; its result is what the model uses.
+        actual = function(*args, **kwargs)
+        try:
+            outputs = tensor_outputs(actual)
+            if flatten(actual, []) != identity["returns"]:
+                raise ContractError(
+                    "the production implementation returns another structure than the Torch reference"
+                )
             case = {
                 "inputs": self._fixtures[structure],
                 "outputs": [tensor_spec(tensor) for tensor in outputs],
-                "output_aliases": [
-                    [i for i, tensor in enumerate(local) if storage_key(tensor) == storage_key(output)]
-                    for output in outputs
-                ],
-                "output_groups": [
-                    [i for i, other in enumerate(outputs) if storage_key(output) == storage_key(other)]
-                    for output in outputs
-                ],
+                "output_aliases": _aliases(tensors, outputs),
+                "output_groups": _aliases(outputs, outputs),
             }
+            expected = [tensor_spec(tensor) for tensor in reference_outputs]
+            for spec, ref in zip(case["outputs"], expected):
+                if any(spec[key] != ref[key] for key in ("shape", "dtype", "device")):
+                    raise ContractError(
+                        "production and Torch reference outputs differ in shape, dtype or device"
+                    )
+            if (
+                _aliases(local, reference_outputs) != case["output_aliases"]
+                or _aliases(reference_outputs, reference_outputs) != case["output_groups"]
+            ):
+                raise ContractError("production and Torch reference outputs alias different storage")
+            if expected != case["outputs"]:
+                for spec, ref, aliases in zip(case["outputs"], expected, case["output_aliases"]):
+                    if spec != ref and (
+                        aliases or spec["offset"] or not _dense(spec["shape"], spec["stride"])
+                    ):
+                        raise ContractError(
+                            "the production output layout cannot be rebuilt from the Torch reference "
+                            "(it aliases an input, has an offset, or is not dense)"
+                        )
+                case["reference_outputs"] = expected
             identity["output_dtypes"] = [spec["dtype"] for spec in case["outputs"]]
             identity["output_ranks"] = [len(spec["shape"]) for spec in case["outputs"]]
             self._add(identity, case)
         except (ContractError, RuntimeError, TypeError, ValueError) as exc:
-            message = f"registry.{op}: {exc}"
-            if message not in self.errors:
-                self.errors.append(message)
-        return function(*args, **kwargs)
+            self._error(op, exc)
+        return actual
+
+    def _error(self, op: str, exc: Exception) -> None:
+        message = f"registry.{op}: {exc}"
+        if message not in self.errors:
+            self.errors.append(message)
 
     def _snapshot(self, tensors: list[Any], specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         import torch

@@ -107,10 +107,58 @@ def _sources(op: dict[str, Any]) -> tuple[str, dict[str, str]]:
     args, kwargs = identity["arguments"]["tuple"]
     names = [f"x{i}" for i in range(len(identity["input_dtypes"]))]
     returns = _return_expressions(identity["returns"]) + [f"x{i}" for i in identity["mutates"]]
+    layouts = _production_layouts(op) if identity["kind"] == "registry" else {}
+    if layouts:
+        imports += _RELAYOUT.format(layouts=repr(layouts))
     code = imports + f"\ndef run({', '.join(names)}):\n"
     code += f"    result = {callable_name}(*{_expression(args)}, **{_expression(kwargs)})\n"
+    if layouts:
+        code += f"    outputs = _relayout(({', '.join(names)},), ({', '.join(returns)},))\n"
+        returns = [f"outputs[{i}]" for i in range(len(returns))]
     code += "    return " + (returns[0] if len(returns) == 1 else "(" + ", ".join(returns) + ")") + "\n"
     return code, files
+
+
+# Registry captures take output layouts from the production call. Where the Torch
+# reference lays a result out differently, the baseline copies it into that layout:
+# values are unchanged, and the reference meets the same contract as candidates.
+_RELAYOUT = """
+# Production output layout per recorded input layout: (shape, stride) per output, or
+# None where the Torch reference already matches.
+_LAYOUTS = {layouts}
+
+
+def _relayout(inputs, outputs):
+    key = tuple((tuple(x.shape), tuple(x.stride()), x.storage_offset()) for x in inputs)
+    targets = _LAYOUTS.get(key)
+    if targets is None:
+        return outputs
+    result = []
+    for value, target in zip(outputs, targets):
+        if target is not None and tuple(value.stride()) != target[1]:
+            copy = torch.empty_strided(target[0], target[1], dtype=value.dtype, device=value.device)
+            copy.copy_(value)
+            value = copy
+        result.append(value)
+    return tuple(result)
+"""
+
+
+def _production_layouts(op: dict[str, Any]) -> dict[tuple[Any, ...], tuple[Any, ...]]:
+    """Recorded input layout -> production output layouts, for cases whose reference differs."""
+    layouts = {}
+    for case in op["workloads"]:
+        reference = case.get("reference_outputs")
+        if reference is None:
+            continue
+        if len(reference) != len(case["outputs"]):
+            raise ContractError(f"Reference/production output counts differ in {op['name']}")
+        key = tuple((tuple(s["shape"]), tuple(s["stride"]), s["offset"]) for s in case["inputs"])
+        layouts[key] = tuple(
+            None if ref == spec else (tuple(spec["shape"]), tuple(spec["stride"]))
+            for spec, ref in zip(case["outputs"], reference)
+        )
+    return layouts
 
 
 def _plan(
@@ -282,6 +330,13 @@ def _plan(
             "the model. The installed kernel is used only for these recorded argument layouts, "
             "so you may specialize on them.\n"
         )
+        if _production_layouts(op):
+            sources["README.md"] += (
+                "\nOutput layouts are those of the implementation the model ran. Where the Torch "
+                "reference lays a result out differently (`reference_outputs` in replay.json), "
+                "baseline.py copies it into the production layout; the copy is part of the "
+                "baseline's time and leaves values unchanged.\n"
+            )
         sources["generated.json"] = json.dumps(
             {
                 "generator": "scripts.kernel_tuning.regions",
