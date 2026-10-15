@@ -41,7 +41,12 @@ def main() -> None:
     )
     for source_site in reversed(runtime["sites"]):
         for path in sorted(Path(source_site).iterdir()):
-            if "vvla" in path.name or "embodiinfer" in path.name or path.name.startswith("__editable__") or path.name == "__pycache__":
+            if (
+                "embodiinfer" in path.name
+                or "embodiinfer" in path.name
+                or path.name.startswith("__editable__")
+                or path.name == "__pycache__"
+            ):
                 continue
             destination = site / path.name
             if path.is_dir():

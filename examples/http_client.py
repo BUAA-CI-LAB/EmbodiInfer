@@ -55,7 +55,7 @@ def main() -> None:
         "/v1/sessions",
         json.dumps(
             {
-                "schema": "vvla.policy.session.v1",
+                "schema": "embodiinfer.policy.session.v1",
                 "robot_id": args.robot_id,
                 "action_space": capabilities["adapter"]["action_space"],
             }
@@ -66,7 +66,7 @@ def main() -> None:
     try:
         request_id = "example-" + uuid.uuid4().hex
         metadata = {
-            "schema": "vvla.policy.step.v1",
+            "schema": "embodiinfer.policy.step.v1",
             "session_id": session["session_id"],
             "request_id": request_id,
             "step_id": 0,

@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import gzip
 import hashlib
 import json
-from pathlib import Path
 import re
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import PIL
 from PIL import Image, ImageOps
-
 
 SELECTION_ALGORITHM = (
     "exact_episode_instruction_scene_join;"
@@ -22,9 +22,7 @@ SELECTION_ALGORITHM = (
     "steps=integer_quantiles_with_history4_and_two_sided_neighbors;v2"
 )
 PANORAMIC_CLASSIFICATION = "r2r_rgb_shape_compatible_not_official_panorama"
-SOURCE_CLASSIFICATION = (
-    "structurally_aligned_existing_export_not_official_tar_byte_verified"
-)
+SOURCE_CLASSIFICATION = "structurally_aligned_existing_export_not_official_tar_byte_verified"
 ACTION_RESPONSES = {0: "Stop", 1: "Move", 2: "Left", 3: "Right"}
 PANORAMIC_ANGLES = (-90.0, -30.0, 30.0, 90.0)
 PANORAMIC_DISTANCES = (0.5, 0.25, 0.25, 0.5)
@@ -54,9 +52,7 @@ def _sha_file(path: Path) -> str:
 
 
 def _canonical(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _load_json(path: Path) -> Any:
@@ -66,9 +62,7 @@ def _load_json(path: Path) -> Any:
 
 
 def _write_json(path: Path, value: Any) -> str:
-    payload = (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    ).encode("utf-8")
+    payload = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_bytes(payload)
@@ -149,25 +143,18 @@ def _frame_key(path: Path) -> tuple[int, str]:
 
 def _quantiles(values: Sequence[int], count: int) -> tuple[int, ...]:
     if count <= 0 or len(values) < count:
-        raise ValueError(
-            f"need at least {count} eligible steps; trajectory has {len(values)}"
-        )
+        raise ValueError(f"need at least {count} eligible steps; trajectory has {len(values)}")
     if count == 1:
         return (values[(len(values) - 1) // 2],)
     denominator = count - 1
-    indexes = tuple(
-        (rank * (len(values) - 1) + denominator // 2) // denominator
-        for rank in range(count)
-    )
+    indexes = tuple((rank * (len(values) - 1) + denominator // 2) // denominator for rank in range(count))
     selected = tuple(values[index] for index in indexes)
     if len(set(selected)) != count:
         raise ValueError("integer quantiles produced duplicate steps")
     return selected
 
 
-def _resolve_inputs(
-    images_argument: Path, annotations_argument: Path | None
-) -> tuple[Path, Path]:
+def _resolve_inputs(images_argument: Path, annotations_argument: Path | None) -> tuple[Path, Path]:
     root = images_argument.expanduser().resolve(strict=True)
     if (root / "images").is_dir():
         images_root, dataset_root = (root / "images").resolve(strict=True), root
@@ -190,10 +177,7 @@ def _resolve_inputs(
             None,
         )
         if annotations is None:
-            raise ValueError(
-                "no annotations_v1-3.json/annotations.json next to images; "
-                "pass --annotations"
-            )
+            raise ValueError("no annotations_v1-3.json/annotations.json next to images; pass --annotations")
     if not annotations.is_file():
         raise ValueError(f"StreamVLN annotations are not a file: {annotations}")
     return images_root, annotations
@@ -205,11 +189,7 @@ def _video(value: Any, context: str) -> tuple[Path, str, int]:
     relative = Path(value)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"{context}.video must be a safe relative path")
-    parts = (
-        relative.parts[1:]
-        if relative.parts and relative.parts[0] == "images"
-        else relative.parts
-    )
+    parts = relative.parts[1:] if relative.parts and relative.parts[0] == "images" else relative.parts
     if len(parts) != 1:
         raise ValueError(f"{context}.video must identify one episode directory")
     match = VIDEO_RE.fullmatch(parts[0])
@@ -239,15 +219,11 @@ def _join(
             continue
         if episode_id in seen:
             raise ValueError(f"duplicate joined StreamVLN episode id {episode_id}")
-        relative, video_scene, video_episode = _video(
-            annotation.get("video"), context
-        )
+        relative, video_scene, video_episode = _video(annotation.get("video"), context)
         train_scene, train_instruction = train[episode_id]
         if video_episode != episode_id or video_scene != train_scene:
             raise ValueError(f"{context} id/scene does not match R2R-VLNCE")
-        if train_instruction not in _annotation_instructions(
-            annotation.get("instructions"), context
-        ):
+        if train_instruction not in _annotation_instructions(annotation.get("instructions"), context):
             raise ValueError(f"{context} lacks the exact R2R-VLNCE instruction")
         episode_candidate = images_root / relative
         if not episode_candidate.is_dir():
@@ -261,36 +237,23 @@ def _join(
                 (
                     path.resolve(strict=True)
                     for path in rgb.iterdir()
-                    if path.is_file()
-                    and path.suffix.lower() in (".jpg", ".jpeg")
+                    if path.is_file() and path.suffix.lower() in (".jpg", ".jpeg")
                 ),
                 key=_frame_key,
             )
         )
-        frame_numbers = [
-            int(path.stem)
-            for path in frames
-            if path.stem.isdigit()
-        ]
-        if len(frame_numbers) != len(frames) or frame_numbers != list(
-            range(1, len(frames) + 1)
-        ):
-            raise ValueError(
-                f"{context} JPEG names must be consecutive from 001"
-            )
+        frame_numbers = [int(path.stem) for path in frames if path.stem.isdigit()]
+        if len(frame_numbers) != len(frames) or frame_numbers != list(range(1, len(frames) + 1)):
+            raise ValueError(f"{context} JPEG names must be consecutive from 001")
         actions = _actions(annotation.get("actions"), context)
         if len(actions) != len(frames):
-            raise ValueError(
-                f"{context} has {len(actions)} actions and {len(frames)} JPEGs"
-            )
+            raise ValueError(f"{context} has {len(actions)} actions and {len(frames)} JPEGs")
         eligible = tuple(
             step
             for step in range(history_depth, len(frames) - 2)
             if all(
                 actions[action_index] in ACTION_RESPONSES
-                for action_index in range(
-                    step - history_depth + 1, step + 2
-                )
+                for action_index in range(step - history_depth + 1, step + 2)
             )
         )
         if len(eligible) < steps_per_episode:
@@ -309,8 +272,7 @@ def _join(
     joined.sort(key=lambda item: (item.episode_id, item.scene))
     if len(joined) < episode_count:
         raise ValueError(
-            f"only {len(joined)} exact joined episodes satisfy the contract; "
-            f"requested {episode_count}"
+            f"only {len(joined)} exact joined episodes satisfy the contract; requested {episode_count}"
         )
     return tuple(joined[:episode_count])
 
@@ -409,9 +371,7 @@ def build_manifests(
     train_path = train_json_gz.expanduser().resolve(strict=True)
     if not train_path.is_file() or not train_path.name.endswith(".json.gz"):
         raise ValueError("--train-json-gz must be an existing .json.gz")
-    images_root, annotations_path = _resolve_inputs(
-        images_argument, annotations_argument
-    )
+    images_root, annotations_path = _resolve_inputs(images_argument, annotations_argument)
     output = output_dir.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     episodes = _join(
@@ -449,8 +409,7 @@ def build_manifests(
             history = tuple(episode.frames[index] for index in history_indexes)
             responses = _responses(episode.actions, history_indexes)
             distance = round(
-                0.25
-                * sum(action == 1 for action in episode.actions[1 : step + 1]),
+                0.25 * sum(action == 1 for action in episode.actions[1 : step + 1]),
                 6,
             )
             low.append(
@@ -465,13 +424,8 @@ def build_manifests(
                 }
             )
             if navida_resize:
-                navida_current = derivative.fit(
-                    current, "navida_320x240", (320, 240)
-                )
-                navida_history = [
-                    derivative.fit(frame, "navida_320x240", (320, 240))
-                    for frame in history
-                ]
+                navida_current = derivative.fit(current, "navida_320x240", (320, 240))
+                navida_history = [derivative.fit(frame, "navida_320x240", (320, 240)) for frame in history]
             else:
                 navida_current = derivative.relative(current)
                 navida_history = [derivative.relative(frame) for frame in history]
@@ -495,12 +449,9 @@ def build_manifests(
                 {
                     "id": sample_id,
                     "instruction": episode.instruction,
-                    "panorama_image": derivative.fit(
-                        current, "panoramic_960x240", (960, 240)
-                    ),
+                    "panorama_image": derivative.fit(current, "panoramic_960x240", (960, 240)),
                     "history_panoramas": [
-                        derivative.fit(frame, "panoramic_960x240", (960, 240))
-                        for frame in history
+                        derivative.fit(frame, "panoramic_960x240", (960, 240)) for frame in history
                     ],
                     "history_responses": responses,
                     "distance_traveled": distance,
@@ -524,9 +475,7 @@ def build_manifests(
                     "sample_id": sample_id,
                     "episode_id": episode.episode_id,
                     "scene": episode.scene,
-                    "instruction_sha256": _sha_bytes(
-                        episode.instruction.encode("utf-8")
-                    ),
+                    "instruction_sha256": _sha_bytes(episode.instruction.encode("utf-8")),
                     "quantile": quantile,
                     "frame_index": step,
                     "history_indexes": list(history_indexes),
@@ -542,11 +491,9 @@ def build_manifests(
         "panoramic": {"samples": panoramic},
     }
     paths = {name: output / f"{name}.json" for name in payloads}
-    hashes = {
-        name: _write_json(paths[name], payload) for name, payload in payloads.items()
-    }
+    hashes = {name: _write_json(paths[name], payload) for name, payload in payloads.items()}
     provenance = {
-        "schema": "vvla_r2r_vlnce_real_rgb_manifest_v1",
+        "schema": "embodiinfer_r2r_vlnce_real_rgb_manifest_v1",
         "classification": SOURCE_CLASSIFICATION,
         "official_tar_byte_verified": False,
         "synthetic_pixels": False,
@@ -570,9 +517,7 @@ def build_manifests(
         "contracts": {
             "history_per_sample": history_depth,
             "panoramic_candidates_per_sample": 4,
-            "low_action_mapping": {
-                str(key): value for key, value in ACTION_RESPONSES.items()
-            },
+            "low_action_mapping": {str(key): value for key, value in ACTION_RESPONSES.items()},
             "distance": "0.25m times preceding MoveForward actions",
             "action_alignment": "frame[i] corresponds to actions[i+1]",
             "navida": (
@@ -581,9 +526,7 @@ def build_manifests(
                 else "direct source StreamVLN 320x240 JPEG references"
             ),
             "panoramic": PANORAMIC_CLASSIFICATION,
-            "panoramic_candidate_metadata": (
-                "fixed-shape temporal neighbors; not Habitat navigation edges"
-            ),
+            "panoramic_candidate_metadata": ("fixed-shape temporal neighbors; not Habitat navigation edges"),
         },
         "data_roots": {
             "low": str(images_root),

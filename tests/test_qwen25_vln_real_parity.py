@@ -127,8 +127,8 @@ def _real_navigation_observation(profile: str) -> Observation:
 @pytest.mark.parametrize(
     ("profile", "environment"),
     [
-        ("low_level", "VVLA_QWEN_R2R_LOW_CHECKPOINT"),
-        ("panoramic", "VVLA_QWEN_R2R_PANORAMIC_CHECKPOINT"),
+        ("low_level", "EMBODIINFER_QWEN_R2R_LOW_CHECKPOINT"),
+        ("panoramic", "EMBODIINFER_QWEN_R2R_PANORAMIC_CHECKPOINT"),
     ],
 )
 def test_real_history_cache_processor_parity(profile, environment, gpu_runner_registry):
@@ -218,8 +218,8 @@ def test_real_history_cache_processor_parity(profile, environment, gpu_runner_re
 @pytest.mark.parametrize(
     ("profile", "environment"),
     [
-        ("low_level", "VVLA_QWEN_R2R_LOW_CHECKPOINT"),
-        ("panoramic", "VVLA_QWEN_R2R_PANORAMIC_CHECKPOINT"),
+        ("low_level", "EMBODIINFER_QWEN_R2R_LOW_CHECKPOINT"),
+        ("panoramic", "EMBODIINFER_QWEN_R2R_PANORAMIC_CHECKPOINT"),
     ],
 )
 def test_native_next_token_forward_matches_huggingface(
@@ -388,10 +388,10 @@ def test_native_next_token_forward_matches_huggingface(
 def test_navida_official_oracle_and_full_policy_cuda_graph(
     gpu_runner_registry,
 ):
-    checkpoint = os.environ.get("VVLA_NAVIDA_CHECKPOINT")
-    reference_path = os.environ.get("VVLA_NAVIDA_REFERENCE")
+    checkpoint = os.environ.get("EMBODIINFER_NAVIDA_CHECKPOINT")
+    reference_path = os.environ.get("EMBODIINFER_NAVIDA_REFERENCE")
     if checkpoint is None or reference_path is None or not torch.cuda.is_available():
-        pytest.skip("requires CUDA, VVLA_NAVIDA_CHECKPOINT, and VVLA_NAVIDA_REFERENCE")
+        pytest.skip("requires CUDA, EMBODIINFER_NAVIDA_CHECKPOINT, and EMBODIINFER_NAVIDA_REFERENCE")
     reference = torch.load(reference_path, map_location="cpu", weights_only=False)
     assert reference["source_revision"] == NAVIDA_SOURCE_REVISION
     assert reference["checkpoint_revision"] == NAVIDA_CHECKPOINT_REVISION
@@ -509,8 +509,8 @@ def test_navida_official_oracle_and_full_policy_cuda_graph(
 @pytest.mark.parametrize(
     ("profile", "environment"),
     [
-        ("low_level", "VVLA_QWEN_R2R_LOW_CHECKPOINT"),
-        ("panoramic", "VVLA_QWEN_R2R_PANORAMIC_CHECKPOINT"),
+        ("low_level", "EMBODIINFER_QWEN_R2R_LOW_CHECKPOINT"),
+        ("panoramic", "EMBODIINFER_QWEN_R2R_PANORAMIC_CHECKPOINT"),
     ],
 )
 def test_inductor_text_bucket_matches_exact_text_shape(profile, environment, gpu_runner_registry):

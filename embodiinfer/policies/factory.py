@@ -3,7 +3,7 @@
 Adapters still register builders through :func:`register_policy`, but optional
 model modules are imported only when their policy is constructed.  Keeping the
 catalog here lets :func:`available_policies` remain complete without importing
-incompatible model dependency stacks into every VVLA environment.
+incompatible model dependency stacks into every EmbodiInfer environment.
 """
 
 from __future__ import annotations

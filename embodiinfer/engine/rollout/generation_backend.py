@@ -12,7 +12,7 @@ The contract is intentionally small:
     refit(state_dict)             -> in-place weights after an optimizer step
 
 Everything the trainer needs from the inference layer lives here; the trainer
-itself is out of scope for vvla.
+itself is out of scope for embodiinfer.
 """
 
 from __future__ import annotations
@@ -206,7 +206,7 @@ class GenerationBackend:
         This is the rollout surface a group-relative RL algorithm (GRPO) drives:
         one compute-bound prefix encode per observation is broadcast across all
         candidates (``prefix.expand``), and every observation's group runs in one
-        batched denoise pass — the throughput lever vvla exists for. The returned
+        batched denoise pass — the throughput lever embodiinfer exists for. The returned
         :class:`RolloutSamples` also carries the visited-state trajectory so the
         trainer can recompute a differentiable log-prob for the update.
         """
@@ -405,7 +405,7 @@ class GenerationBackend:
         name_map: WeightNameMap | None = None,
         version: int | None = None,
     ) -> RefitResult:
-        """Install learner weights through VVLA's framework-neutral refit API."""
+        """Install learner weights through EmbodiInfer's framework-neutral refit API."""
         if self.policy.is_recurrent and self.core.has_session_state():
             raise UnsupportedRecurrentModeError(
                 "reset recurrent sessions before updating weights; cached KV belongs to the old policy version"

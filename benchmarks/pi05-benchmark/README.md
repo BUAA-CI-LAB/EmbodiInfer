@@ -96,9 +96,9 @@ Profiler 观测开销不进入上表。
 `--splits 1 2 4 8 16` 并事先声明 `--atol` / `--rtol`。改变归约顺序可能被严格门槛
 拒绝；production 默认选择保持不变，没有自动推广。微内核结果不能替代动作验收。
 
-本次不修改协议或 EmbodiRun gitlink。main 的 primary schema/transport tag 仍为
-`vvla.policy.*` 和 `0x56564C41/42`；接受 `embodiinfer.policy.*` 请求别名，不代表其
-响应能被不同客户端解析。EmbodiRun `1d4221ab` 线的 EMBI/EMBJ 不可盲目混用。
+本次不修改协议或 EmbodiRun gitlink。vvla 清理合并后，main 的 primary
+schema/transport tag 为 `embodiinfer.policy.*` 和 `0x454D4249/4A`（EMBI/EMBJ），
+与 EmbodiRun `1d4221ab` 部署线一致；旧 `vvla.policy.*` 请求拼写仍作为输入别名接受。
 可用只读预检核对实际客户端：
 
 ```bash
@@ -255,7 +255,7 @@ YAML 解析配方路径，后者也将配方内容计入 profile 摘要。报告
 CUDA_HOME=/path/to/cuda .venv/bin/python compare_recorded.py \
   --checkpoint /models/pi05 --tokenizer /models/tokenizer \
   --samples /data/recorded/sample.json --out runs/fused-parity \
-  --warmup 3 --modes lerobot vvla_sdpa_graph vvla_fused_graph \
+  --warmup 3 --modes lerobot embodiinfer_sdpa_graph embodiinfer_fused_graph \
   --optimizations /path/to/fused.json
 ```
 
@@ -377,8 +377,10 @@ compaction、末层仅生成 K/V、action context 复用。仅设置 `numerics` 
 
 ```python
 make_policy(
-    "pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
-    device_type="thor", preset="nvfp4-fp8",
+    "pi05",
+    checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
+    device_type="thor",
+    preset="nvfp4-fp8",
 )
 ```
 
@@ -793,7 +795,7 @@ PYTHONPATH=/path/to/EmbodiInfer HF_HOME=/path/to/cache \
 
 本次 PI0.5 优化单独归档为 20260909123408.tar.gz (`../snapshots/20260909123408.tar.gz`)
 及 SHA256 (`../snapshots/20260909123408.tar.gz.sha256`)。只包含最终结果相关的脚本、
-本次 PI0.5 优化源码、实际配置、校验参考、原 VVLA/PhyAI 对照和逐帧报告；
+本次 PI0.5 优化源码、实际配置、校验参考、原 EmbodiInfer/PhyAI 对照和逐帧报告；
 不含 checkpoint、完整数据集、虚拟环境或编译库。之前多模型快照保留。
 
 ## AGX Orin mixed precision (2026-09-17)
@@ -864,6 +866,6 @@ PYTHONPATH=. python benchmarks/pi05-benchmark/compare_recorded.py \
 图片解码为 RGB CHW [0,1]。结果目录含运行条件、每次计时/动作误差和完整动作数组。
 当前脚本将全部权重放在 CUDA，参考和候选共享同一加载模型；每个观测形状都预热。
 这与历史部署实验的参考 CPU 词嵌入 offload、仅首帧预热不同，应以新生成条件和
-结果为准。`--modes lerobot vvla_eager vvla_eager_graph` 可只测逐位一致的候选；
+结果为准。`--modes lerobot embodiinfer_eager embodiinfer_eager_graph` 可只测逐位一致的候选；
 SDPA 结果始终单独报告误差。冷启动、CPU offload 和正式服务请求延迟不在该脚本
 的推理计时范围内。

@@ -343,7 +343,7 @@ class Embodied:
         inputs = batch.backbone_inputs
         tokens = inputs["input_ids"][inputs["attention_mask"].bool()].numpy().astype(np.int32)
         # This native API normalizes physical state and denormalizes actions.
-        # Supplying the already normalized VVLA state would normalize twice.
+        # Supplying the already normalized EmbodiInfer state would normalize twice.
         state = np.pad(prepared["physical_state"], (0, 132 - len(prepared["physical_state"])))
         noise_array = noise.float().numpy().reshape(-1)
         instruction = re.sub(r"[^\w\s]", "", prepared["instruction"].lower())
@@ -430,7 +430,7 @@ def main() -> None:
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     if args.mode == "calibrate" and (config["engine"], config["dtype"]) != ("embodiinfer", "float32"):
-        raise ValueError("calibration uses VVLA FP32 arithmetic on BF16-rounded weights/inputs")
+        raise ValueError("calibration uses EmbodiInfer FP32 arithmetic on BF16-rounded weights/inputs")
     if config["batch_size"] != 1:
         raise ValueError("this runner currently requires batch_size=1")
     output = Path(config["output"])
@@ -454,9 +454,9 @@ def main() -> None:
         for index, prepared in zip(reference_indices, prepared_profiles, strict=True):
             processor.validate_cpp(samples[index], bench.read_libero(samples[index]), prepared)
     started = time.perf_counter()
-    engine = {"embodiinfer": EmbodiInfer, "phyai": PhyAI, "vlacpp": VlaCpp, "embodied": Embodied}[config["engine"]](
-        config, processor, prepared_profiles
-    )
+    engine = {"embodiinfer": EmbodiInfer, "phyai": PhyAI, "vlacpp": VlaCpp, "embodied": Embodied}[
+        config["engine"]
+    ](config, processor, prepared_profiles)
     load_seconds = time.perf_counter() - started
     reference = Path(config["reference_dir"])
     if args.mode == "reference":
@@ -501,7 +501,7 @@ def main() -> None:
             )
             if args.mode == "reference":
                 if not isinstance(engine, EmbodiInfer):
-                    raise ValueError("only VVLA generates the reference")
+                    raise ValueError("only EmbodiInfer generates the reference")
                 np.savez(
                     fixture,
                     **values,
@@ -569,7 +569,7 @@ def main() -> None:
     }
     if args.mode == "calibrate":
         report["tolerance_contract"] = {
-            "reference": "VVLA BF16 vs FP32 with identical BF16-rounded weights/inputs/noise",
+            "reference": "EmbodiInfer BF16 vs FP32 with identical BF16-rounded weights/inputs/noise",
             "comparison": "first 16x7 normalized action columns before clipping",
             "factor": 2,
             "max_abs_tolerance": max(1e-4, 2 * max(c["max_abs"] for c in checks)),

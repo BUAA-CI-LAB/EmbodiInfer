@@ -96,7 +96,7 @@ $$\max_i \lVert \Delta a_i \rVert_\infty = 0,$$
 
 - **CPU（mock policy，默认 CI 口径）**：验证静态调度预计算的正确性——`t_all` 与逐步 `torch.full(t_val)` 序列逐位相等；以 mock policy 在 Python 展开循环上验证「预计算路径」与「现状逐步路径」数值一致（CPU 无 CUDA graph，此处只验预计算与循环等价逻辑，不验捕获本身）。
 - **GPU（`@pytest.mark.gpu`）**：真实捕获 parity，达成 §6 的 `max|Δaction| = 0`；`(bucket, num_steps)` 缓存命中与回退分支的行为。
-- **pi0.5（`@pytest.mark.pi05`）**：真实权重下的端到端 parity（`LoopGraph` 对单步 eager），复用 `tests/test_pi05_parity.py` 的门控方式（`VVLA_PI05_CKPT`）。
+- **pi0.5（`@pytest.mark.pi05`）**：真实权重下的端到端 parity（`LoopGraph` 对单步 eager），复用 `tests/test_pi05_parity.py` 的门控方式（`EMBODIINFER_PI05_CKPT`）。
 
 ## 9. 基准计划
 
@@ -280,14 +280,16 @@ closed-loop success rate or different-model speedup follows from these checks.
 
 The original patch used `cc4d16229a662b0e40b55fd08a3b7b8640d383f1`; this change is
 integrated on `4650e8eadb0c2a461c46991be7d715b726928157`. It does not
-update an EmbodiRun submodule or rename a service contract. This source accepts
-`vvla.policy.step.v1`, `vvla.policy.session.v1`, `vvla.policy.rpc.v1`
-and WirelessComm tags `0x56564C41` / `0x56564C42`. EmbodiRun's separately
-pinned `1d4221ab` deployment may use `embodiinfer.policy.*` and
-`0x454D4249` / `0x454D424A`. Python package aliases do not make these
-wire formats interchangeable. Current main accepts `embodiinfer.policy.*` request
-schema aliases, while its primary responses and transport tags retain the legacy
-values. Alias acceptance alone cannot certify a client's response parser.
+update an EmbodiRun submodule or rename a service contract. Before the vvla
+purge merged, this source accepted `vvla.policy.step.v1`,
+`vvla.policy.session.v1`, `vvla.policy.rpc.v1` and WirelessComm tags
+`0x56564C41` / `0x56564C42`, while EmbodiRun's separately pinned `1d4221ab`
+deployment uses `embodiinfer.policy.*` and `0x454D4249` / `0x454D424A`.
+Python package aliases do not make these wire formats interchangeable. The
+vvla purge flipped the primary spelling: responses and transport tags now use
+`embodiinfer.policy.*` and EMBI/EMBJ, matching the EmbodiRun deployment, while
+the legacy `vvla.*` request spelling stays accepted as an input alias. Alias
+acceptance alone cannot certify a client's response parser.
 `scripts/check_serving_compatibility.py` conservatively compares primary literals in
 exact selected client source files and optionally the EmbodiRun gitlink without
 changing either checkout. Passing literal comparison is necessary but not

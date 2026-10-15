@@ -25,7 +25,7 @@
 - attention 先支持 **sdpa**（parity 锚点，匹配 RLinf native 默认）；`supports_cuda_graph=True` + `allocate_static_prefix`/`copy_prefix_into` → 继承 `LoopGraph`。
 - flow-SDE rollout logprob：复用 `FlowDecoder.sample_with_logprob`/`recompute_logprob`，对齐 RLinf `LingbotvlaActionModel` 的 `flow_sde` 逐步 Gaussian（num_steps=10, noise_level=0.5）。
 - 注册 `@register_policy("lingbot_vla")`、`[lingbot_vla]` extra、`lingbot_vla` pytest mark、parity 测试。
-- RLinf fork adapter（`rlinf/models/embodiment/vvla/vvla_lingbotvla_action_model.py`）+ ratio-at-θ0 + RoboTwin E2E（照 pi0.5/GR00T/OFT 模板）。
+- RLinf fork adapter（`rlinf/models/embodiment/embodiinfer/embodiinfer_lingbotvla_action_model.py`）+ ratio-at-θ0 + RoboTwin E2E（照 pi0.5/GR00T/OFT 模板）。
 
 **模型结构全自持（硬要求）**
 - Qwen2.5-VL backbone 的 **transformer 前向自持**（RMSNorm / mRoPE / attention 走 `AttentionBackend` / SwiGLU），保留官方 module 仅作权重持有（同 OFT 自持 Llama、pi0.5 自持 Gemma）；**vision encoder（Qwen2.5-VL ViT）作 vendored leaf**（跑一次编码图像，同 OFT Prismatic / GR00T vision）。**MoT action expert 前向亦自持**（`LoopGraph` 捕获的内循环）。全链无模型层黑盒——便于后续 cudagraph / KV 优化。
@@ -73,13 +73,13 @@ MoT action-expert 的 attention 复刻 RLinf `qwenvl_with_expert` 的 expert 路
   1. **action-expert 隔离**：把 native 的 prefix（VL KV + state features）注入 EmbodiInfer 去噪循环 → $\max\lVert\Delta a\rVert_\infty$ 达 bit-exact 或 bf16 底噪（同 GR00T 判据 1 的 ~1.6e-2 量级）。
   2. **端到端**：EmbodiInfer 全链路（Qwen2.5-VL backbone + 自持 MoT expert）vs native → $\max\lVert\Delta a\rVert_\infty$；backbone 跨版本对齐（mRoPE 2D、pre/post-norm 若适用）后收敛到判据 1 的 expert 底噪。
 - **RL logprob parity**：behavior logprob 与 $\theta=\theta_{\text{behavior}}$ 处 recompute 一致、ratio-at-θ0 分位对照 native 噪声底（flow-SDE 高斯 logprob 对 velocity 小差异鲁棒，同 pi0.5/GR00T）。
-- 复现：`tests/test_lingbot_vla_parity.py`（`lingbot_vla` mark，门控 `VVLA_LINGBOT_VLA_CKPT` + `VVLA_LINGBOT_VLA_REF`）+ box 脚本 `dev/scripts/{lingbot_ref_run,lingbot_compare,lingbot_inject}.py`。
+- 复现：`tests/test_lingbot_vla_parity.py`（`lingbot_vla` mark，门控 `EMBODIINFER_LINGBOT_VLA_CKPT` + `EMBODIINFER_LINGBOT_VLA_REF`）+ box 脚本 `dev/scripts/{lingbot_ref_run,lingbot_compare,lingbot_inject}.py`。
 
 ## 7. 实现计划
 
 - 新增 `embodiinfer/policies/lingbot_vla/{__init__,modeling_lingbot_vla,processor_lingbot_vla}.py`；`pyproject.toml` 加 `[lingbot_vla]` extra + `lingbot_vla` mark；`embodiinfer/policies/__init__.py` 导入注册。
 - `supports_cuda_graph=True` + `allocate_static_prefix`/`copy_prefix_into`（`LingBotPrefix` 静态 KV）→ 免费继承 `LoopGraph`/`DenoiseGraph`。
-- RLinf fork：`rlinf/models/embodiment/vvla/vvla_lingbotvla_action_model.py`（adapter，格式胶水 + weight-sync 键映射）；`SupportedModel` 注册 + `robotwin_*_grpo_vvla_lingbotvla.yaml`。
+- RLinf fork：`rlinf/models/embodiment/embodiinfer/embodiinfer_lingbotvla_action_model.py`（adapter，格式胶水 + weight-sync 键映射）；`SupportedModel` 注册 + `robotwin_*_grpo_embodiinfer_lingbotvla.yaml`。
 - **Stage 0 实现前置**：box 直读 `rlinf/models/embodiment/lingbotvla/lingbotvla_action_model.py`（44KB）+ `lingbotvla.models.vla.pi0.modeling_lingbot_vla` 定死 prefill/decode 张量形状、MoT attention mask 语义、flow schedule 符号、logprob 聚合（`joint_logprob`）——scope agent 是 raw fetch 摘要，实现前须逐 op 核实。
 - 向后兼容：纯新增，不改公共 API。
 

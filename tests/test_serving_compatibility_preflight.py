@@ -1,4 +1,4 @@
-"""Deployment checks reject the known EmbodiRun schema/tag split without changing it."""
+"""Deployment checks reject the known legacy vvla schema/tag split without changing it."""
 
 import importlib.util
 from pathlib import Path
@@ -16,20 +16,20 @@ def test_current_wire_snapshot_and_matching_client(tmp_path):
     server = compatibility.contracts(
         [serve / name for name in ("contracts.py", "service.py", "wireless_server.py")]
     )
-    assert server["schema:step"] == ["vvla.policy.step.v1"]
-    assert server["schema:session"] == ["vvla.policy.session.v1"]
-    assert server["schema:rpc"] == ["vvla.policy.rpc.v1"]
-    assert server["REQUEST_TAG"] == [0x56564C41]
-    assert server["RESPONSE_TAG"] == [0x56564C42]
+    assert server["schema:step"] == ["embodiinfer.policy.step.v1"]
+    assert server["schema:session"] == ["embodiinfer.policy.session.v1"]
+    assert server["schema:rpc"] == ["embodiinfer.policy.rpc.v1"]
+    assert server["REQUEST_TAG"] == [0x454D4249]
+    assert server["RESPONSE_TAG"] == [0x454D424A]
     client = {
         key: value for key, value in server.items() if key not in {"schema:step.result", "schema:reset"}
     }
     assert compatibility.compare(server, client)["compatible_literals"]
     old = {
-        key: [value.replace("vvla.", "embodiinfer.") if isinstance(value, str) else value for value in values]
+        key: [value.replace("embodiinfer.", "vvla.") if isinstance(value, str) else value for value in values]
         for key, values in client.items()
     }
-    old.update(REQUEST_TAG=[0x454D4249], RESPONSE_TAG=[0x454D424A])
+    old.update(REQUEST_TAG=[0x56564C41], RESPONSE_TAG=[0x56564C42])
     result = compatibility.compare(server, old)
     assert not result["compatible_literals"]
     assert {"schema:step", "schema:session", "schema:rpc", "REQUEST_TAG", "RESPONSE_TAG"} <= result[

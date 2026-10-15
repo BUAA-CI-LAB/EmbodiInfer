@@ -1,4 +1,4 @@
-"""GR00T N1.7 adapter: Isaac-GR00T weights, **fully integrated into vvla**.
+"""GR00T N1.7 adapter: Isaac-GR00T weights, **fully integrated into embodiinfer**.
 
 GR00T N1.7 is a Qwen3-VL (Cosmos-Reason2-2B) VLM backbone plus a flow-matching
 **DiT** action head. This adapter needs **no ``gr00t`` package at runtime**: the
@@ -6,7 +6,7 @@ action-head module tree is vendored (:mod:`.modules_gr00t`) and loaded directly
 from the checkpoint safetensors; the backbone is the stock transformers
 ``Qwen3VLForConditionalGeneration`` (which is exactly what gr00t wraps), built
 from the Cosmos-Reason2-2B config and filled with the checkpoint's backbone
-weights. This keeps GR00T on the single vvla env (torch 2.10 / transformers 5.3 /
+weights. This keeps GR00T on the single embodiinfer env (torch 2.10 / transformers 5.3 /
 diffusers 0.35) instead of gr00t's conflicting pins.
 
 Two-stage split the engine schedules:
@@ -58,7 +58,7 @@ from .processor_gr00t import Gr00tBatch
 
 _INSTALL = (
     "GR00T needs transformers>=5.3 (Qwen3-VL), diffusers, safetensors — all in the "
-    "vvla env. Pass checkpoint=<GR00T-N1.7-3B dir> and cosmos_path=<Cosmos-Reason2-2B dir>."
+    "embodiinfer env. Pass checkpoint=<GR00T-N1.7-3B dir> and cosmos_path=<Cosmos-Reason2-2B dir>."
 )
 
 

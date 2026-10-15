@@ -178,7 +178,7 @@ Cosmos 使用扩散解码器进行动作生成和 best-of-N 规划。
   1.14×。2B DiT 主要受计算量限制，图捕获只减少每步启动开销；
   2ab 多步算法的主机端 float64 运算仍在图外，进一步限制了总体收益。
   单独测量 DiT 前向时，加速比为 1.36×。
-- **完整动作生成。** `Vvla("cosmos").act(obs)` 先通过 `collate` 将 `Observation` 转成 `CosmosBatch`：
+- **完整动作生成。** `EmbodiInfer("cosmos").act(obs)` 先通过 `collate` 将 `Observation` 转成 `CosmosBatch`：
   两路相机输入从 `[0,1]` 映射到 `[-1,1]`，缩放机器人自身状态，并为 T5 交叉注意力读取预计算的指令表示。
   随后运行 `encode_prefix` 和扩散去噪，返回形状为 `ActionChunk (16,7)`、使用数据集尺度的动作块，
   同样支持批处理。未预计算的指令由内置 `T5TextEncoder`（`google-t5/t5-11b`）编码。

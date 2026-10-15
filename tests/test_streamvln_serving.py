@@ -134,7 +134,7 @@ def test_streamvln_shared_service_keeps_retries_and_resets_transactional():
     service = PolicyService(StreamVLNServingAdapter(core=core, config={"return_steps": 4}))
     opened = service.open_session(
         {
-            "schema": "vvla.policy.session.v1",
+            "schema": "embodiinfer.policy.session.v1",
             "robot_id": "recorded-navigation",
             "action_space": STREAMVLN_ACTION_SPACE,
         }

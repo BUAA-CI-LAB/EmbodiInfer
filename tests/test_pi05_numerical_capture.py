@@ -42,7 +42,7 @@ class CaptureTests(unittest.TestCase):
                 for _ in range(3):
                     actual = modeling_pi05._fused_linear_pair(inputs, first, second)
                     self.assertTrue(all(torch.equal(a, b) for a, b in zip(expected, actual)))
-                    self.assertIsNone(first._vvla_fused_pair_weight)
+                    self.assertIsNone(first._embodiinfer_fused_pair_weight)
         self.assertIs(modeling_pi05._fused_linear_pair, original)
 
     def test_container_provenance_rejects_source_substitution(self) -> None:

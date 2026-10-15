@@ -15,7 +15,7 @@ The result JSON and image assets remain external and are not committed. The
 complete artifact root is:
 
 ```text
-/benchmark-artifacts/vvla-benchmarks/navigation-3b/history-image-cache-v1-final2-real-image-smoke-20260822
+/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/history-image-cache-v1-final2-real-image-smoke-20260822
 ```
 
 ## Environment and workload
@@ -25,7 +25,7 @@ complete artifact root is:
 | Python | `3.12.3` |
 | PyTorch | `2.13.0+cu130` |
 | NumPy | `2.5.2` |
-| Interpreter | `/benchmark-artifacts/venvs/vvla/bin/python` |
+| Interpreter | `/benchmark-artifacts/venvs/embodiinfer/bin/python` |
 | Device visibility | CPU-only, `CUDA_VISIBLE_DEVICES=""` |
 | Steps per session | 8 |
 | Schedule | 5 iterations, ABBA on even iterations and BAAB on odd iterations |
@@ -145,7 +145,7 @@ Peak RSS is Linux `resource.getrusage(RUSAGE_CHILDREN).ru_maxrss`.
 CPU-only policy and history-cache specialty gate:
 
 ```text
-CUDA_VISIBLE_DEVICES='' PYTHONPATH="$D" /benchmark-artifacts/venvs/vvla/bin/python \
+CUDA_VISIBLE_DEVICES='' PYTHONPATH="$D" /benchmark-artifacts/venvs/embodiinfer/bin/python \
   -m pytest -q -p no:cacheprovider \
   tests/test_qwen25_vln_history_image_cache.py tests/test_qwen25_vln_policies.py
 54 passed in 5.65s; outer wall 18.194s
@@ -154,7 +154,7 @@ CUDA_VISIBLE_DEVICES='' PYTHONPATH="$D" /benchmark-artifacts/venvs/vvla/bin/pyth
 Final CPU-only full suite:
 
 ```text
-CUDA_VISIBLE_DEVICES='' PYTHONPATH="$D" /benchmark-artifacts/venvs/vvla/bin/python \
+CUDA_VISIBLE_DEVICES='' PYTHONPATH="$D" /benchmark-artifacts/venvs/embodiinfer/bin/python \
   -m pytest -q -p no:cacheprovider
 246 passed, 36 skipped in 89.39s; outer wall 95.858s; rc=0
 ```

@@ -1,4 +1,4 @@
-"""Compare LeRobot and VVLA on local recorded observations, without a robot service."""
+"""Compare LeRobot and EmbodiInfer on local recorded observations, without a robot service."""
 
 from __future__ import annotations
 
@@ -22,8 +22,14 @@ from embodiinfer.policies.pi05.inference.config import Pi05OptimizationConfig
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
-MODES = ("lerobot", "vvla_eager", "vvla_eager_graph", "vvla_sdpa", "vvla_sdpa_graph")
-FUSED_MODE = "vvla_fused_graph"
+MODES = (
+    "lerobot",
+    "embodiinfer_eager",
+    "embodiinfer_eager_graph",
+    "embodiinfer_sdpa",
+    "embodiinfer_sdpa_graph",
+)
+FUSED_MODE = "embodiinfer_fused_graph"
 
 
 def read_observation(path: Path) -> dict[str, Any]:
@@ -50,7 +56,9 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, nargs="+", default=[1000, 0, 2026])
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--modes", choices=(*MODES, FUSED_MODE), nargs="+", default=list(MODES))
-    parser.add_argument("--optimizations", type=Path, help="Standalone recipe required for vvla_fused_graph")
+    parser.add_argument(
+        "--optimizations", type=Path, help="Standalone recipe required for embodiinfer_fused_graph"
+    )
     parser.add_argument("--matmul-precision", choices=("highest", "high", "medium"), default="highest")
     args = parser.parse_args()
     if not torch.cuda.is_available():
@@ -58,7 +66,7 @@ def main() -> None:
     if args.warmup < 1 or args.modes[0] != "lerobot" or len(args.modes) != len(set(args.modes)):
         parser.error("use at least one warmup and unique modes with lerobot first")
     if (FUSED_MODE in args.modes) != (args.optimizations is not None):
-        parser.error("select vvla_fused_graph together with --optimizations")
+        parser.error("select embodiinfer_fused_graph together with --optimizations")
     optimizations = Pi05OptimizationConfig.from_json(args.optimizations) if args.optimizations else None
     args.out.mkdir(parents=True, exist_ok=False)
     torch.set_float32_matmul_precision(args.matmul_precision)

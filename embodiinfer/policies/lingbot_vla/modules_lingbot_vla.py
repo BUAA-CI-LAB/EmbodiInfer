@@ -1,8 +1,8 @@
 """Vendored LingBot-VLA action-expert modules (weight holders for option-B loading).
 
-The LingBot-VLA policy must run in an existing env (vvla_env /
+The LingBot-VLA policy must run in an existing env (embodiinfer_env /
 pi0.5's env), but the official ``lingbotvla`` package needs LeRobot v3.0 + torch 2.8
-(conflicts with vvla_env). So — exactly as GR00T vendors its DiT and OpenVLA-OFT builds
+(conflicts with embodiinfer_env). So — exactly as GR00T vendors its DiT and OpenVLA-OFT builds
 Llama from stock modules — embodiinfer owns no runtime dependency on ``lingbotvla``: the VL
 backbone is stock ``Qwen2_5_VLForConditionalGeneration`` (weight holder), and the narrow
 Qwen2 action expert is defined here as plain ``nn.Module`` weight holders whose attribute

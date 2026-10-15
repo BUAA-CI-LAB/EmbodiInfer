@@ -1,4 +1,4 @@
-"""Use VVLA inference in an existing LeRobot preprocessing/control application."""
+"""Use EmbodiInfer inference in an existing LeRobot preprocessing/control application."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .processor_pi05 import Pi05Batch
 
 
 class LeRobotPi05Adapter:
-    """Keep the application's batch/action API while all model compute uses VVLA.
+    """Keep the application's batch/action API while all model compute uses EmbodiInfer.
 
     The loaded policy supplies weights, image preprocessing and config only.
     Its predict_action_chunk/sample_actions/transformer forwards are not called.
@@ -41,7 +41,7 @@ class LeRobotPi05Adapter:
                 capture_full_loop=cuda_graph,
             ),
         )
-        self.backend_name = f"vvla-pi05-{attention}-{'cuda-graph' if cuda_graph else 'eager'}"
+        self.backend_name = f"embodiinfer-pi05-{attention}-{'cuda-graph' if cuda_graph else 'eager'}"
         self.last_timing: dict[str, float] = {}
 
     def reset(self) -> None:
