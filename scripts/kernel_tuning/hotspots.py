@@ -573,7 +573,14 @@ class ProfileSession:
 def _events(profiler: Any) -> tuple[list[Range], list[Launch], list[DeviceKernel]]:
     """Ranges, host launches and device kernels recorded by a stopped profiler."""
     ranges, launches, devices = [], [], []
-    for event in profiler.profiler.kineto_results.events():
+    events = profiler.profiler.kineto_results.events()
+    if events and not hasattr(events[0], "activity_type"):
+        import torch
+
+        raise RuntimeError(
+            f"Hotspot attribution needs Kineto events with activity_type(); Torch {torch.__version__} lacks it"
+        )
+    for event in events:
         activity = event.activity_type()
         name = event.name()
         if activity == "user_annotation" and name.startswith(RANGE):

@@ -149,7 +149,11 @@ def test_session_profiles_the_window_and_restores_patches(fake_engine):
     assert names.count("kt/step:0") == 1 and names.count("kt/step:1") == 1
     assert "kt/step:2" not in names
     assert names.count("kt/op:gated_residual") >= 2
-    assert session.kernels() == []  # CPU-only run: no device kernels
+    if hasattr(session.trace.profiler.kineto_results.events()[0], "activity_type"):
+        assert session.kernels() == []  # CPU-only run: no device kernels
+    else:
+        with pytest.raises(RuntimeError, match="activity_type"):
+            session.kernels()
 
 
 def test_session_requires_enough_steps(fake_engine):
