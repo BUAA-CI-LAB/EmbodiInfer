@@ -36,14 +36,14 @@ from scripts.kernel_tuning.registration.workspace import (
 )
 
 SOURCE = "embodiinfer/policies/pi05/modeling_pi05.py"
-NEW_TEST = "tests/test_registry_linear.py"
+NEW_TEST = "tests/test_registry_matmul_t.py"
 
 
 def specification(**overrides) -> RegistrationSpec:
     """Use an existing unfused registry gap without loading a model/checkpoint."""
     value = {
         "model": "pi05",
-        "op": "linear",
+        "op": "matmul_t",
         "sites": [{"source": SOURCE, "function": "_fused_qkv", "expression": "F.linear(x, weight)"}],
         "budget": {"max_attempts": 5, "max_seconds": 120, "agent_timeout_seconds": 10},
     }
@@ -72,7 +72,7 @@ def test_new_targets_selected_repository(clean_repository, tmp_path, monkeypatch
             "--model",
             "pi05",
             "--op",
-            "linear",
+            "matmul_t",
             "--site",
             f"{SOURCE}::_fused_qkv::F.linear(x, weight)",
         ]
@@ -142,30 +142,30 @@ def write_candidate(run: RegistrationRun) -> None:
     start, end = source.index("def _fused_qkv("), source.index("def _prepare_fused_projection_weights(")
     source = (
         source[:start]
-        + source[start:end].replace("F.linear(x, weight)", '_op(kernels, "linear", False)(x, weight)')
+        + source[start:end].replace("F.linear(x, weight)", '_op(kernels, "matmul_t", False)(x, weight)')
         + source[end:]
     )
     source = source.replace("_fused_qkv(attn, h)", "_fused_qkv(attn, h, kernels=self._kernels)")
     (run.worktree / SOURCE).write_text(source, encoding="utf-8")
     with (run.worktree / REFERENCE).open("a", encoding="utf-8") as stream:
         stream.write(
-            '\n\ndef linear(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:\n    """Preserve the original bias-free F.linear expression."""\n    return F.linear(x, weight)\n'
+            '\n\ndef matmul_t(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:\n    """Preserve the original bias-free F.linear expression."""\n    return F.linear(x, weight)\n'
         )
     with (run.worktree / REGISTRY).open("a", encoding="utf-8") as stream:
-        stream.write('\nregister_lazy_op("linear", "torch", "embodiinfer.backend.torch.ops", "linear")\n')
+        stream.write('\nregister_lazy_op("matmul_t", "torch", "embodiinfer.backend.torch.ops", "matmul_t")\n')
     (run.worktree / NEW_TEST).write_text("def test_new_reference():\n    assert True\n", encoding="utf-8")
     (run.worktree / "PLAN.md").write_text("Register the unchanged F.linear expression.", encoding="utf-8")
     atomic_json(
         run.worktree / "REGISTRATION.json",
         {
-            "op": "linear",
-            "reference": f"{REFERENCE}::linear",
+            "op": "matmul_t",
+            "reference": f"{REFERENCE}::matmul_t",
             "sites": [
                 {
                     "id": "S1",
                     "file": SOURCE,
                     "function": "_fused_qkv",
-                    "call": '_op(kernels, "linear", False)(x, weight)',
+                    "call": '_op(kernels, "matmul_t", False)(x, weight)',
                 }
             ],
             "preserved": [],
@@ -198,12 +198,12 @@ def test_spec_rejects_invalid_contracts(overrides) -> None:
 def test_yaml_and_cli_share_validation(tmp_path) -> None:
     path = tmp_path / "spec.yaml"
     path.write_text(
-        f"model: pi05\nop: linear\nsites:\n  - source: {SOURCE}\n    function: _fused_qkv\n    expression: F.linear(x, weight)\n",
+        f"model: pi05\nop: matmul_t\nsites:\n  - source: {SOURCE}\n    function: _fused_qkv\n    expression: F.linear(x, weight)\n",
         encoding="utf-8",
     )
     yaml_spec = load_spec(path, model=None, op=None, sites=[])
     cli_spec = load_spec(
-        None, model="pi05", op="linear", sites=[f"{SOURCE}::_fused_qkv::F.linear(x, weight)"]
+        None, model="pi05", op="matmul_t", sites=[f"{SOURCE}::_fused_qkv::F.linear(x, weight)"]
     )
     assert yaml_spec == cli_spec
     with pytest.raises(ContractError):
@@ -333,15 +333,15 @@ def test_structure_rejects_misregistration(registration_run, mutation, message) 
     elif mutation == "loop":
         p = run.worktree / REGISTRY
         text = p.read_text(encoding="utf-8")
-        line = 'register_lazy_op("linear", "torch", "embodiinfer.backend.torch.ops", "linear")'
+        line = 'register_lazy_op("matmul_t", "torch", "embodiinfer.backend.torch.ops", "matmul_t")'
         p.write_text(text.replace(line, "for _ in [1]:\n    " + line), encoding="utf-8")
     elif mutation in {"old_expression", "guard", "global"}:
         p = run.worktree / SOURCE
         text = p.read_text(encoding="utf-8")
         if mutation == "old_expression":
             text = text.replace(
-                'fused = _op(kernels, "linear", False)(x, weight)',
-                'unused = F.linear(x, weight)\n    fused = _op(kernels, "linear", False)(x, weight)',
+                'fused = _op(kernels, "matmul_t", False)(x, weight)',
+                'unused = F.linear(x, weight)\n    fused = _op(kernels, "matmul_t", False)(x, weight)',
             )
         elif mutation == "guard":
             text = text.replace("if torch.is_grad_enabled() or attn.training:", "if attn.training:")
@@ -355,7 +355,7 @@ def test_structure_rejects_misregistration(registration_run, mutation, message) 
         p = run.worktree / "REGISTRATION.json"
         document = read_json(p)
         if mutation == "triton":
-            document["sites"][0]["call"] = '_op(kernels, "linear", True)(x, weight)'
+            document["sites"][0]["call"] = '_op(kernels, "matmul_t", True)(x, weight)'
         else:
             import ast
 
@@ -457,7 +457,7 @@ def test_real_registry_resolution_in_isolated_interpreter(registration_run) -> N
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
     run = registration_run
-    asyncio.run(check_unregistered(run.base, "linear", sys.executable, run.root / "real-preflight.log"))
+    asyncio.run(check_unregistered(run.base, "matmul_t", sys.executable, run.root / "real-preflight.log"))
     write_candidate(run)
     result = asyncio.run(checks.registry_probe(run, run.root / "real-registry.log", timeout=30))
     assert result["returncode"] == 0
@@ -782,23 +782,23 @@ class KernelSelection:
     source = worktree / SOURCE
     source.write_text(
         source.read_text(encoding="utf-8").replace(
-            "return raw(x, weight)", 'return _op(kernels, "linear", False)(x, weight)'
+            "return raw(x, weight)", 'return _op(kernels, "matmul_t", False)(x, weight)'
         ),
         encoding="utf-8",
     )
     with (worktree / REFERENCE).open("a", encoding="utf-8") as stream:
         stream.write(
-            '\n\ndef linear(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:\n    """Synthetic multiplication reference used only to test the controller."""\n    return x * weight\n'
+            '\n\ndef matmul_t(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:\n    """Synthetic multiplication reference used only to test the controller."""\n    return x * weight\n'
         )
     with (worktree / REGISTRY).open("a", encoding="utf-8") as stream:
-        stream.write('\nregister_lazy_op("linear", "torch", "embodiinfer.backend.torch.ops", "linear")\n')
+        stream.write('\nregister_lazy_op("matmul_t", "torch", "embodiinfer.backend.torch.ops", "matmul_t")\n')
     (worktree / NEW_TEST).write_text(
         """from embodiinfer.backend.torch import ops
 
 
 def test_reference():
-    assert hasattr(ops, "linear")
-    assert ops.linear(2, 3) == 6
+    assert hasattr(ops, "matmul_t")
+    assert ops.matmul_t(2, 3) == 6
 
 
 def test_route():
@@ -812,21 +812,21 @@ def test_route():
             return lambda x, w: x * w
 
     assert compute(2, 3, Recording()) == 6
-    assert calls == ["linear"]
+    assert calls == ["matmul_t"]
 """,
         encoding="utf-8",
     )
     atomic_json(
         worktree / "REGISTRATION.json",
         {
-            "op": "linear",
-            "reference": f"{REFERENCE}::linear",
+            "op": "matmul_t",
+            "reference": f"{REFERENCE}::matmul_t",
             "sites": [
                 {
                     "id": "S1",
                     "file": SOURCE,
                     "function": "compute",
-                    "call": '_op(kernels, "linear", False)(x, weight)',
+                    "call": '_op(kernels, "matmul_t", False)(x, weight)',
                 }
             ],
             "preserved": [{"site": "S1", "branch": "quantized"}],
