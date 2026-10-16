@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import torch
 
 import embodiinfer.policies.pi05.modeling_pi05 as modeling_pi05
+from embodiinfer.layers import KernelSelection
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy, Pi05Prefix, _adarms_projection, _mlp
 from embodiinfer.policies.pi05.processor_pi05 import Pi05Batch
 
@@ -35,6 +36,7 @@ def _policy_stub(*, attention: str = "eager"):
         compile_backend="none",
         denoise_attention="sdpa",
         _attn=_AttentionBackend(),
+        _kernels=KernelSelection("none"),
     )
     return policy
 

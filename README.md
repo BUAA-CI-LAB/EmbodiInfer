@@ -212,6 +212,7 @@ Existing `vvla-*` command aliases and `vvla.policy.*` wire schemas remain suppor
 | Integrate or extend the engine | [Architecture](docs/en/architecture.md) · [Python API](docs/en/api.md) |
 | Inspect model behavior | [Models](docs/en/models.md) |
 | Evaluate performance | [Benchmarks](docs/en/benchmark.md) |
+| Profile and tune kernels with an agent | [Kernel tuning workflow](docs/proposals/0008-kernel-tuning.md) |
 
 ## Contributing
 
