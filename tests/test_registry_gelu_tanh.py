@@ -145,6 +145,7 @@ def _vision(dtype, selection, activation=None):
     policy = SimpleNamespace(
         _m=SimpleNamespace(paligemma_with_expert=SimpleNamespace(paligemma=SimpleNamespace(model=pg))),
         _kernels=selection,
+        _get_optimizations=lambda: None,
         _vision_attn=_Attention(),
     )
     policy._embed_image = pi05.Pi05Policy._embed_image.__get__(policy, type(policy))

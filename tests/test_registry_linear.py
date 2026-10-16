@@ -163,6 +163,7 @@ def _vision(dtype, selection):
     policy = SimpleNamespace(
         _m=SimpleNamespace(paligemma_with_expert=SimpleNamespace(paligemma=SimpleNamespace(model=pg))),
         _kernels=selection,
+        _get_optimizations=lambda: None,
         _vision_attn=_Attention(),
     )
     slots = [(attention, name) for name in ("q_proj", "k_proj", "v_proj", "out_proj")]

@@ -254,7 +254,7 @@ def _packed_quantized_projection(
 
 
 def _fused_linear_pair(
-    x: torch.Tensor, first: Any, second: Any, *, kernels: KernelSelection | None
+    x: torch.Tensor, first: Any, second: Any, *, kernels: KernelSelection | None = None
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Evaluate two bias-free projections as one GEMM and split the result."""
     if torch.is_grad_enabled() or first.training or second.training:
@@ -375,14 +375,12 @@ def _prepare_compiled_inference_helpers() -> None:
     The prefix tower is itself wrapped in ``torch.compile``.  Lazily adding
     helper wrappers while Dynamo traces that outer function invalidates its
     global-dictionary guard and needlessly consumes one cache entry per helper.
-    Creating the four lazy wrappers up front preserves the same compiled
-    operators and numerics while keeping that guard stable across layouts.
+    Creating the remaining lazy wrappers up front keeps that guard stable across
+    layouts. RoPE and tanh-GELU resolve through registry operators instead.
     """
     for helper in (
-        _apply_rope_impl,
         _gated_residual_impl,
         _rmsnorm_math,
-        _gated_gelu_impl,
     ):
         _inference_helper(helper, True)
 
@@ -872,7 +870,10 @@ class Pi05Policy(FlowVLAPolicy):
             q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
         else:
             q, k = _apply_rope(
-                q, k, cos, sin,
+                q,
+                k,
+                cos,
+                sin,
                 self.compile_backend == "inductor",
                 native_expert and q.dtype in (torch.bfloat16, torch.float16),
                 self._kernels,
