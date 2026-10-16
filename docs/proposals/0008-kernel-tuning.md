@@ -384,9 +384,9 @@ Implemented components are the Humanize2 Flow/archive, discovery and registry
 capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
 loader, install, model verification, the CPU registration controller, and an
 opt-in `--unfenced` agent mode for hosts without Landlock (Section 11.1). The
-pi0.5 call sites are integrated; the tuned profile directory currently contains
-the loader but no committed hardware profile. Historical target-machine checks
-are not new validation performed by this documentation change.
+pi0.5 call sites are integrated. One hardware profile is committed: `orin_pi05`
+for Jetson AGX Orin (Section 9.1); `kernel_profile` still defaults to `none`, so
+it is used only when selected by name or by `auto` on matching hardware.
 
 Remaining work from the merged design:
 
@@ -440,7 +440,66 @@ Report Torch, existing Triton and tuned-profile rows with mean/P50/P95 and stage
 splits, plus operator ablations. An additional Inductor `max-autotune` row is
 useful only where it compiles and passes the same numerical gate. Keep raw
 conditions and measurements with the report. A win on one GPU, shape or batch
-is not evidence for another; no new performance claim is made here.
+is not evidence for another.
+
+### 9.1 `orin_pi05` on Jetson AGX Orin
+
+Measured 2026-10-15 on Jetson AGX Orin 32 GB (sm_87, `nvpmodel` MAXN), L4T
+R36.4.7, CUDA 12.6, Torch 2.10.0, Triton 3.6.0, checkpoint `pi05_base`
+(`config.json` SHA256 `36786971…`). Inputs are 200 recorded observations from
+the first two LIBERO-10 task files (dataset revision `f13aa24a…`, input file
+SHA256 `94e5cad5…`). B=1, ten denoise steps, seed 1000 with one FP32 CUDA noise
+draw per input rounded to BF16. Mixed precision: the SigLIP vision tower and
+multimodal projector run in FP32, everything else in BF16. `native_inference`,
+`native_embeddings`, Triton prefix and denoise attention, `compile_backend:
+none`, full denoise-loop CUDA Graph, `TORCHINDUCTOR_DETERMINISTIC=1`. Ten warmup
+calls, then the 200 inputs three times (600 timed calls). Rows differ only in
+`kernel_profile`. All rows ran the source tree that adds this profile, in which
+pi0.5 also routes its projections through the `linear` registry operator and its
+SigLIP tanh GELU through `gelu_tanh`.
+
+| `kernel_profile` | Mean (ms) | P50 (ms) | P95 (ms) | vs `torch` |
+|---|---|---|---|---|
+| `torch` | 825.5 | 825.3 | 827.5 | — |
+| `none` (existing Triton) | 609.8 | 609.7 | 611.1 | −26.1% |
+| `orin_pi05` | 537.8 | 537.5 | 539.9 | −34.9% (−11.8% vs `none`) |
+
+Deviations from the protocol above: an experiment-local evaluator replaced
+`benchmarks/pi05-benchmark/benchmark.py`, which does not pass
+`native_embeddings` and fixes camera keys for the LIBERO fine-tuned checkpoint;
+200 inputs instead of 1,600; no prefill/decode split. The prefix encoder runs
+eagerly instead of under Inductor because the tuned kernels' layout gates call
+`Tensor.storage_offset()`, which Dynamo cannot trace under `fullgraph`; the
+whole denoise loop is still captured in one CUDA Graph.
+
+Every captured layout dispatched to its tuned kernel: no `rotate_qk` or
+`split_kv_attention` call fell back. `linear` falls back for the layouts that
+were not tuned (FP32 vision layers and the fused gate/up projections). Against
+`torch`, the first action of every chunk (6,400 values) differs by at most
+0.0156 (RMSE 0.0016). The `none` row differs from `torch` by a similar amount
+(0.0195 / 0.0016). The whole-model `verify` gate (Section 6) was not run for
+this profile.
+
+Operators, from the promoted attempt's paired evaluator rounds against the
+task's Torch baseline (calls per inference in parentheses):
+
+| Operator (run) | Workload | Torch (ms) | Tuned (ms) |
+|---|---|---|---|
+| `split_kv_attention` (`20261015T055303Z-8eeab7204c`) | prefix, 672 keys (18) | 3.62 | 0.49 |
+| | denoise, 672 + 50 keys (180) | 0.908 | 0.070 |
+| `linear` (`20261015T090245Z-031b8d3bd3`) | prefix `down_proj`, 672×16384→2048 (18) | 6.45 | 3.77 |
+| | expert `down_proj`, 50×4096→1024 (180) | 0.076 | 0.078 |
+| `rotate_qk` prefix (`20261015T134002Z-6a72e1be9e`) | 672 tokens (18) | 0.434 | 0.049 |
+| `rotate_qk` decode (`20261015T150031Z-03be0c2142`) | 50 tokens (180) | 0.071 | 0.013 |
+
+The tuned expert `down_proj` is about 3% slower than Torch. It was promoted
+because the weighted mean over both workloads improved.
+`rotate_qk` combines two separately tuned exports with disjoint verified
+layouts. Its package dispatches each call to the variant whose `applies`
+accepts it. The decode export was tuned after capture recorded the production
+output layout (a contiguous query). Replacing the existing Triton decode
+rotation with it changed end-to-end latency by less than 1 ms and left actions
+bit-identical.
 
 ## 10. Risks and limitations
 
