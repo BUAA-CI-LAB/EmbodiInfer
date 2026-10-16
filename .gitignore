@@ -30,3 +30,6 @@ assets/*
 # Documentation build output
 site/
 site-zh/
+
+# Task-local engineering artifacts and validation logs.
+devlocal/

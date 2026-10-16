@@ -13,6 +13,8 @@ Two capability tiers keep the abstraction honest across paradigms:
 
 The concrete decoders, one per paradigm:
 
+  * :class:`FlowActionDecoder` (plain ``ActionDecoder``) — deterministic flow
+    integration without the policy-gradient contract.
   * :class:`FlowDecoder` (``RLDecoder``) — the N-step flow-matching Euler loop (pi0.5,
     GR00T, LingBot-VLA); wraps a :class:`~embodiinfer.policies.base.FlowVLAPolicy`'s
     ``denoise_step``/``flow_schedule`` + the flow-SDE rollout log-prob.
@@ -39,7 +41,9 @@ from ..models.schedulers.flow import euler_step
 from ..types import DecodeTrace
 
 if TYPE_CHECKING:
-    from .base import FlowVLAPolicy, MemoryState, PrefixState
+    from ..engine.async_inference.rtc import RTCGuidance
+    from ..engine.graph import GraphManager
+    from .base import FlowVLAPolicy, MemoryState, PolicyBatch, PrefixState
 
 
 @dataclass
@@ -93,15 +97,61 @@ class ActionDecoder(abc.ABC):
         del generator, cancelled
         return DecodeResult(actions=self.produce_chunk(state, prefix, num_steps, bucket, graphs))
 
+    def supports_request_execution(self, graphs: GraphManager | None) -> bool:
+        """Whether this decoder can execute stateless prefill and decode together.
+
+        The default retains two-stage execution. This capability is independent
+        of RL/recurrent decoding and is used only by synchronous ``execute``.
+        A decoder opting in must preserve initial-noise and output semantics.
+        """
+        del graphs
+        return False
+
+    def decode_request(
+        self,
+        state: torch.Tensor | None,
+        batch: PolicyBatch,
+        num_steps: int,
+        bucket: int,
+        graphs: GraphManager | None,
+    ) -> DecodeResult:
+        """Run one prepared stateless request, returning independently owned actions.
+
+        Called only after ``supports_request_execution`` returns true. The
+        engine supplies padded/device-ready inputs and the usual initial state.
+        Unsupported modes must decline the capability before consuming inputs
+        or random state; execution errors are propagated rather than retried.
+        """
+        raise NotImplementedError("This decoder does not support whole-request execution")
+
     @abc.abstractmethod
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
         """Deterministic generation: prefix (+ staged state) -> actions ``[bucket, H, A]``.
 
         ``graphs`` is the engine's :class:`~embodiinfer.engine.graph.GraphManager` (or ``None``
         when CUDA graphs are disabled); the decoder uses it to replay a captured loop.
         """
+
+    @property
+    def supports_rtc_guidance(self) -> bool:
+        """Whether this decoder applies RTC prefix conditioning."""
+        return False
+
+    def reject_rtc_guidance(self, guidance: RTCGuidance | None) -> None:
+        """Fail explicitly instead of silently dropping an async prefix."""
+        if guidance is not None and guidance.enabled:
+            from ..exceptions import UnsupportedAsyncGuidanceError
+
+            raise UnsupportedAsyncGuidanceError(f"{type(self).__name__} does not support RTC prefix guidance")
 
 
 class RLDecoder(ActionDecoder):
@@ -158,36 +208,61 @@ class AutoregressiveDecoder(ActionDecoder):
         """Generate tokens eagerly and return the final memory plus trace."""
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
+        self.reject_rtc_guidance(guidance)
         return self.decode(state, prefix, num_steps, bucket, graphs).actions
 
 
-class FlowDecoder(RLDecoder):
-    """N-step flow-matching Euler loop + flow-SDE rollout log-prob (pi0.5, GR00T).
+class FlowActionDecoder(ActionDecoder):
+    """Deterministic flow integration with policy-owned state and output conversion."""
 
-    Policies own the internal state shape, output conversion, and optional
-    likelihood mask. Integration and stochastic trajectory scoring are shared.
-    """
-
-    def __init__(self, policy: FlowVLAPolicy):
+    def __init__(self, policy: FlowVLAPolicy) -> None:
+        """Use the policy's flow schedule, denoiser, and action transforms."""
         self.policy = policy
 
     def state_shape(self, batch_size: int) -> tuple[int, int, int]:
         """Expose the policy's internal flow shape for static graph buffers."""
         return self.policy.flow_state_shape(batch_size)
 
+    @property
+    def supports_rtc_guidance(self) -> bool:
+        return True
+
     def init_state(self, batch_size: int, generator: torch.Generator | None = None) -> torch.Tensor:
         return self.policy.new_noise(batch_size, generator=generator)
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs: GraphManager | None,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
         """Integrate the flow field, then restore the policy's public action representation."""
-        return self.policy.finalize_actions(self.integrate(state, prefix, num_steps, bucket, graphs), prefix)
+        return self.policy.finalize_actions(
+            self.integrate(state, prefix, num_steps, bucket, graphs, guidance=guidance), prefix
+        )
 
     def integrate(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs: GraphManager | None,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
         """Run all flow steps and return model-space actions before output transforms.
 
@@ -196,6 +271,8 @@ class FlowDecoder(RLDecoder):
         """
         if state is None:
             raise ValueError("Flow decoding requires an initial state")
+        if guidance is not None and guidance.enabled:
+            return self._integrate_rtc(state, prefix, num_steps, guidance)
         x = state
         policy = self.policy
         device, dtype = x.device, x.dtype
@@ -212,6 +289,65 @@ class FlowDecoder(RLDecoder):
                 velocity = graph.run(x, t) if graph is not None else policy.denoise_step(x, t, prefix)
                 x = euler_step(x, velocity, dt)
         return x
+
+    def _integrate_rtc(
+        self,
+        state: torch.Tensor,
+        prefix: PrefixState,
+        num_steps: int,
+        guidance: RTCGuidance,
+    ) -> torch.Tensor:
+        """Eager RTC-conditioned integration for both FlowActionDecoder users."""
+        from ..engine.async_inference.rtc import (
+            clamp_prefix,
+            flow_noise_end,
+            hard_prefix_mask,
+            rtc_guided_velocity,
+        )
+
+        prefix_left_over = guidance.prev_chunk_left_over
+        if prefix_left_over is None:
+            raise ValueError("RTC guidance requires a previous chunk left-over")
+        if prefix_left_over.shape != state.shape:
+            raise ValueError(
+                f"RTC prefix shape {tuple(prefix_left_over.shape)} must match the decode state "
+                f"{tuple(state.shape)}"
+            )
+        prefix_left_over = prefix_left_over.to(device=state.device, dtype=state.dtype)
+        schedule = self.policy.flow_schedule(num_steps)
+        noise_at = flow_noise_end(schedule)
+        device, dtype = state.device, state.dtype
+        x = state
+        mask = (
+            hard_prefix_mask(guidance.inference_delay, state.shape[1], device=device)
+            if guidance.hard_prefix
+            else None
+        )
+        for t_val, dt in schedule:
+            if mask is not None:
+                x = clamp_prefix(x, prefix_left_over, mask)
+                t = torch.full((state.shape[0],), t_val, device=device, dtype=dtype)
+                velocity = self.policy.denoise_step(x, t, prefix)
+            else:
+                velocity = rtc_guided_velocity(
+                    lambda x_in, t_val=t_val: self.policy.denoise_step(
+                        x_in,
+                        torch.full((state.shape[0],), t_val, device=device, dtype=dtype),
+                        prefix,
+                    ),
+                    x,
+                    t_val,
+                    guidance,
+                    noise_at=noise_at,
+                )
+            x = euler_step(x, velocity, dt)
+            if mask is not None:
+                x = clamp_prefix(x, prefix_left_over, mask)
+        return x
+
+
+class FlowDecoder(FlowActionDecoder, RLDecoder):
+    """Flow integration plus stochastic rollout and differentiable trajectory scoring."""
 
     def sample_with_logprob(
         self, prefix: PrefixState, num_steps: int, sigma, generator: torch.Generator | None = None
@@ -259,8 +395,16 @@ class ParallelDecoder(RLDecoder):
         return None
 
     def produce_chunk(
-        self, state: torch.Tensor | None, prefix: PrefixState, num_steps: int, bucket: int, graphs
+        self,
+        state: torch.Tensor | None,
+        prefix: PrefixState,
+        num_steps: int,
+        bucket: int,
+        graphs,
+        *,
+        guidance: RTCGuidance | None = None,
     ) -> torch.Tensor:
+        self.reject_rtc_guidance(guidance)
         logits = self.policy.decode_action_logits(prefix, graphs=graphs, bucket=bucket)
         idxs, _ = self.policy.head.sample(logits, do_sample=False)
         return self.policy.head.tokens_to_actions(idxs)

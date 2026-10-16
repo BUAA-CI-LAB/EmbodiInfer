@@ -43,10 +43,9 @@ capture restricts the recording to the capturing thread only.
 
 from __future__ import annotations
 
-import threading
-
 import torch
 
+from ..backend.torch.request_graph import CUDA_GRAPH_CAPTURE_LOCK
 from ..models.schedulers.flow import euler_step, sde_coefficients, sde_transition_mean
 from ..policies.base import PrefixState, VLAPolicy
 
@@ -55,7 +54,7 @@ from ..policies.base import PrefixState, VLAPolicy
 # replicas may replay concurrently, but their one-time lazy captures must not
 # enter capture_begin at the same instant (cudaErrorIllegalState on dual-GPU
 # in-process DP).
-_CAPTURE_LOCK = threading.Lock()
+_CAPTURE_LOCK = CUDA_GRAPH_CAPTURE_LOCK
 
 
 def _flow_state_shape(policy: VLAPolicy, batch: int) -> tuple[int, int, int]:

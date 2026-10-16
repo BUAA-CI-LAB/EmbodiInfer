@@ -152,6 +152,9 @@ include = ["embodiinfer*", "vvla"]
 [tool.embodiinfer.kernel-tuning]
 tooling-project = "scripts/kernel_tuning"
 evaluator-requirements = "benchmarks/kernel_tuning/requirements.txt"
+[tool.setuptools.package-data]
+"embodiinfer.backend.cuda" = ["csrc/*.cu", "csrc/*.cuh", "csrc/*.cpp"]
+"embodiinfer.policies.pi05.inference" = ["calibration/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

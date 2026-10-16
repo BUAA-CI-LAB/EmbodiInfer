@@ -53,9 +53,6 @@ def load_checkpoint(
             checkpoint, load_device=load_device, low_cpu_mem_usage=low_cpu_mem_usage
         ), None
 
-    if low_cpu_mem_usage:
-        raise NotImplementedError("low_cpu_mem_usage currently supports LeRobot PI0.5 checkpoints")
-
     from .openpi import load_openpi_checkpoint
 
     return load_openpi_checkpoint(
@@ -63,6 +60,7 @@ def load_checkpoint(
         load_device=load_device,
         checkpoint_config=checkpoint_config,
         use_orbax=dialect == "openpi-orbax",
+        low_cpu_mem_usage=low_cpu_mem_usage,
     )
 
 

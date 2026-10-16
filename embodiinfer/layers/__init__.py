@@ -1,5 +1,6 @@
 """Operator contracts and backend-routing registries."""
 
+from .activation import GeluMulBackend, PairedGeluBackend, gelu_mul_backends, paired_gelu_backends
 from .attention import (
     AttentionBackend,
     SplitKVAttentionBackend,
@@ -8,6 +9,7 @@ from .attention import (
     get_split_kv_attention_backend,
     register_attention,
 )
+from .config import OperatorBackends
 from .linear import (
     FP8Config,
     INT8Config,
@@ -19,9 +21,38 @@ from .linear import (
     register_linear,
     resolve_linear_backend,
 )
+from .normalization import NormalizationBackend, NormQuantBackend, norm_quant_backends, normalization_backends
 from .ops import KernelSelection, available_ops, get_op, register_lazy_op, register_op
+from .quantization import (
+    ActivationQuantizer,
+    EncodedActivation,
+    ProjectionBackend,
+    projection_backends,
+    quantization_backends,
+)
+from .registry import BackendRegistry, OperatorCapabilities, OperatorRequest
+from .rotary import RotaryBackend, rotary_backends
 
 __all__ = [
+    "BackendRegistry",
+    "OperatorCapabilities",
+    "OperatorRequest",
+    "OperatorBackends",
+    "RotaryBackend",
+    "rotary_backends",
+    "NormalizationBackend",
+    "NormQuantBackend",
+    "GeluMulBackend",
+    "PairedGeluBackend",
+    "ActivationQuantizer",
+    "EncodedActivation",
+    "ProjectionBackend",
+    "normalization_backends",
+    "norm_quant_backends",
+    "gelu_mul_backends",
+    "paired_gelu_backends",
+    "quantization_backends",
+    "projection_backends",
     "AttentionBackend",
     "SplitKVAttentionBackend",
     "get_attention_backend",
