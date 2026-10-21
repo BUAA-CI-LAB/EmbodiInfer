@@ -85,8 +85,8 @@ def resolve_preset(
     if device == "4090" and "nvfp4" in formats.values():
         raise ValueError("NVFP4 requires Blackwell; RTX 4090 supports BF16/FP8 projections")
 
-    if device not in ("thor", "spark"):
-        raise ValueError("Optimized presets have launch profiles only for Thor and Spark; use strict")
+    if device not in ("thor", "spark", "4090"):
+        raise ValueError("Optimized presets have launch profiles only for Thor, Spark and 4090; use strict")
     config = Pi05OptimizationConfig(
         hardware=device,
         numerics="openpi_rlinf",
@@ -96,12 +96,14 @@ def resolve_preset(
         compact_prefix=True,
         prefix_kv_only=True,
         reuse_action_context=True,
-        attention="folded_flash" if device == "thor" else "query_major",
+        attention="folded_flash" if device in ("thor", "4090") else "query_major",
         operators=OperatorBackends(
+            normalization="cuda_reduce" if device == "4090" else "cuda_strict",
+            norm_quant="cuda_reduce" if device == "4090" else "cuda_strict",
             paired_gelu="triton_exact",
-            projection="torch_matmul",
+            projection="triton_small_m" if device == "4090" else "torch_matmul",
             rotary="cuda",
-            gelu_mul="cuda_lookup" if device == "thor" else "cuda",
+            gelu_mul="cuda_lookup" if device in ("thor", "4090") else "cuda",
         ),
     )
     if all(value == "bf16" for value in formats.values()):

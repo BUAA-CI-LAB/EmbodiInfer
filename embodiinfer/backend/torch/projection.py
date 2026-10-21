@@ -24,6 +24,7 @@ class Projection:
         workspace_key: Callable[[torch.device], WorkspaceKey] | None = None,
         *,
         contiguous_matmul: bool = False,
+        triton_small_m: bool = False,
     ) -> None:
         """Preserve the validated weight quantizer and native GEMM layouts."""
         if precision not in ("bf16", "fp8", "nvfp4"):
@@ -34,7 +35,10 @@ class Projection:
             raise ValueError("Calibrated projection maximum must be finite and positive")
         if precision != "bf16" and (backend is None or weight.device.type != "cuda"):
             raise ValueError("Low precision projections require CUDA and an activation quantizer")
-        if precision != "bf16" and not all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
+        has_scaled = all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")) or (
+            precision == "fp8" and hasattr(torch, "_scaled_mm")
+        )
+        if precision != "bf16" and not has_scaled:
             raise RuntimeError("Calibrated projections require the scaled_mm API tested in Torch 2.13")
         if precision != "bf16":
             minimum_sm = (10, 0) if precision == "nvfp4" else (8, 9)
@@ -42,6 +46,7 @@ class Projection:
                 raise ValueError(f"{precision} native GEMM requires SM {minimum_sm} or newer")
         self.precision, self.maximum, self.backend = precision, maximum, backend
         self.contiguous_matmul, self.bf16_matrix = contiguous_matmul, None
+        self.triton_small_m = triton_small_m
         self.workspace_key = workspace_key or (
             lambda device: ("stream", torch.cuda.current_stream(device).cuda_stream)
         )
@@ -57,7 +62,10 @@ class Projection:
             self.weight_scale = torch.where(
                 maximum_weight > 0, maximum_weight / 448.0, torch.ones_like(maximum_weight)
             )
+            self.weight_scale_1d = self.weight_scale.reshape(1)
             self.weight = (values / self.weight_scale).clamp(-448, 448).to(torch.float8_e4m3fn)
+            self.weight_t = self.weight.t()
+            self.weight_kn = self.weight_t.contiguous() if triton_small_m else None
         else:
             plan = backend.plan(weight.detach().contiguous(), 4).quantize(weight.detach().contiguous())
             self.weight, self.weight_scale, self.weight_blocks = (
@@ -96,9 +104,22 @@ class Projection:
         if self.precision != "bf16" and (encoded is None or encoded.scale is None):
             raise ValueError("Low precision projections require encoded activations and a global scale")
         shape = (*inputs.shape[:-1], self.output_dim)
-        matrix = inputs.reshape(-1, inputs.shape[-1]).contiguous()
         if self.precision == "bf16":
-            if self.contiguous_matmul:
+            matrix = inputs.reshape(-1, inputs.shape[-1]).contiguous()
+            if (
+                self.triton_small_m
+                and matrix.shape[0] <= 16
+                and matrix.shape[1] <= 2048
+                and self.device.type == "cuda"
+            ):
+                from ..triton.geglu import triton_linear
+
+                if self.bf16_matrix is None:
+                    if torch.cuda.is_current_stream_capturing():
+                        raise RuntimeError("Warm contiguous BF16 weights before capture")
+                    self.bf16_matrix = self.bf16_weight.t().contiguous()
+                output = triton_linear(matrix, self.bf16_matrix)
+            elif self.contiguous_matmul:
                 if self.bf16_matrix is None:
                     if self.device.type == "cuda" and torch.cuda.is_current_stream_capturing():
                         raise RuntimeError("Warm contiguous BF16 weights before capture")
@@ -107,15 +128,29 @@ class Projection:
             else:
                 output = F.linear(matrix, self.bf16_weight)
         elif self.precision == "fp8":
-            output = F.scaled_mm(
-                encoded.output,
-                self.weight.t(),
-                encoded.scale,
-                F.ScalingType.TensorWise,
-                self.weight_scale,
-                F.ScalingType.TensorWise,
-                output_dtype=torch.bfloat16,
-            )
+            q_in = encoded.output
+            rows = inputs.shape[0] * inputs.shape[1] if inputs.ndim == 3 else inputs.shape[0]
+            if all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
+                output = F.scaled_mm(
+                    q_in,
+                    self.weight_t,
+                    encoded.scale,
+                    F.ScalingType.TensorWise,
+                    self.weight_scale,
+                    F.ScalingType.TensorWise,
+                    output_dtype=torch.bfloat16,
+                )
+            else:
+                output = torch._scaled_mm(
+                    q_in,
+                    self.weight_t,
+                    scale_a=encoded.scale.reshape(1),
+                    scale_b=self.weight_scale_1d,
+                    out_dtype=torch.bfloat16,
+                    use_fast_accum=True,
+                )
+            if output.shape[0] != rows:
+                output = output[:rows]
         else:
             output = F.scaled_mm(
                 encoded.output.view(torch.float4_e2m1fn_x2),
@@ -161,3 +196,20 @@ class CalibratedMatmulBackend(CalibratedProjectionBackend):
     ) -> Projection:
         """Pack BF16 matrices on first warmup; calibrated GEMMs are unchanged."""
         return Projection(weight, maximum, precision, quantizer, workspace_key, contiguous_matmul=True)
+
+
+class CalibratedTritonBackend(CalibratedProjectionBackend):
+    """Use weight-streaming Triton tiles for small-M projections and native GEMMs for large M."""
+
+    def plan(
+        self,
+        weight: torch.Tensor,
+        maximum: float,
+        precision: Precision,
+        quantizer: ActivationQuantizer | None,
+        workspace_key: Callable[[torch.device], WorkspaceKey],
+    ) -> Projection:
+        """Pack weights for small-M Triton execution and large-M native GEMMs."""
+        return Projection(
+            weight, maximum, precision, quantizer, workspace_key, contiguous_matmul=False, triton_small_m=True
+        )

@@ -107,7 +107,7 @@ class Pi05OptimizationConfig:
         if (
             self.fused_mlp
             and self.mlp_weights is None
-            and self.hardware not in ("thor", "spark")
+            and self.hardware not in ("thor", "spark", "4090")
             and self.operators.paired_gelu in ("triton_lookup", "triton_exact")
         ):
             raise ValueError("Paired GEMMs require an explicit Thor or Spark launch profile")

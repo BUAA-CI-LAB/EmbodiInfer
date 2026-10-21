@@ -789,21 +789,24 @@ class Pi05Policy(FlowVLAPolicy):
             if collected is not None:
                 collected.append(cache)
             return operators.project_attention(attn.o_proj, out.reshape(B, S, -1), expert=expert)
-        if self.attention == "eager" or openpi_rlinf:
-            q, k, v = attn.q_proj(h), attn.k_proj(h), attn.v_proj(h)
+        if operators is not None and operators.config.hardware == "4090" and operators.config.fused_mlp:
+            q, k, v = operators.project_qkv_rope(attn, h, cos, sin, B, S, expert=prefix_kv is not None)
         else:
-            q, k, v = _fused_qkv(attn, h)
-        q = q.view(B, S, -1, hd).transpose(1, 2)  # [B, n_head, S, hd]
-        k = k.view(B, S, -1, hd).transpose(1, 2)  # [B, n_kv, S, hd]
-        v = v.view(B, S, -1, hd).transpose(1, 2)
-        if openpi_rlinf:
-            q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
-        elif native_expert and q.dtype in (torch.bfloat16, torch.float16):
-            from ...backend.triton.rotary import rotate_qk
+            if self.attention == "eager" or openpi_rlinf:
+                q, k, v = attn.q_proj(h), attn.k_proj(h), attn.v_proj(h)
+            else:
+                q, k, v = _fused_qkv(attn, h)
+            q = q.view(B, S, -1, hd).transpose(1, 2)  # [B, n_head, S, hd]
+            k = k.view(B, S, -1, hd).transpose(1, 2)  # [B, n_kv, S, hd]
+            v = v.view(B, S, -1, hd).transpose(1, 2)
+            if openpi_rlinf:
+                q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
+            elif native_expert and q.dtype in (torch.bfloat16, torch.float16):
+                from ...backend.triton.rotary import rotate_qk
 
-            q, k = rotate_qk(q, k, cos, sin)
-        else:
-            q, k = _apply_rope(q, k, cos, sin, self.compile_backend == "inductor")
+                q, k = rotate_qk(q, k, cos, sin)
+            else:
+                q, k = _apply_rope(q, k, cos, sin, self.compile_backend == "inductor")
         if collected is not None:  # prefix pass: cache this layer's K/V
             collected.append((k, v))
         if native_expert and self.denoise_attention == "triton":
@@ -813,6 +816,15 @@ class Pi05Policy(FlowVLAPolicy):
                 q, *prefix_kv, k, v, key_padding_mask=key_padding_mask, scaling=attn.scaling
             )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
+        if (
+            prefix_kv is not None
+            and operators is not None
+            and getattr(operators, "split_attention", None) is not None
+            and mask is None
+        ):
+            pk, pv = prefix_kv
+            out = operators.split_attention.attend_split_packed(q, pk, pv, k, v, scaling=attn.scaling)
+            return operators.project_attention(attn.o_proj, out, expert=True)
         if prefix_kv is not None:  # denoise pass: attend [prefix ++ suffix]
             pk, pv = prefix_kv
             if operators is not None:
@@ -831,7 +843,7 @@ class Pi05Policy(FlowVLAPolicy):
             out = operators.attention.attend(
                 q, k, v, attn_mask=mask, scaling=1.0 if openpi_rlinf else attn.scaling
             )
-            return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
+            return operators.project_attention(attn.o_proj, out, expert=prefix_kv is not None)
         if openpi_rlinf:
             return attn.o_proj(operators.reference_attention(q, k, v, mask).transpose(1, 2).reshape(B, S, -1))
         if native_prefix:

@@ -110,8 +110,9 @@ class QuantizationPlan:
             math.ceil(inputs.numel() / 4096), device=inputs.device, dtype=torch.float32
         )
         rows, columns = inputs.shape
-        self.output = torch.empty(
-            (rows, columns if bits == 8 else columns // 2),
+        padded_rows = ((rows + 15) // 16) * 16 if (bits == 8 and rows % 16 != 0 and rows < 64) else rows
+        self.output = torch.zeros(
+            (padded_rows, columns if bits == 8 else columns // 2),
             device=inputs.device,
             dtype=torch.float8_e4m3fn if bits == 8 else torch.uint8,
         )

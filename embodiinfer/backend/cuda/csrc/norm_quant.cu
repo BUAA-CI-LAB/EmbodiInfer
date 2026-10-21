@@ -108,3 +108,184 @@ extern "C" int cc_norm_quant(
     }
     return int(cudaGetLastError());
 }
+
+
+__device__ __forceinline__ float residual_val_nq(
+    const __nv_bfloat16* inputs, const __nv_bfloat16* update,
+    const __nv_bfloat16* gate, int64_t index, int columns, int tokens) {
+    float value = __bfloat162float(inputs[index]);
+    if (update == nullptr) return value;
+    float delta = __bfloat162float(update[index]);
+    if (gate != nullptr) {
+        int batch = index / (int64_t(tokens) * columns);
+        float factor = __bfloat162float(gate[int64_t(batch) * columns + index % columns]);
+        delta = __bfloat162float(__float2bfloat16_rn(__fmul_rn(delta, factor)));
+    }
+    return __bfloat162float(__float2bfloat16_rn(__fadd_rn(value, delta)));
+}
+
+__global__ void norm_fp8_reduce(
+    const __nv_bfloat16* inputs, const __nv_bfloat16* update,
+    const __nv_bfloat16* residual_gate, const float* scale, const float* modulation,
+    __nv_bfloat16* residual, uint8_t* output, __nv_bfloat16* gate,
+    const float* global, int columns, int tokens) {
+    __shared__ float partials[THREADS];
+    int64_t base = int64_t(blockIdx.x) * columns;
+    float sum = 0.0f;
+    for (int col = threadIdx.x; col < columns; col += THREADS) {
+        float val = residual_val_nq(inputs, update, residual_gate, base + col, columns, tokens);
+        sum = __fadd_rn(sum, __fmul_rn(val, val));
+        if (residual != nullptr) residual[base + col] = __float2bfloat16_rn(val);
+    }
+    partials[threadIdx.x] = sum;
+    __syncthreads();
+    for (int stride = THREADS / 2; stride; stride /= 2) {
+        if (threadIdx.x < stride)
+            partials[threadIdx.x] = __fadd_rn(partials[threadIdx.x], partials[threadIdx.x + stride]);
+        __syncthreads();
+    }
+    float inverse = rsqrtf(__fadd_rn(__fmul_rn(partials[0], 1.0f / columns), 1.0e-6f));
+    float inv_global = 1.0f / (*global);
+    int batch = blockIdx.x / tokens;
+    int64_t mod_base = int64_t(batch) * 3 * columns;
+    const __nv_bfloat16* src = (residual != nullptr) ? residual : inputs;
+    for (int col2 = threadIdx.x * 2; col2 < columns; col2 += THREADS * 2) {
+        int64_t idx = base + col2;
+        float v0 = __fmul_rn(__bfloat162float(src[idx]), inverse);
+        float v1 = __fmul_rn(__bfloat162float(src[idx + 1]), inverse);
+        if (modulation != nullptr) {
+            v0 = __fadd_rn(__fmul_rn(v0, __fadd_rn(1.0f, modulation[mod_base + col2])), modulation[mod_base + columns + col2]);
+            v1 = __fadd_rn(__fmul_rn(v1, __fadd_rn(1.0f, modulation[mod_base + col2 + 1])), modulation[mod_base + columns + col2 + 1]);
+        } else {
+            v0 = __fmul_rn(v0, __fadd_rn(1.0f, scale[col2]));
+            v1 = __fmul_rn(v1, __fadd_rn(1.0f, scale[col2 + 1]));
+        }
+        v0 = __bfloat162float(__float2bfloat16_rn(v0));
+        v1 = __bfloat162float(__float2bfloat16_rn(v1));
+        uint16_t packed = __nv_cvt_float2_to_fp8x2(
+            make_float2(v0 * inv_global, v1 * inv_global), __NV_SATFINITE, __NV_E4M3);
+        reinterpret_cast<uint16_t*>(output)[idx / 2] = packed;
+        if (gate != nullptr && (blockIdx.x % tokens == 0)) {
+            gate[int64_t(batch) * columns + col2] = __float2bfloat16_rn(modulation[mod_base + 2 * columns + col2]);
+            gate[int64_t(batch) * columns + col2 + 1] = __float2bfloat16_rn(modulation[mod_base + 2 * columns + col2 + 1]);
+        }
+    }
+}
+
+extern "C" int cc_norm_quant_reduce(
+    const void* inputs, const void* update, const void* residual_gate,
+    const void* scale, const void* modulation, void* residual,
+    void* output, void* gate, const void* global,
+    int rows, int columns, int tokens, void* stream) {
+    norm_fp8_reduce<<<rows, THREADS, 0, (cudaStream_t)stream>>>(
+        (const __nv_bfloat16*)inputs, (const __nv_bfloat16*)update,
+        (const __nv_bfloat16*)residual_gate, (const float*)scale,
+        (const float*)modulation, (__nv_bfloat16*)residual,
+        (uint8_t*)output, (__nv_bfloat16*)gate, (const float*)global,
+        columns, tokens);
+    return int(cudaGetLastError());
+}
+
+
+__global__ void layer_norm_fp8_reduce(
+    const __nv_bfloat16* inputs, const __nv_bfloat16* update,
+    const __nv_bfloat16* weight, const __nv_bfloat16* bias,
+    __nv_bfloat16* residual, uint8_t* output,
+    float inv_global, int columns) {
+    __shared__ float s_sum[THREADS];
+    __shared__ float s_sq[THREADS];
+    int64_t base = int64_t(blockIdx.x) * columns;
+    float sum = 0.0f;
+    for (int col = threadIdx.x; col < columns; col += THREADS) {
+        float val = __bfloat162float(inputs[base + col]);
+        if (update != nullptr) {
+            val = __bfloat162float(__float2bfloat16_rn(__fadd_rn(val, __bfloat162float(update[base + col]))));
+            residual[base + col] = __float2bfloat16_rn(val);
+        }
+        sum = __fadd_rn(sum, val);
+    }
+    s_sum[threadIdx.x] = sum;
+    __syncthreads();
+    for (int stride = THREADS / 2; stride; stride /= 2) {
+        if (threadIdx.x < stride)
+            s_sum[threadIdx.x] = __fadd_rn(s_sum[threadIdx.x], s_sum[threadIdx.x + stride]);
+        __syncthreads();
+    }
+    float mean = s_sum[0] / float(columns);
+    float sq_sum = 0.0f;
+    const __nv_bfloat16* src = (update != nullptr) ? residual : inputs;
+    for (int col = threadIdx.x; col < columns; col += THREADS) {
+        float diff = __bfloat162float(src[base + col]) - mean;
+        sq_sum = __fadd_rn(sq_sum, diff * diff);
+    }
+    s_sq[threadIdx.x] = sq_sum;
+    __syncthreads();
+    for (int stride = THREADS / 2; stride; stride /= 2) {
+        if (threadIdx.x < stride)
+            s_sq[threadIdx.x] = __fadd_rn(s_sq[threadIdx.x], s_sq[threadIdx.x + stride]);
+        __syncthreads();
+    }
+    float inv_std = rsqrtf(s_sq[0] / float(columns) + 1.0e-6f);
+    if (inv_global > 0.0f) {
+        for (int col2 = threadIdx.x * 2; col2 < columns; col2 += THREADS * 2) {
+            int64_t idx = base + col2;
+            float v0 = (__bfloat162float(src[idx]) - mean) * inv_std * __bfloat162float(weight[col2]) + __bfloat162float(bias[col2]);
+            float v1 = (__bfloat162float(src[idx + 1]) - mean) * inv_std * __bfloat162float(weight[col2 + 1]) + __bfloat162float(bias[col2 + 1]);
+            v0 = __bfloat162float(__float2bfloat16_rn(v0));
+            v1 = __bfloat162float(__float2bfloat16_rn(v1));
+            uint16_t packed = __nv_cvt_float2_to_fp8x2(
+                make_float2(v0 * inv_global, v1 * inv_global), __NV_SATFINITE, __NV_E4M3);
+            reinterpret_cast<uint16_t*>(output)[idx / 2] = packed;
+        }
+    } else {
+        __nv_bfloat16* out_bf16 = reinterpret_cast<__nv_bfloat16*>(output);
+        for (int col2 = threadIdx.x * 2; col2 < columns; col2 += THREADS * 2) {
+            int64_t idx = base + col2;
+            float v0 = (__bfloat162float(src[idx]) - mean) * inv_std * __bfloat162float(weight[col2]) + __bfloat162float(bias[col2]);
+            float v1 = (__bfloat162float(src[idx + 1]) - mean) * inv_std * __bfloat162float(weight[col2 + 1]) + __bfloat162float(bias[col2 + 1]);
+            reinterpret_cast<__nv_bfloat162*>(out_bf16)[idx / 2] = __floats2bfloat162_rn(v0, v1);
+        }
+    }
+}
+
+extern "C" int cc_layer_norm_fp8(
+    const void* inputs, const void* update, const void* weight, const void* bias,
+    void* residual, void* output, float inv_global, int rows, int columns, void* stream) {
+    layer_norm_fp8_reduce<<<rows, THREADS, 0, (cudaStream_t)stream>>>(
+        (const __nv_bfloat16*)inputs, (const __nv_bfloat16*)update,
+        (const __nv_bfloat16*)weight, (const __nv_bfloat16*)bias,
+        (__nv_bfloat16*)residual, (uint8_t*)output, inv_global, columns);
+    return int(cudaGetLastError());
+}
+
+
+__global__ void bhsd_to_bshd_fp8(
+    const __nv_bfloat16* input, uint8_t* output, float inv_scale,
+    int B, int H, int S, int D, int64_t total_pairs) {
+    int64_t pair_idx = int64_t(blockIdx.x) * THREADS + threadIdx.x;
+    if (pair_idx >= total_pairs) return;
+    int64_t dst_idx = pair_idx * 2;
+    int hd = H * D;
+    int b = dst_idx / (S * hd);
+    int rem = dst_idx % (S * hd);
+    int s = rem / hd;
+    int rem2 = rem % hd;
+    int h = rem2 / D;
+    int d = rem2 % D;
+    int64_t src_idx = ((int64_t(b) * H + h) * S + s) * D + d;
+    float v0 = __bfloat162float(input[src_idx]) * inv_scale;
+    float v1 = __bfloat162float(input[src_idx + 1]) * inv_scale;
+    reinterpret_cast<uint16_t*>(output)[pair_idx] = __nv_cvt_float2_to_fp8x2(
+        make_float2(v0, v1), __NV_SATFINITE, __NV_E4M3);
+}
+
+extern "C" int cc_bhsd_fp8(
+    const void* input, void* output, float inv_scale,
+    int B, int H, int S, int D, void* stream) {
+    int64_t total_pairs = (int64_t(B) * H * S * D) / 2;
+    int blocks = (total_pairs + THREADS - 1) / THREADS;
+    bhsd_to_bshd_fp8<<<blocks, THREADS, 0, (cudaStream_t)stream>>>(
+        (const __nv_bfloat16*)input, (uint8_t*)output, inv_scale,
+        B, H, S, D, total_pairs);
+    return int(cudaGetLastError());
+}

@@ -100,7 +100,11 @@ class Pi05OperatorPlans:
                     digest.update(chunk)
             if digest.hexdigest() != config.checkpoint_sha256:
                 raise ValueError("Activation calibration belongs to a different checkpoint")
-        if config.has_quantized_mlp and not all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
+        has_scaled = all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")) or (
+            not any("nvfp4" in (layer.gate_up, layer.down) for layer in precision_layers)
+            and hasattr(torch, "_scaled_mm")
+        )
+        if config.has_quantized_mlp and not has_scaled:
             raise RuntimeError("Calibrated mixed precision requires the scaled_mm API tested in PyTorch 2.13")
         selected = config.operators
         request = OperatorRequest(device, torch.bfloat16, cuda_graph=True)
@@ -170,6 +174,16 @@ class Pi05OperatorPlans:
         self.dense_plans = {}
         self.active_attention_prefix = None
         self._expert_attention = {id(layer.self_attn) for layer in policy._expert_tower.layers}
+        self.qkv_plans = {}
+        self.split_attention = None
+        if config.hardware == "4090" and config.fused_mlp and config.attention == "folded_flash":
+            from ....backend.triton.split_kv_attention import TritonSplitKVAttention
+
+            self.split_attention = TritonSplitKVAttention()
+            if config.has_quantized_mlp:
+                self.split_attention.fp8_scale = torch.tensor(
+                    [8.0 / 448.0], device=device, dtype=torch.float32
+                )
         if config.attention not in ("reference", "rotary_strict"):
             name = config.attention
             if name == "query_major" and config.hardware == "spark":
@@ -190,7 +204,11 @@ class Pi05OperatorPlans:
                 raise RuntimeError("Warm vision weights before graph capture")
             from .vision import SiglipPlan
 
-            self.vision = SiglipPlan(self.policy._m.paligemma_with_expert.paligemma.model)
+            self.vision = SiglipPlan(
+                self.policy._m.paligemma_with_expert.paligemma.model,
+                fast_sdpa=self.config.hardware == "4090" and self.config.fused_mlp,
+                fp8=self.config.hardware == "4090" and self.config.has_quantized_mlp,
+            )
         return self.vision(image)
 
     def rotary_tables(self, positions: torch.Tensor, width: int) -> tuple:
@@ -201,19 +219,119 @@ class Pi05OperatorPlans:
         """Adapt BHSD storage to the reusable BTNH rotary contract."""
         return self.rotary(inputs.transpose(1, 2), sine, cosine).transpose(1, 2)
 
+    def _dense_precision(self) -> tuple[str, float]:
+        if self.config.hardware == "4090" and self.config.has_quantized_mlp:
+            return "fp8", 8.0
+        return "bf16", 1.0
+
     def project_attention(self, module: Any, inputs: torch.Tensor, *, expert: bool) -> torch.Tensor:
-        """Apply the selected BF16 prefix Q/O plan; expert projections retain Torch GEMMs."""
-        if expert or self.config.operators.attention_projection == "torch":
+        """Apply the selected prefix/expert attention projection plan."""
+        if self.config.operators.attention_projection == "torch" and not (
+            self.config.hardware == "4090" and self.config.fused_mlp
+        ):
+            if getattr(inputs, "ndim", 0) == 4:
+                inputs = inputs.transpose(1, 2).reshape(inputs.shape[0], inputs.shape[2], -1)
             return module(inputs)
         if module.bias is not None:
-            raise ValueError("Prepared prefix attention projections require bias-free weights")
+            raise ValueError("Prepared attention projections require bias-free weights")
         if id(module) not in self.dense_plans:
             if torch.cuda.is_current_stream_capturing():
-                raise RuntimeError("Prepare prefix projection weights before capture")
-            self.dense_plans[id(module)] = self.attention_projection.plan(
-                module.weight, 1.0, "bf16", None, self.workspace_key
+                raise RuntimeError("Prepare attention projection weights before capture")
+            precision, maximum = self._dense_precision()
+            backend = self.projection if self.projection is not None else self.attention_projection
+            self.dense_plans[id(module)] = backend.plan(
+                module.weight, maximum, precision, self.quantizer, self.workspace_key
             )
-        return self.dense_plans[id(module)].apply(inputs, None)
+        plan = self.dense_plans[id(module)]
+        if hasattr(inputs, "output") and hasattr(inputs, "scale"):
+            return plan.apply(inputs.dummy, inputs)
+        if inputs.ndim == 4:
+            inputs = inputs.transpose(1, 2).reshape(inputs.shape[0], inputs.shape[2], -1)
+        return plan.apply(inputs, plan.encode(inputs))
+
+    def project_qkv_rope(
+        self,
+        attn: Any,
+        inputs: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        batch: int,
+        tokens: int,
+        *,
+        expert: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run packed QKV GEMM followed by fused split + RoPE into BHSD tensors."""
+        from ....backend.triton.split_kv_attention import split_qkv_rope
+
+        if id(attn) not in self.qkv_plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Prepare packed QKV projection weights before capture")
+            qkv_weight = torch.cat(
+                (attn.q_proj.weight.detach(), attn.k_proj.weight.detach(), attn.v_proj.weight.detach()), dim=0
+            ).contiguous()
+            precision, maximum = self._dense_precision()
+            backend = self.projection if self.projection is not None else self.attention_projection
+            self.qkv_plans[id(attn)] = (
+                backend.plan(qkv_weight, maximum, precision, self.quantizer, self.workspace_key),
+                (attn.q_proj.weight.shape[0], attn.k_proj.weight.shape[0], attn.v_proj.weight.shape[0]),
+            )
+        plan, sizes = self.qkv_plans[id(attn)]
+        if hasattr(inputs, "output") and hasattr(inputs, "scale"):
+            packed = plan.apply(inputs.residual, inputs)
+        else:
+            packed = plan.apply(inputs, plan.encode(inputs))
+        hd = attn.head_dim
+        return split_qkv_rope(
+            packed.reshape(batch * tokens, -1), cos, sin, batch, tokens, sizes[0] // hd, sizes[1] // hd, hd
+        )
+
+    def project_kv_only(self, attn: Any, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Project only K and V for the cache-only final prefix layer."""
+        key_id = ("kv_only", id(attn))
+        if key_id not in self.qkv_plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Prepare packed KV projection weights before capture")
+            kv_weight = torch.cat(
+                (attn.k_proj.weight.detach(), attn.v_proj.weight.detach()), dim=0
+            ).contiguous()
+            precision, maximum = self._dense_precision()
+            backend = self.projection if self.projection is not None else self.attention_projection
+            self.qkv_plans[key_id] = (
+                backend.plan(kv_weight, maximum, precision, self.quantizer, self.workspace_key),
+                (attn.k_proj.weight.shape[0], attn.v_proj.weight.shape[0]),
+            )
+        plan, sizes = self.qkv_plans[key_id]
+        if hasattr(inputs, "output") and hasattr(inputs, "scale"):
+            packed = plan.apply(inputs.residual, inputs)
+        else:
+            packed = plan.apply(inputs, plan.encode(inputs))
+        return packed.split(sizes, dim=-1)
+
+    def project_qkv(
+        self, attn: Any, inputs: torch.Tensor, *, expert: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Apply a packed QKV projection plan on SM89 or individual projections elsewhere."""
+        if not (self.config.hardware == "4090" and self.config.fused_mlp):
+            return attn.q_proj(inputs), attn.k_proj(inputs), attn.v_proj(inputs)
+        if id(attn) not in self.qkv_plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Prepare packed QKV projection weights before capture")
+            qkv_weight = torch.cat(
+                (attn.q_proj.weight.detach(), attn.k_proj.weight.detach(), attn.v_proj.weight.detach()), dim=0
+            ).contiguous()
+            precision, maximum = self._dense_precision()
+            backend = self.projection if self.projection is not None else self.attention_projection
+            self.qkv_plans[id(attn)] = (
+                backend.plan(qkv_weight, maximum, precision, self.quantizer, self.workspace_key),
+                (attn.q_proj.weight.shape[0], attn.k_proj.weight.shape[0], attn.v_proj.weight.shape[0]),
+            )
+        plan, sizes = self.qkv_plans[id(attn)]
+        if hasattr(inputs, "output") and hasattr(inputs, "scale"):
+            dummy = inputs.residual
+            packed = plan.apply(dummy, inputs)
+        else:
+            packed = plan.apply(inputs, plan.encode(inputs))
+        return packed.split(sizes, dim=-1)
 
     def _attention_plan(self, module: Any, batch: int, length: int, prefix: int = 0) -> Any:
         key = (id(module), batch, length, prefix, self.workspace_key(module.q_proj.weight.device))
@@ -306,6 +424,8 @@ class Pi05OperatorPlans:
                 del self.attention_plans[key]
         for projection in self.dense_plans.values():
             projection.release_scope(scope)
+        for plan, _ in self.qkv_plans.values():
+            plan.release_scope(scope)
 
     def validate_request(self, batch_size: int, steps: int | None = None) -> None:
         """Reject shapes outside measured profiles before graph creation."""
@@ -470,19 +590,50 @@ class Pi05OperatorPlans:
                 else norm.dense(condition).float().contiguous()
             )
 
+        cross_layer_norm = self.config.hardware == "4090" and self.config.fused_mlp and self.norm is not None
+        next_normalized = None
+        next_gate = None
         for index, layer in enumerate(tower.layers):
-            normalized, gate = self.normalize(
-                layer.input_layernorm, hidden, affine(layer.input_layernorm, 2 * index), native=fused
-            )
+            if next_normalized is not None:
+                normalized, gate = next_normalized, next_gate
+                next_normalized = None
+            elif self.norm_quant is not None and self.config.has_quantized_mlp and cross_layer_norm:
+                first_mod = affine(layer.input_layernorm, 2 * index)
+                scale = 8.0 / 448.0
+                key = (
+                    id(layer.input_layernorm),
+                    tuple(hidden.shape),
+                    8,
+                    scale,
+                    self.workspace_key(hidden.device),
+                )
+                if key not in self.quant_plans:
+                    if torch.cuda.is_current_stream_capturing():
+                        raise RuntimeError("Warm fused norm/quantization shapes before capture")
+                    self.quant_plans[key] = self.norm_quant.plan(
+                        hidden, bits=8, calibrated_scale=scale, adaptive=first_mod is not None
+                    )
+                normalized = self.quant_plans[key].normalize(
+                    hidden,
+                    scale=getattr(layer.input_layernorm, "weight", None) if first_mod is None else None,
+                    modulation=first_mod,
+                )
+                gate = normalized.gate
+            else:
+                normalized, gate = self.normalize(
+                    layer.input_layernorm, hidden, affine(layer.input_layernorm, 2 * index), native=fused
+                )
             if cache_only and collect and not expert and index == len(tower.layers) - 1:
                 from ..modeling_pi05 import _apply_rope, _fused_qkv
 
                 attn = layer.self_attn
-                if self.config.numerics == "openpi_rlinf" or self.policy.attention == "eager":
+                if self.config.hardware == "4090" and self.config.fused_mlp:
+                    key, value = self.project_kv_only(attn, normalized)
+                elif self.config.numerics == "openpi_rlinf" or self.policy.attention == "eager":
                     key, value = attn.k_proj(normalized), attn.v_proj(normalized)
                 else:
                     _, key, value = _fused_qkv(attn, normalized)
-                batch, length = normalized.shape[:2]
+                batch, length = hidden.shape[:2]
                 key, value = (x.view(batch, length, -1, attn.head_dim).transpose(1, 2) for x in (key, value))
                 key = (
                     self.rotate(key, cos, sin)
@@ -532,18 +683,46 @@ class Pi05OperatorPlans:
                         and self.config.numerics != "openpi_rlinf",
                         approximate=self.approximate,
                     )
-            residual_plan = (
-                self._norm_plan(layer.post_attention_layernorm, hidden)
-                if self.norm is not None and self.config.mlp_weights is not None
-                else None
-            )
-            add_residual = getattr(residual_plan, "add_residual", None)
-            hidden = (
-                add_residual(hidden, update, gate)
-                if add_residual is not None
-                else _gated_residual(hidden, update, gate, False, fused)
-            )
-        hidden, _ = self.normalize(tower.norm, hidden, affine(tower.norm, -1), native=fused)
+            if cross_layer_norm:
+                is_last = index == len(tower.layers) - 1
+                next_norm = tower.norm if is_last else tower.layers[index + 1].input_layernorm
+                next_mod = affine(tower.norm, -1) if is_last else affine(next_norm, 2 * (index + 1))
+                if not is_last and self.norm_quant is not None and self.config.has_quantized_mlp:
+                    scale = 8.0 / 448.0
+                    key = (id(next_norm), tuple(hidden.shape), 8, scale, self.workspace_key(hidden.device))
+                    if key not in self.quant_plans:
+                        if torch.cuda.is_current_stream_capturing():
+                            raise RuntimeError("Warm fused norm/quantization shapes before capture")
+                        self.quant_plans[key] = self.norm_quant.plan(
+                            hidden, bits=8, calibrated_scale=scale, adaptive=next_mod is not None
+                        )
+                    hidden, next_normalized, next_gate = self.quant_plans[key].residual_normalize(
+                        hidden,
+                        update,
+                        gate,
+                        scale=getattr(next_norm, "weight", None) if next_mod is None else None,
+                        modulation=next_mod,
+                    )
+                else:
+                    hidden, next_normalized, next_gate = self.residual_normalize(
+                        next_norm, hidden, update, gate, next_mod, native=fused
+                    )
+            else:
+                residual_plan = (
+                    self._norm_plan(layer.post_attention_layernorm, hidden)
+                    if self.norm is not None and self.config.mlp_weights is not None
+                    else None
+                )
+                add_residual = getattr(residual_plan, "add_residual", None)
+                hidden = (
+                    add_residual(hidden, update, gate)
+                    if add_residual is not None
+                    else _gated_residual(hidden, update, gate, False, fused)
+                )
+        if next_normalized is not None:
+            hidden = next_normalized
+        else:
+            hidden, _ = self.normalize(tower.norm, hidden, affine(tower.norm, -1), native=fused)
         return hidden, collected
 
     @contextmanager
@@ -585,7 +764,11 @@ class Pi05OperatorPlans:
     @contextmanager
     def _kv_context(self, prefix: Pi05Prefix) -> Iterator[None]:
         """Copy each read-only prefix once, then overwrite only suffix K/V slots."""
-        if not self.config.kv_workspace or self.rotary_attention is not None:
+        if (
+            not self.config.kv_workspace
+            or self.rotary_attention is not None
+            or getattr(self, "split_attention", None) is not None
+        ):
             yield
             return
         if self.active_kv is not None:
@@ -647,6 +830,7 @@ class Pi05OperatorPlans:
             if close is not None:
                 close()
         self.dense_plans.clear()
+        self.qkv_plans.clear()
         self.quant_plans.clear()
         self.mlp_plans.clear()
         self.kv_buffers.clear()

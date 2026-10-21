@@ -83,3 +83,37 @@ extern "C" int cc_geglu_fp4(const void* gate, const void* up, void* output,
         (uint8_t*)scales, (uint8_t*)blocked, (const float*)global, rows, columns, (const uint16_t*)table);
     return int(cudaGetLastError());
 }
+
+
+template<bool FP8>
+__global__ void fused_geglu_packed(const __nv_bfloat16* packed, void* output,
+                                   const float* scale, int64_t count, int columns, const uint16_t* table) {
+    int64_t index = (int64_t(blockIdx.x) * THREADS + threadIdx.x) * 2;
+    if (index >= count) return;
+    int64_t row = index / columns;
+    int64_t col = index % columns;
+    int64_t g_idx = row * (2 * columns) + col;
+    int64_t u_idx = g_idx + columns;
+    float first = gelu_mul(packed, packed + columns, g_idx, table);
+    float second = gelu_mul(packed, packed + columns, g_idx + 1, table);
+    if constexpr (FP8) {
+        float inv_scale = 1.0f / (*scale);
+        uint16_t out_packed = __nv_cvt_float2_to_fp8x2(
+            make_float2(first * inv_scale, second * inv_scale), __NV_SATFINITE, __NV_E4M3);
+        reinterpret_cast<uint16_t*>(output)[index / 2] = out_packed;
+    } else {
+        reinterpret_cast<__nv_bfloat162*>(output)[index / 2] = __floats2bfloat162_rn(first, second);
+    }
+}
+
+extern "C" int cc_geglu_packed(const void* packed, void* output, const void* scale,
+                               int64_t count, int columns, int bits, const void* table, void* stream) {
+    int blocks = (count + THREADS * 2 - 1) / (THREADS * 2);
+    if (bits == 8)
+        fused_geglu_packed<true><<<blocks, THREADS, 0, (cudaStream_t)stream>>>(
+            (const __nv_bfloat16*)packed, output, (const float*)scale, count, columns, (const uint16_t*)table);
+    else
+        fused_geglu_packed<false><<<blocks, THREADS, 0, (cudaStream_t)stream>>>(
+            (const __nv_bfloat16*)packed, output, (const float*)scale, count, columns, (const uint16_t*)table);
+    return int(cudaGetLastError());
+}

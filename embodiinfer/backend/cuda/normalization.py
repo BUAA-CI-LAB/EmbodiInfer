@@ -236,3 +236,13 @@ class NormPlan:
                 )
             )
         return self.residual
+
+
+class NormReduceFusion(NormFusion):
+    """Single-pass shared-memory reduction RMSNorm and residual fusion."""
+
+    def plan(
+        self, inputs: torch.Tensor, *, adaptive: bool, eps: float = 1e-6, mode: Mode = "reduce"
+    ) -> "NormPlan":
+        """Allocate a single-pass reduction plan before capture or timing."""
+        return super().plan(inputs, adaptive=adaptive, eps=eps, mode=mode)

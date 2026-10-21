@@ -63,6 +63,17 @@ class GeluMulFusion:
             pointer,
         ]
         self.library.cc_geglu.restype = ctypes.c_int
+        self.library.cc_geglu_packed.argtypes = [
+            pointer,
+            pointer,
+            pointer,
+            ctypes.c_int64,
+            ctypes.c_int,
+            ctypes.c_int,
+            pointer,
+            pointer,
+        ]
+        self.library.cc_geglu_packed.restype = ctypes.c_int
         self.library.cc_geglu_fp4.restype = ctypes.c_int
 
     def plan(self, gate: torch.Tensor, bits: int, scale: float | None = None) -> "FusionPlan":
@@ -134,5 +145,22 @@ class FusionPlan:
                     self.backend.table.data_ptr(),
                     stream,
                 )
+            self.backend._check(status)
+        return self
+
+    def encode_packed(self, packed: torch.Tensor) -> "FusionPlan":
+        """Read strided gate/up directly from a contiguous [M, 2*N] matrix without copying."""
+        with torch.cuda.device(packed.device):
+            stream = torch.cuda.current_stream(packed.device).cuda_stream
+            status = self.backend.library.cc_geglu_packed(
+                packed.data_ptr(),
+                self.output.data_ptr(),
+                self.scale.data_ptr() if self.scale is not None else None,
+                self.shape[0] * self.shape[1],
+                self.shape[1],
+                self.bits,
+                self.backend.table.data_ptr(),
+                stream,
+            )
             self.backend._check(status)
         return self

@@ -76,14 +76,34 @@ class MlpPlan:
             module.down_proj.weight, layer.down_max, layer.down, runtime.quantizer, runtime.workspace_key
         )
         self.paired = None
+        self.packed_fp8 = None
         if runtime.config.fused_mlp and layer.gate_up == "bf16":
             self.paired = runtime.paired[prefix].plan(module.gate_proj.weight, module.up_proj.weight)
+        elif runtime.config.hardware == "4090" and layer.gate_up == "fp8":
+            packed_w = torch.cat(
+                (module.gate_proj.weight.detach(), module.up_proj.weight.detach()), dim=0
+            ).contiguous()
+            self.packed_fp8 = runtime.projection.plan(
+                packed_w, layer.gate_up_max, "fp8", runtime.quantizer, runtime.workspace_key
+            )
+            self.inter_size = module.gate_proj.weight.shape[0]
+            if not prefix and layer.down == "fp8":
+                self.g_kn_fp8 = self.gate.weight_t.contiguous()
+                self.u_kn_fp8 = self.up.weight_t.contiguous()
+                self.down_scale = torch.tensor(
+                    [layer.down_max / 448.0], device=module.gate_proj.weight.device, dtype=torch.float32
+                )
+                self.down_inv_scale = torch.tensor(
+                    [448.0 / layer.down_max], device=module.gate_proj.weight.device, dtype=torch.float32
+                )
         self.plans = {}
 
     def release_scope(self, scope: WorkspaceKey) -> None:
         """Release only completed graph workspaces through the projection contract."""
         for projection in (self.gate, self.up, self.down):
             projection.release_scope(scope)
+        if self.packed_fp8 is not None:
+            self.packed_fp8.release_scope(scope)
         for key in tuple(self.plans):
             if key[-1] == scope:
                 del self.plans[key]
@@ -98,6 +118,57 @@ class MlpPlan:
 
     def project(self, inputs: torch.Tensor, encoded: EncodedActivation | None) -> torch.Tensor:
         """Fuse the selected GELU/product/down encoding after native GEMMs."""
+        if getattr(self, "g_kn_fp8", None) is not None and inputs.shape[0] * inputs.shape[1] <= 16:
+            from types import SimpleNamespace
+
+            from ....backend.triton.geglu import dual_geglu_fp8
+
+            rows = inputs.shape[0] * inputs.shape[1]
+            padded_rows = ((rows + 15) // 16) * 16
+            key = (
+                "triton_geglu_fp8",
+                padded_rows,
+                self.inter_size,
+                inputs.device,
+                self.runtime.workspace_key(inputs.device),
+            )
+            if key not in self.plans:
+                out_fp8 = torch.zeros(
+                    (padded_rows, self.inter_size), device=inputs.device, dtype=torch.float8_e4m3fn
+                )
+                dummy = torch.empty(
+                    (*inputs.shape[:-1], self.inter_size), device=inputs.device, dtype=torch.bfloat16
+                )
+                self.plans[key] = SimpleNamespace(output=out_fp8, scale=self.down_scale, dummy=dummy)
+            entry = self.plans[key]
+            dual_geglu_fp8(
+                encoded.output,
+                self.g_kn_fp8,
+                self.u_kn_fp8,
+                encoded.scale,
+                self.gate.weight_scale_1d,
+                self.up.weight_scale_1d,
+                self.down_inv_scale,
+                entry.output,
+                rows,
+            )
+            return self.down.apply(entry.dummy, entry)
+        if self.packed_fp8 is not None and self.runtime.fusion is not None:
+            packed = self.packed_fp8.apply(inputs, encoded).reshape(-1, 2 * self.inter_size)
+            shape = (packed.shape[0], self.inter_size)
+            key = (shape, packed.device, self.runtime.workspace_key(packed.device))
+            if key not in self.plans:
+                if torch.cuda.is_current_stream_capturing():
+                    raise RuntimeError("Warm GELU/product/quantization shapes before graph capture")
+                bits = {"bf16": 16, "fp8": 8, "nvfp4": 4}[self.down.precision]
+                scale = None if bits == 16 else self.down.maximum / (448 * (6 if bits == 4 else 1))
+                dummy = torch.empty(shape, device=packed.device, dtype=torch.bfloat16)
+                self.plans[key] = self.runtime.fusion.plan(dummy, bits, scale)
+            result = self.plans[key].encode_packed(packed)
+            out_shape = (*inputs.shape[:-1], self.inter_size)
+            if self.down.precision == "bf16":
+                return self.down.apply(result.output.reshape(out_shape), None)
+            return self.down.apply(packed.reshape(*out_shape[:-1], 2, self.inter_size)[..., 0, :], result)
         gate, up = self.gate.apply(inputs, encoded), self.up.apply(inputs, encoded)
         if self.runtime.fusion is None:
             hidden = F.gelu(gate, approximate=self.runtime.approximate) * up
