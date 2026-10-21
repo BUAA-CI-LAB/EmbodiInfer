@@ -270,6 +270,7 @@ class RunStore:
                 record["solution"] = read_json(self.solution_path(previous["id"]))
             feedback.append(record)
         atomic_json(scratch / "feedback.json", feedback)
+        atomic_json(scratch / "diagnostics.json", self.manifest.get("diagnostics", []))
         atomic_json(scratch / "environment.json", self.manifest["environment"])
         return candidate, archive, scratch
 
@@ -305,6 +306,9 @@ class RunStore:
 
     def recover(self) -> None:
         """Keep an interrupted attempt as failed evidence rather than replaying its writes."""
+        for record in self.manifest.get("diagnostics", []):
+            if record["status"] == "running":
+                record.update(status="interrupted", error="Interrupted during diagnostic collection")
         if candidate := self.manifest["pending"]:
             self.finish_attempt(
                 candidate,

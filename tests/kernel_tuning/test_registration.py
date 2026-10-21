@@ -94,7 +94,10 @@ def test_baseline_hashes_track_links_without_following_targets(tmp_path, monkeyp
         link.symlink_to(target)
     except OSError:
         pytest.skip("Creating symlinks requires platform permissions")
-    monkeypatch.setattr("scripts.kernel_tuning.registration.workspace.git", lambda *args: "asset-link\0")
+    monkeypatch.setattr(
+        "scripts.kernel_tuning.registration.workspace.git",
+        lambda *args: f"120000 {'0' * 40} 0\tasset-link\0",
+    )
     first = tracked_hashes(root)
     target.write_text("second", encoding="utf-8")
     assert tracked_hashes(root) == first
@@ -103,6 +106,22 @@ def test_baseline_hashes_track_links_without_following_targets(tmp_path, monkeyp
     assert tracked_hashes(root) != first
     with pytest.raises(ContractError):
         checks.source_path(root, "asset-link")
+
+
+def test_baseline_hashes_bind_gitlinks_without_initializing_submodules(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init")
+    first, second = "1" * 40, "2" * 40
+    name = "skills/example"
+    git(root, "update-index", "--add", "--cacheinfo", f"160000,{first},{name}")
+    expected = {name: f"gitlink:{first}"}
+    assert tracked_hashes(root) == expected  # Uninitialized checkout: no directory yet.
+    (root / name).mkdir(parents=True)
+    (root / name / "SKILL.md").write_text("Submodule contents", encoding="utf-8")
+    assert tracked_hashes(root) == expected  # Parent snapshots the gitlink, not its files.
+    git(root, "update-index", "--cacheinfo", f"160000,{second},{name}")
+    assert tracked_hashes(root) == {name: f"gitlink:{second}"}
 
 
 @pytest.fixture(scope="module")

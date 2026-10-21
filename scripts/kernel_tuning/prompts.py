@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 
 from .contracts import TaskPackage
+from .skill_context import skill_instructions
 
 
 def plan_prompt(task: TaskPackage) -> str:
@@ -28,13 +29,14 @@ different configuration or algorithm; do not repeat a rejected implementation by
 Write PLAN.md with: the current bottleneck; one falsifiable optimization hypothesis;
 the source/launch configuration changes; correctness hazards; and validation steps.
 Describe the validation criteria for the controller; do not compile, run GPU code,
-benchmark, or inspect generated assembly during either agent turn. The agent's
+benchmark, or generate assembly during either agent turn. The agent's
 command environment may restrict GPU access and compiler cache operations even
 when environment.json confirms that the separate evaluator has a working GPU.
 Finish this turn when PLAN.md contains that executable plan. The next turn implements it.
 The mathematical reference and baseline have different roles: preserve the former's
 outputs and beat the latter's latency over every declared workload.
 Frozen conditions: {json.dumps(asdict(task.settings), ensure_ascii=False)}
+{skill_instructions()}
 Use only this attempt directory for edits. Task files, environment.json, incumbent.json, feedback.json,
 the evaluator, run archives, and precision/timing settings are fixed inputs.
 Create candidate source beside PLAN.md; do not add files inside task/.
@@ -71,6 +73,7 @@ def implementation_prompt(task: TaskPackage) -> str:
 Solution structure below. Include every source/helper in sources; relative POSIX
 paths and multiple files are supported. Include actual source text, not placeholders.
 You may write source files here and serialize them into solution.json.
+{skill_instructions()}
 {json.dumps(schema, indent=2)}
 The entry point matches definition.inputs in order. If destination_passing_style
 is true, append all definition.outputs as output buffers; otherwise return outputs
@@ -85,7 +88,7 @@ Launch on the caller's current stream; any helper-stream work must join it befor
 returning. The caller's device, stream, and numerical settings stay unchanged.
 Keep evaluation logic, expected answers, precision, workloads, and metrics untouched.
 The controller will compile, check all seeds, measure, and promote from structured
-evidence after this turn returns. Do not compile, run GPU code, benchmark, inspect
+evidence after this turn returns. Do not compile, run GPU code, benchmark, generate
 assembly, or work around agent-environment permissions/cache failures. Static
 source and JSON checks are sufficient for this handoff. A failed controller check
 will be recorded as feedback for the next candidate.

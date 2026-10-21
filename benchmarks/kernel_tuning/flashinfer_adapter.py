@@ -487,56 +487,61 @@ class FlashInferAdapter:
 
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
         """Capture optional NCU evidence in a separate worker, never promotion timing."""
-        from scripts.kernel_tuning.artifacts import atomic_json
+        from benchmarks.kernel_tuning.profiling import collect
 
-        if not shutil.which("ncu"):
-            raise ContractError("profile: true requires ncu on PATH")
-        candidate = output / "candidate.json"
-        atomic_json(candidate, solutions["candidate"])
-        command = [
-            "ncu",
-            "--target-processes",
-            "all",
-            "--set",
-            "basic",
-            "--force-overwrite",
-            "--export",
-            str(output / "ncu"),
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--profile-once",
-            str(self.task.root),
-            str(candidate),
-        ]
-        with (output / "ncu.log").open("w", encoding="utf-8") as log:
-            subprocess.run(
-                command,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                check=True,
-                timeout=self.cfg.search.evaluation_timeout_seconds,
-            )
-        return {
-            "command": command,
-            "report": str(output / "ncu.ncu-rep"),
-            "workload": self.traces[0].workload.uuid,
-        }
+        return collect(self.task, solutions["candidate"], output)
 
+    @staticmethod
+    def _reset(destination: list[Any], source: list[Any]) -> None:
+        import torch
 
-if __name__ == "__main__":
-    # NCU child: one representative workload, excluded from optimization metrics.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from flashinfer_bench.compile import BuilderRegistry
-    from flashinfer_bench.data import Solution
-    from scripts.kernel_tuning.contracts import read_json
+        for dst, src in zip(destination, source):
+            if isinstance(dst, torch.Tensor):
+                dst.copy_(src)
 
-    if len(sys.argv) != 4 or sys.argv[1] != "--profile-once":
-        raise SystemExit("Internal NCU worker; use tuning.yaml profile: true")
-    adapter = FlashInferAdapter(TaskPackage.load(Path(sys.argv[2])))
-    runnable = BuilderRegistry.get_instance().build(
-        adapter.definition, Solution.model_validate(read_json(Path(sys.argv[3])))
-    )
-    adapter._call(runnable, adapter._inputs(adapter.traces[0].workload, adapter.cfg.seeds[0]))
-    import torch
+    def profile_once(self, solution: dict[str, Any], workload_id: str) -> None:
+        """Profile one actual call, after build/warmup/reset, using this adapter's inputs.
 
-    torch.cuda.synchronize(adapter.device)
+        ReplayAdapter overrides cloning, reset and graph capture to preserve shared
+        storage and mutations. All launches in the call are visible to NCU; neither
+        allocation/poisoning nor input preparation is inside the profiling range.
+        """
+        from flashinfer_bench.compile import BuilderRegistry
+        from flashinfer_bench.data import Solution
+
+        runnable = BuilderRegistry.get_instance().build(self.definition, Solution.model_validate(solution))
+        workload = next(t.workload for t in self.traces if t.workload.uuid == workload_id)
+        self._profile_runnable(runnable, workload)
+
+    def _profile_runnable(self, runnable: Any, workload: Any) -> None:
+        import torch
+
+        seed = self.cfg.seeds[0]
+        inputs = self._inputs(workload, seed)
+        for _ in range(self.cfg.timing.warmup):
+            self._seed(seed)
+            self._call(runnable, self._clone(inputs))
+        local = self._clone(inputs)
+        if self.cfg.timing.mode == "cuda_graph":
+            graph, args, outputs = self._capture(runnable, local)
+            launch = graph.replay
+        else:
+            # Prepare DPS output buffers and validate the signature outside NCU.
+            args, outputs = self._call(runnable, local)
+
+            def launch() -> Any:
+                return runnable(*args)
+
+        self._reset(local, inputs)
+        self._seed(seed)
+        torch.cuda.synchronize(self.device)
+        self._check_flags()
+        torch.cuda.profiler.start()
+        try:
+            result = launch()
+            torch.cuda.synchronize(self.device)
+        finally:
+            torch.cuda.profiler.stop()
+        # Hold outputs and graph buffers through the final device synchronization.
+        del result, outputs
+        self._check_flags()

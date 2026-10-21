@@ -1,0 +1,8 @@
+[submodule "skills/KernelWiki"]
+	path = skills/KernelWiki
+	url = https://github.com/ZhouBencheng/KernelWiki.git
+	branch = codex/thor-orin-adaptation
+[submodule "skills/ncu-report-skill"]
+	path = skills/ncu-report-skill
+	url = https://github.com/ZhouBencheng/ncu-report-skill.git
+	branch = codex/thor-orin-adaptation

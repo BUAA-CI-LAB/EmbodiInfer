@@ -87,10 +87,21 @@ def test_fixed_integer_inputs_round_trip_through_safetensors() -> None:
 
 def test_overrides_are_validated_and_regeneration_is_explicit(tmp_path: Path) -> None:
     operator = catalog()["gated_residual"]
-    overrides = parse_overrides(["evaluator_python=/opt/thor/bin/python", "search.max_candidates=4"])
+    overrides = parse_overrides(
+        [
+            "evaluator_python=/opt/thor/bin/python",
+            "search.max_candidates=4",
+            "profile=true",
+            "diagnostics.reader_python=/opt/reader/bin/python",
+            "diagnostics.max_reports=2",
+        ]
+    )
     task = render(operator, tmp_path / "task", overrides=overrides)
     assert task.settings.evaluator_python == "/opt/thor/bin/python"
     assert task.settings.search.max_candidates == 4
+    assert task.settings.profile
+    assert task.settings.diagnostics.reader_python == "/opt/reader/bin/python"
+    assert task.settings.diagnostics.max_reports == 2
     with pytest.raises(ContractError, match="--force"):
         render(operator, tmp_path / "task")
     assert render(operator, tmp_path / "task", overrides=overrides, force=True).identity == task.identity

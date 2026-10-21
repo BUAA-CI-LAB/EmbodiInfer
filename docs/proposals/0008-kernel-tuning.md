@@ -165,10 +165,84 @@ the installed kernel falls back even if its isolated benchmark improves.
 
 ### 4.4 Search, evaluate and promote
 
+#### Project skills and diagnostic feedback
+
+The Thor/Orin adaptations of KernelWiki and ncu-report-skill are Git submodules
+under `skills/`, pointing to ZhouBencheng's repositories. The parent repository's
+gitlinks pin the exact modified commits; initialize them with
+`git submodule update --init --recursive` before tuning. Run/resume fails before
+evaluation or agent turns if either skill is missing. Agent prompts name their
+entry points and executable commands; agents read the relevant pages and analyze
+existing reports. There is no separate skill installer, download lock, or per-run
+copy of the corpus. Repository instructions and the frozen numerical contract
+take precedence over generic skill recipes.
+
+Registration baseline snapshots retain submodule gitlink commits without
+traversing or initializing their contents in the isolated registration worktrees.
+
+GPU collection remains evaluator-owned. With `profile: true`, collect a baseline
+before the first planning turn and bounded candidate diagnostics after successful
+correctness evaluation. Profiling never supplies promotion timings. The worker
+loads the task's own adapter and uses its actual workload materialization,
+alias-preserving clone and call semantics; compilation and warmup happen outside
+the profiler range. All launches in that range are retained, including auxiliary
+kernels. Graph-mode tasks are diagnosed by one graph replay.
+
+NCU sections are discovered from the installed collector. The reader interpreter
+is separately configurable for aarch64 installations. Native typed captures and
+the skill's human-readable analyses are retained with the workload and source
+identity. Each new attempt receives baseline and recent candidate diagnostics,
+including explicit unavailable/error states. Optional profiling failures do not
+change a promotion decision; required profiling fails before search when baseline
+diagnostics cannot be produced. Diagnostic calls and their timeout consume the
+existing run budget and have an additional fixed call limit.
+
+`diagnostics.max_reports` defaults to four collection attempts per run (baseline
+included); failures and interrupted calls consume a slot and are not retried on
+resume. `diagnostics.timeout_seconds` defaults to 120 seconds, capped by the
+remaining run duration. `diagnostics.workload` selects a declared UUID or defaults
+to the first workload; collection uses the first frozen seed. This limited
+diagnostic sample is not evidence for performance across all shapes. The existing
+paired evaluator still validates and times every workload. Optional candidate
+diagnostic failures never revoke an accepted candidate; `diagnostics.required`
+requires successful baseline diagnostics only. Once the call limit is reached,
+later attempts keep receiving the existing evidence with its candidate identity.
+
+`diagnostics.ncu` selects the collector and `diagnostics.reader_python` selects a
+separate native reader environment (empty means the evaluator interpreter).
+`diagnostics.metric_profile` defaults to `auto`: the skill reader uses its
+qualified device selection rules, falling back to `generic` for unqualified
+identities. An explicit conflicting device profile fails analysis and preserves
+the raw capture. All actions remain archived; only the first 16 action summaries
+per report enter the agent feedback, with an explicit truncation marker and paths
+to the complete capture. Existing captures can be re-analyzed on CPU by
+`benchmarks/kernel_tuning/ncu_analysis.py --capture FILE --output NEW_DIR`.
+
+The collector follows NVIDIA's [CLI collection controls](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html):
+it discovers installed sections, disables collection until the worker calls the
+profiler API, and has no launch-count filter. Kernel/graph-node replay diagnostics
+can serialize execution and do not represent end-to-end latency. Missing source
+mapping or PM sampling is preserved as missing evidence. The implementation adds
+no compiler flags or build changes to manufacture source mappings.
+
+This extends repository developer tooling only. It does not add inference runtime
+dependencies or relax any correctness or paired-timing gate. CPU tests exercise
+the agent handoff, multi-action parsing, replay preparation, failures and resume;
+actual collection still requires a prepared target GPU.
+
 A task contains `README.md`, `definition.json`, `workloads.jsonl`, `baseline.py`,
 `tuning.yaml`, and optionally trusted `benchmark.py`; replay tasks also include
 layout/fixture contracts. Task and solution schemas reuse NVlabs KDA/FlashInfer
 formats. Humanize2 is pinned in the isolated tooling environment.
+
+The project applies a process-local Codex event compatibility shim at session
+setup. With the pinned Humanize2 driver and Codex 0.162.1, a recovered stream's
+`idle` notification can precede `turn/completed`; retaining an earlier reconnect
+notice then replays an already successful planning turn. Only explicit
+`willRetry: true` error notifications are excluded from terminal failure handling.
+Actual errors, failed/interrupted completions, budgets and permissions are unchanged.
+Regression tests replay the observed ordering through the real driver; review
+this private-driver shim whenever the Humanize2 pin changes.
 
 The agent reads the task and recent candidate source/evidence, writes a hypothesis
 and executable plan, and produces a candidate. A separate evaluator compiles it,
@@ -884,8 +958,9 @@ Tasks use the frozen Torch reference as their baseline and include
 preserved, including the reference relayout described in Section 4.3. Replay
 checks every output and rejects input mutation, resets storage outside timed
 events, and validates changed-input graph replay. Registry tasks default to
-CUDA Graph timing; eager timing remains available. NCU profiling requires a
-replay-aware adapter.
+CUDA Graph timing; eager timing remains available. NCU profiling uses the same
+replay adapter, cloning shared storage and resetting mutable inputs outside the
+profiling range; graph mode captures first and profiles the graph's kernel nodes.
 
 The shared `discovery.contracts`, `tasks`, `tensors` and `numerics` modules remain
 in place for registry capture, calibration, task generation, batch preflight and

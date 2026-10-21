@@ -39,8 +39,6 @@ class ReplayAdapter(FlashInferAdapter):
                 raise ContractError(
                     "Calibration and evaluator environments differ; recalibrate on the target"
                 )
-        if self.cfg.profile:
-            raise ContractError("Registry tasks need a replay-aware NCU adapter before profile=true")
 
     def _load_definition(self, definition: dict[str, Any]) -> Any:
         from .replay_schema import ReplayDefinition
