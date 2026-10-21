@@ -7,7 +7,7 @@
 | 目录 | 模型 | 默认数据 |
 |---|---|---|
 | [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | R2R/RxR 各前 48 个 episode，全帧回放 |
-| [activevln-benchmark](../../benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R/RxR 各前 48 个 episode，全帧回放；E2E 与完整 forward 计时 |
+| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R/RxR 各前 48 个 episode，全帧回放；E2E 与完整 forward 计时 |
 | [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | PI0.5 | LIBERO-10，1,600 帧 |
 | [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | R2R/RxR 各前 48 个 episode，每段 4 帧 |
 | [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | 与 PI0.5 相同的 LIBERO-10，1,600 帧 |
