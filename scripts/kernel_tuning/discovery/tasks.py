@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Any
 
-from ..artifacts import REPOSITORY, atomic_json
+from ..artifacts import atomic_json
 from ..contracts import ContractError, TaskPackage, read_json
 from ..generate import _dump_yaml, tuning_settings, vendor_sources
 from ..operators import Operator, Workload
@@ -47,8 +45,6 @@ def _expression(recipe: dict[str, Any]) -> str:
         return f"({entries},)" if kind == "tuple" and value else "()" if kind == "tuple" else f"[{entries}]"
     if kind == "dict":
         return "{" + ", ".join(f"{key!r}: {_expression(item)}" for key, item in value.items()) + "}"
-    if kind == "greedy_workspace":
-        return "GreedyWorkspace(**" + _expression({"dict": value}) + ")"
     raise ContractError(f"Unrecognized argument recipe {kind}")
 
 
@@ -69,45 +65,21 @@ def _return_expressions(
 def _sources(op: dict[str, Any]) -> tuple[str, dict[str, str]]:
     identity = op["identity"]
     files = {}
-    if identity["kind"] == "aten":
-        if not re.fullmatch(r"aten\.\w+\.\w+", identity["name"]):
-            raise ContractError("Invalid captured ATen overload")
-        imports, callable_name = "import torch\n", f"torch.ops.{identity['name']}"
-    elif identity["kind"] == "backend":
-        module, entry = identity["module"], identity["entry"]
-        if not re.fullmatch(r"embodiinfer\.backend\.\w+(?:\.\w+)*", module) or not entry.isidentifier():
-            raise ContractError("Unsupported backend source identity")
-        source = REPOSITORY.joinpath(*module.split(".")).with_suffix(".py")
-        if (
-            hashlib.sha256(source.read_text(encoding="utf-8").encode()).hexdigest()
-            != identity["source_digest"]
-        ):
-            raise ContractError(f"Backend source changed since capture: {identity['name']}")
-        vendored = vendor_sources(module)
-        if {path: source_digest for path, (_, source_digest) in vendored.items()} != identity[
-            "source_digests"
-        ]:
-            raise ContractError(f"Backend dependency changed since capture: {identity['name']}")
-        files = {path: text for path, (text, _) in vendored.items()}
-        imports, callable_name = f"import torch\nfrom .vendor.{module} import {entry}\n", entry
-        if module == "embodiinfer.backend.triton.sampling":
-            imports += f"from .vendor.{module} import GreedyWorkspace\n"
-    elif identity["kind"] == "registry":
-        module, entry = identity["module"], identity["entry"]
-        if module != "embodiinfer.backend.torch.ops" or not entry.isidentifier():
-            raise ContractError("Registry tasks take their baseline from embodiinfer.backend.torch.ops")
-        for name, key in ((module, "source_digests"), (identity["start_module"], "start_digests")):
-            vendored = vendor_sources(name)
-            if {path: source_digest for path, (_, source_digest) in vendored.items()} != identity[key]:
-                raise ContractError(f"Registry operator source changed since capture: {name}")
-            files.update({path: text for path, (text, _) in vendored.items()})
-        imports, callable_name = f"import torch\nfrom .vendor.{module} import {entry}\n", entry
-    else:
-        raise ContractError(f"No task builder for {identity['kind']}")
+    if identity["kind"] != "registry":
+        raise ContractError("Only registry tasks are supported; recapture with capture-ops")
+    module, entry = identity["module"], identity["entry"]
+    if module != "embodiinfer.backend.torch.ops" or not entry.isidentifier():
+        raise ContractError("Registry tasks take their baseline from embodiinfer.backend.torch.ops")
+    for name, key in ((module, "source_digests"), (identity["start_module"], "start_digests")):
+        vendored = vendor_sources(name)
+        if {path: source_digest for path, (_, source_digest) in vendored.items()} != identity[key]:
+            raise ContractError(f"Registry operator source changed since capture: {name}")
+        files.update({path: text for path, (text, _) in vendored.items()})
+    imports, callable_name = f"import torch\nfrom .vendor.{module} import {entry}\n", entry
     args, kwargs = identity["arguments"]["tuple"]
     names = [f"x{i}" for i in range(len(identity["input_dtypes"]))]
     returns = _return_expressions(identity["returns"]) + [f"x{i}" for i in identity["mutates"]]
-    layouts = _production_layouts(op) if identity["kind"] == "registry" else {}
+    layouts = _production_layouts(op)
     if layouts:
         imports += _RELAYOUT.format(layouts=repr(layouts))
     code = imports + f"\ndef run({', '.join(names)}):\n"
@@ -164,8 +136,7 @@ def _production_layouts(op: dict[str, Any]) -> dict[tuple[Any, ...], tuple[Any, 
 def _plan(
     capture: ModelCapture, op: dict[str, Any], overrides: dict[str, Any], hardware_notes: Path | None
 ) -> dict[str, str | bytes]:
-    registry = op["identity"]["kind"] == "registry"
-    name = (f"registry_{op['identity']['op']}_" if registry else "discovered_") + op["id"]
+    name = f"registry_{op['identity']['op']}_{op['id']}"
     unsupported = {
         spec["dtype"] for case in op["workloads"] for spec in case["inputs"] + case["outputs"]
     } - _DTYPES
@@ -221,9 +192,6 @@ def _plan(
         for tensor in case["inputs"]:
             if "fixture" in tensor:
                 sources[tensor["fixture"]] = (capture.root / tensor["fixture"]).read_bytes()
-        for phase in case.get("rng", {}).values():
-            for path in phase.values():
-                sources[path] = (capture.root / path).read_bytes()
     numerical = None
     precision = {"mode": "bit_exact", **execution_precision(capture.manifest["precision"])}
     if policy(identity) is not None:
@@ -251,16 +219,12 @@ def _plan(
         outputs={},
         reference=code,
         workloads=tuple(Workload(case["id"], {}, weight=case["count"]) for case in op["workloads"]),
-        notes="Registry operator; the Torch reference is the baseline."
-        if registry
-        else "Single observed operator; no new fusion.",
+        notes="Registry operator; the Torch reference is the baseline.",
         precision=precision,
         # Registry operators run inside the model's CUDA graphs in production.
-        timing="cuda_graph" if registry else "eager",
+        timing="cuda_graph",
     )
     settings = tuning_settings(descriptor, overrides)
-    if identity.get("rng") and settings["timing"]["mode"] != "eager":
-        raise ContractError("RNG replay currently requires eager timing")
     if settings["precision"] != precision:
         raise ContractError("Model task precision cannot override its frozen numerical contract")
     if numerical is not None and settings["seeds"] != list(SEEDS):
@@ -290,10 +254,6 @@ def _plan(
         "capture_identity": capture.identity,
         "target": capture.manifest["target"],
     }
-    if "rng" in identity:
-        replay["rng"] = identity["rng"]
-    if "undefined_outputs" in identity:
-        replay["undefined_outputs"] = identity["undefined_outputs"]
     if numerical is not None:
         replay["numerical_identity"] = identity
     sources.update(
@@ -304,47 +264,38 @@ def _plan(
             "tuning.yaml": _dump_yaml(settings),
             "replay.json": json.dumps(replay, indent=2) + "\n",
             "benchmark.py": "from benchmarks.kernel_tuning.replay_adapter import ReplayAdapter\n\ndef create_adapter(task):\n    return ReplayAdapter(task)\n",
-            "README.md": f"# {op['name']}\n\nTarget: `{capture.manifest['target']['model']}`.\nCapture: `{capture.identity}`.\n\nOptimize only this captured operator, preserving all output layouts, aliases and declared input mutations in replay.json. Return tensor outputs in definition order, including the mutated input buffers. Do not fuse with neighboring operators, introduce quantization, or change numerical settings. Use return-value style (destination_passing_style=false). All recorded workloads are mandatory.\n",
-            "generated.json": json.dumps(
-                {
-                    "generator": "scripts.kernel_tuning.discovery",
-                    "capture_identity": capture.identity,
-                    "operator_id": op["id"],
-                }
-            ),
         }
     )
-    if registry:
-        start = identity["start_module"].replace(".", "/")
-        sources["README.md"] = (
-            f"# {identity['op']}\n\nTarget: `{capture.manifest['target']['model']}`.\n"
-            f"Capture: `{capture.identity}`.\n\n"
-            "Write a faster implementation of this operator-registry entry. The baseline to "
-            "beat is the Torch reference in baseline.py "
-            f"(`vendor/embodiinfer/backend/torch/ops.py::{identity['entry']}`); the repository's "
-            f"current implementation, `vendor/{start}.py::{identity['start_entry']}`, is a valid "
-            "starting point. Keep the call signature, return outputs with exactly the recorded "
-            "shapes, strides and dtypes in replay.json, use return-value style "
-            "(destination_passing_style=false), and do not change dtypes, masks or numerical "
-            "settings. Every recorded workload is mandatory and weighted by its call count in "
-            "the model. The installed kernel is used only for these recorded argument layouts, "
-            "so you may specialize on them.\n"
+    start = identity["start_module"].replace(".", "/")
+    sources["README.md"] = (
+        f"# {identity['op']}\n\nTarget: `{capture.manifest['target']['model']}`.\n"
+        f"Capture: `{capture.identity}`.\n\n"
+        "Write a faster implementation of this operator-registry entry. The baseline to "
+        "beat is the Torch reference in baseline.py "
+        f"(`vendor/embodiinfer/backend/torch/ops.py::{identity['entry']}`); the repository's "
+        f"current implementation, `vendor/{start}.py::{identity['start_entry']}`, is a valid "
+        "starting point. Keep the call signature, return outputs with exactly the recorded "
+        "shapes, strides and dtypes in replay.json, use return-value style "
+        "(destination_passing_style=false), and do not change dtypes, masks or numerical "
+        "settings. Every recorded workload is mandatory and weighted by its call count in "
+        "the model. The installed kernel is used only for these recorded argument layouts, "
+        "so you may specialize on them.\n"
+    )
+    if _production_layouts(op):
+        sources["README.md"] += (
+            "\nOutput layouts are those of the implementation the model ran. Where the Torch "
+            "reference lays a result out differently (`reference_outputs` in replay.json), "
+            "baseline.py copies it into the production layout; the copy is part of the "
+            "baseline's time and leaves values unchanged.\n"
         )
-        if _production_layouts(op):
-            sources["README.md"] += (
-                "\nOutput layouts are those of the implementation the model ran. Where the Torch "
-                "reference lays a result out differently (`reference_outputs` in replay.json), "
-                "baseline.py copies it into the production layout; the copy is part of the "
-                "baseline's time and leaves values unchanged.\n"
-            )
-        sources["generated.json"] = json.dumps(
-            {
-                "generator": "scripts.kernel_tuning.regions",
-                "capture_identity": capture.identity,
-                "operator_id": op["id"],
-                "registry_op": identity["op"],
-            }
-        )
+    sources["generated.json"] = json.dumps(
+        {
+            "generator": "scripts.kernel_tuning.regions",
+            "capture_identity": capture.identity,
+            "operator_id": op["id"],
+            "registry_op": identity["op"],
+        }
+    )
     if hardware_notes is not None:
         sources["HARDWARE.md"] = hardware_notes.read_text(encoding="utf-8")
     if numerical is not None:
@@ -354,14 +305,6 @@ def _plan(
             "only their reporting maxima. Recorded inputs, fresh random inputs, zeros and "
             "cancellation inputs must all pass. Reassociation is permitted within these "
             "bounds; changing dtype, masks, accumulation settings or the contract is not.\n"
-        )
-    if "rng" in identity:
-        sources["README.md"] += (
-            "\nThis call consumes the default PyTorch generator. The evaluator restores the "
-            "opaque before-state before every call and checks the exact after-state as well as "
-            "the tensor outputs. Seed 0 replays the recorded transition; other seeds test fresh "
-            "generator states. Preserve both CPU and target-CUDA RNG state advancement. RNG "
-            "reset is outside timed events; CUDA Graph timing is not supported for this task.\n"
         )
     if any(spec["dtype"] == "float64" for kind in (inputs, outputs) for spec in kind.values()):
         sources["README.md"] += (

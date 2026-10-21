@@ -125,7 +125,7 @@ def _model_capture(args: argparse.Namespace) -> ModelCapture:
             "Model tuning requires complete coverage: no operator filter, --estimated, --force, or --skip-preflight"
         )
     if args.captured is None:
-        raise ContractError("Model tuning requires --captured MODEL_CAPTURE; run capture --model first")
+        raise ContractError("Model tuning requires --captured MODEL_CAPTURE; run capture-ops --model first")
     return ModelCapture.load(args.captured, args.model[0], require_ready=not getattr(args, "list", False))
 
 
@@ -266,13 +266,15 @@ def main(argv: list[str] | None = None) -> int:
     export = commands.add_parser("export", help="Export best verified source and evidence; no execution")
     export.add_argument("run", type=Path)
     export.add_argument("destination", type=Path)
-    generate = commands.add_parser("generate", help="Write every discovered model task; no execution")
+    generate = commands.add_parser(
+        "generate", help="Write tasks from a registry capture or catalog; no execution"
+    )
     _selection(generate)
     generate.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning/tasks")
     generate.add_argument(
         "--force", action="store_true", help="Replace previously generated task directories"
     )
-    generate.add_argument("--list", action="store_true", help="List discovered operators and coverage gaps")
+    generate.add_argument("--list", action="store_true", help="List captured registry or catalog operators")
     tune_all = commands.add_parser("tune-all", help="Generate, preflight, and tune every selected operator")
     _selection(tune_all)
     tune_all.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec for every operator")
@@ -284,17 +286,11 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--preflight-only", action="store_true", help="Stop after measuring the baselines")
     mode.add_argument("--skip-preflight", action="store_true", help="Let each run measure its baseline")
     capture = commands.add_parser(
-        "capture", help="Record production kernel shapes while a model script runs (model runtime)"
+        "capture", help="Record legacy catalog workload shapes; use capture-ops for registry tuning"
     )
     capture.add_argument("operators", nargs="*", help="Catalog operators to record (default: all)")
-    capture.add_argument("--catalog", action="store_true", help="Record legacy catalog-only JSONL")
-    capture.add_argument("--model", help="Canonical policy name constructed by the preparation script")
-    capture.add_argument(
-        "--fixture-bytes", type=int, default=64 * 1024 * 1024, help="Maximum stored input fixture bytes"
-    )
-    capture.add_argument(
-        "--output", type=Path, required=True, help="New model capture directory (JSONL for --catalog)"
-    )
+    capture.add_argument("--catalog", action="store_true", required=True, help="Record catalog-only JSONL")
+    capture.add_argument("--output", type=Path, required=True, help="Destination JSONL file")
     capture.add_argument("script", nargs=argparse.REMAINDER, help="-- SCRIPT [ARGS] or -- -m MODULE [ARGS]")
     capture_ops = commands.add_parser(
         "capture-ops", help="Record operator-registry calls as a tunable model capture (model runtime)"
@@ -357,31 +353,15 @@ def main(argv: list[str] | None = None) -> int:
 
             return dispatch(args)
         if args.command == "capture":
-            if args.catalog:
-                from .capture import run as run_capture
-                from .operators import select
+            from .capture import run as run_capture
+            from .operators import select
 
-                if args.model:
-                    raise ContractError("Legacy catalog capture does not bind a model; omit --model")
-                rows = run_capture(command or args.script, args.output, select(args.operators or None))
-                calls = sum(row["count"] for row in rows if "axes" in row)
-                print(
-                    f"Captured {calls} calls in {sum('axes' in row for row in rows)} cases -> {args.output}"
-                )
-                for row in rows:
-                    if "skipped" in row:
-                        print(f"  skipped {row['count']} {row['operator']} calls: {row['skipped']}")
-            else:
-                from .discovery.recorder import run as run_model_capture
-
-                if not args.model or args.operators:
-                    raise ContractError(
-                        "Capture requires one --model and no operator filter; use --catalog for legacy capture"
-                    )
-                result = run_model_capture(
-                    command or args.script, args.output, args.model, fixture_bytes=args.fixture_bytes
-                )
-                print(json.dumps(result, indent=2, ensure_ascii=False))
+            rows = run_capture(command or args.script, args.output, select(args.operators or None))
+            calls = sum(row["count"] for row in rows if "axes" in row)
+            print(f"Captured {calls} calls in {sum('axes' in row for row in rows)} cases -> {args.output}")
+            for row in rows:
+                if "skipped" in row:
+                    print(f"  skipped {row['count']} {row['operator']} calls: {row['skipped']}")
         elif args.command == "capture-ops":
             from .regions import run as run_op_capture
 

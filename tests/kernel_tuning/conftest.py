@@ -162,3 +162,36 @@ def candidate(store: RunStore) -> dict[str, Any]:
             {"path": "kernel.py", "content": "def run(residual, update, gate):\n    return residual\n"}
         ],
     }
+
+
+@pytest.fixture
+def registry_capture():
+    """Build CPU captures using the same recorder as capture-ops, without a checkpoint."""
+    pytest.importorskip("torch")
+    from scripts.kernel_tuning.artifacts import atomic_json
+    from scripts.kernel_tuning.contracts import read_json
+    from scripts.kernel_tuning.discovery.contracts import ModelCapture
+    from scripts.kernel_tuning.regions import OpCapture
+
+    from embodiinfer.layers.ops import get_op
+
+    def record(
+        root: Path, calls: list[tuple], *, budget: int = 1024 * 1024, device_type: str = "cpu"
+    ) -> ModelCapture:
+        capture = OpCapture("mock_flow_vla", root / "raw", warmup=0, steps=1, fixture_bytes=budget)
+        capture.target = {"model": "mock_flow_vla", "type": "test.Policy", "config": {}}
+        capture.started = 1
+        try:
+            for name, args, kwargs in calls:
+                function = get_op(name, "torch")
+                capture.record(name, function, function, args, kwargs)
+        finally:
+            capture.close(complete=True)
+        # The CLI targets CUDA; the fixture changes only the declared evaluator
+        # device, after recording real CPU tensors through OpCapture.record.
+        manifest = read_json(capture.root / "manifest.json")
+        manifest["device_type"] = device_type
+        atomic_json(capture.root / "manifest.json", manifest)
+        return ModelCapture.load(capture.root, require_ready=False)
+
+    return record

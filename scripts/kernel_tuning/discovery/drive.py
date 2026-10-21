@@ -1,16 +1,16 @@
 """Run recorded inputs through one model's production inference path.
 
-This is the preparation driver for model operator discovery::
+This shared inference driver serves profiling, registry capture and verification::
 
-    python -m scripts.kernel_tuning capture --model POLICY --output CAPTURE -- \\
-        -m scripts.kernel_tuning.discovery.drive --policy POLICY --inputs INPUTS.pt [serving options]
+    python -m scripts.kernel_tuning capture-ops --model POLICY --output CAPTURE -- \\
+        -m scripts.kernel_tuning.discovery.drive --policy POLICY --inputs INPUTS.pt --no-cuda-graph [serving options]
 
 The policy and engine are constructed with the same arguments as the serving
 transports. ``requests`` inputs go through the policy's serving adapter, exactly
 as an HTTP request would; ``observations`` inputs go through ``policy.collate``
 and ``EngineCore.execute``. Recurrent policies keep one session per episode, so
-memory grows the way it does in deployment. The capture records whatever this
-inference executes; the driver itself chooses no operators or code paths.
+memory grows the way it does in deployment. The calling tool controls profiling
+or registry observation; the driver itself chooses no operators or code paths.
 """
 
 from __future__ import annotations

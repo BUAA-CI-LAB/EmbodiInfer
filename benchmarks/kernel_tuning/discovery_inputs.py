@@ -1,7 +1,7 @@
-"""Export benchmark data as end-to-end inputs for model operator discovery.
+"""Export benchmark data as end-to-end inputs for profiling, registry capture and verification.
 
 The output is read by ``scripts.kernel_tuning.discovery.drive``. Data selection
-reuses each benchmark's own loader, so discovery sees the same images, states,
+reuses each benchmark's own loader, so the shared driver sees the same images, states,
 instructions and episode order as the measurement. Run in the model's runtime::
 
     python -m benchmarks.kernel_tuning.discovery_inputs pi05 --config benchmarks/pi05-benchmark/config.yaml \\
@@ -146,7 +146,7 @@ def streamvln(args: argparse.Namespace) -> list[list[RawPolicyRequest]]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Write one model's discovery inputs."""
+    """Write one model's recorded inference inputs."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

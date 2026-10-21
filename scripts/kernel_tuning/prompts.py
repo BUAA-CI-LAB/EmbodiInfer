@@ -63,7 +63,7 @@ def implementation_prompt(task: TaskPackage) -> str:
         ],
     }
     replay = (
-        "This discovered task requires destination_passing_style=false. Preserve replay.json input/output layouts, aliases and mutations, returning mutated buffers in definition order. No new operator fusion or quantization.\n"
+        "This captured registry task requires destination_passing_style=false. Preserve replay.json input/output layouts, aliases and mutations, returning mutated buffers in definition order. No new operator fusion or quantization.\n"
         if "replay.json" in task.hashes
         else ""
     )

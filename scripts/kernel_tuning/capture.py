@@ -1,6 +1,6 @@
 """Record the shapes of production kernel calls while a model actually runs.
 
-``python -m scripts.kernel_tuning capture --output calls.jsonl -- SCRIPT [ARGS]``
+``python -m scripts.kernel_tuning capture --catalog --output calls.jsonl -- SCRIPT [ARGS]``
 executes an unmodified inference or benchmark script in this interpreter with
 each catalog operator's production function wrapped. Every call is converted to
 the operator's task axes, scalars, and fixed integer inputs, so captured traffic
