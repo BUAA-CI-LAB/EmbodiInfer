@@ -25,59 +25,31 @@ from scripts.kernel_tuning.artifacts import atomic_json  # noqa: E402
 from scripts.kernel_tuning.contracts import ContractError, TaskPackage, read_json  # noqa: E402
 from scripts.kernel_tuning.discovery.contracts import ModelCapture  # noqa: E402
 from scripts.kernel_tuning.discovery.numerics import PROFILES, policy  # noqa: E402
-from scripts.kernel_tuning.discovery.recorder import CaptureSession  # noqa: E402
 from scripts.kernel_tuning.discovery.tasks import render_model  # noqa: E402
-from scripts.kernel_tuning.discovery.tensors import flatten  # noqa: E402
-
-
-def record(root: Path, fn, *, budget: int = 1024 * 1024) -> ModelCapture:
-    session = CaptureSession("test", root / "raw", device_type="cpu", fixture_bytes=budget)
-    try:
-        with torch.inference_mode(), session.observe(object()):
-            fn()
-    finally:
-        session.close(complete=True)
-    return ModelCapture.load(session.root, require_ready=False)
-
-
-def identity(name: str, *args, **kwargs) -> tuple[dict, list]:
-    tensors = []
-    recipe = flatten((args, kwargs), tensors)
-    return {
-        "kind": "aten",
-        "name": name,
-        "arguments": recipe,
-        "input_dtypes": [str(t.dtype).removeprefix("torch.") for t in tensors],
-        "output_dtypes": ["float32"],
-        "mutates": [],
-    }, tensors
 
 
 @pytest.fixture
-def calibrated(tmp_path: Path) -> ModelCapture:
+def calibrated(tmp_path: Path, registry_capture) -> ModelCapture:
     generator = torch.Generator().manual_seed(17)
     a = torch.randn(3, 16, generator=generator)
     b = torch.randn(16, 5, generator=generator)
     c = torch.randn(4, 16, generator=generator) * 64
-    raw = record(tmp_path, lambda: (a @ b, c @ b))
+    raw = registry_capture(tmp_path, [("linear", (a, b.T), {}), ("linear", (c, b.T), {})])
     return calibrate(raw, tmp_path / "calibrated")
 
 
-def test_semantics_do_not_relax_copies_rng_mutation_integer_or_fp64() -> None:
-    x = torch.ones(3, 3)
-    for name in (
-        "aten.mm.default",
-        "aten.linear.default",
-        "aten.sum.default",
-        "aten.scaled_dot_product_attention.default",
-    ):
-        spec, _ = identity(name, x)
-        assert policy(spec) == "aten"
-    for name in ("aten.clone.default", "aten.copy_.default", "aten.relu.default", "aten.index.Tensor"):
-        spec, _ = identity(name, x)
-        assert policy(spec) is None
-    spec, _ = identity("aten.mm.default", x)
+def test_registry_semantics_keep_mutation_integer_and_fp64_exact() -> None:
+    spec = {
+        "kind": "registry",
+        "name": "registry.linear",
+        "input_dtypes": ["float32"],
+        "output_dtypes": ["float32"],
+        "mutates": [],
+    }
+    assert policy(spec) == "registry"
     for extra in (
+        {"kind": "aten", "name": "aten.mm.default"},
+        {"kind": "backend"},
         {"mutates": [0]},
         {"rng": {"kind": "torch_default"}},
         {"input_dtypes": ["float64"]},
@@ -86,9 +58,11 @@ def test_semantics_do_not_relax_copies_rng_mutation_integer_or_fp64() -> None:
         assert policy({**spec, **extra}) is None
 
 
-def test_generation_requires_calibration_and_capture_keeps_only_execution_switches(tmp_path: Path) -> None:
+def test_generation_requires_calibration_and_capture_keeps_only_execution_switches(
+    tmp_path: Path, registry_capture
+) -> None:
     x = torch.ones(3, 3)
-    capture = record(tmp_path, lambda: x @ x)
+    capture = registry_capture(tmp_path, [("linear", (x, x), {})])
     assert "mode" not in capture.manifest["precision"]
     with pytest.raises(ContractError, match="Missing numerical calibration"):
         render_model(capture, tmp_path / "tasks")
@@ -139,11 +113,16 @@ def test_task_loader_rejects_calibration_edits(calibrated: ModelCapture, tmp_pat
         TaskPackage.load(task.root)
 
 
-def test_real_inputs_cannot_silently_fall_back_to_random_when_budget_exhausted(tmp_path: Path) -> None:
+def test_real_inputs_cannot_silently_fall_back_to_random_when_budget_exhausted(
+    tmp_path: Path, registry_capture
+) -> None:
     x = torch.ones(8, 8)
-    capture = record(tmp_path, lambda: x @ x, budget=0)
-    assert capture.operators[0]["status"] == "blocked"
-    assert "fixture" in capture.operators[0]["reason"]
+    capture = registry_capture(
+        tmp_path,
+        [("gelu_tanh", (torch.ones(2, dtype=torch.float64),), {}), ("linear", (x, x), {})],
+        budget=32,
+    )
+    assert any("fixture" in error for error in capture.manifest["errors"])
     with pytest.raises(ContractError, match="incomplete"):
         calibrate(capture, tmp_path / "calibrated")
 
@@ -180,35 +159,6 @@ def test_calibration_restores_global_precision_on_failure() -> None:
     ):
         raise RuntimeError("broken baseline")
     assert environment("cpu") == before
-
-
-@pytest.mark.parametrize(
-    "causal,gqa,masked", [(False, False, True), (True, False, False), (False, True, True)]
-)
-def test_fp64_attention_matches_math_reference(causal: bool, gqa: bool, masked: bool) -> None:
-    generator = torch.Generator().manual_seed(2)
-    q = torch.randn(1, 4, 7, 8, generator=generator)
-    k = torch.randn(1, 2 if gqa else 4, 9, 8, generator=generator)
-    v = torch.randn(1, 2 if gqa else 4, 9, 8, generator=generator)
-    mask = torch.ones(7, 9, dtype=torch.bool) if masked else None
-    if mask is not None:
-        mask[0] = False
-        mask[1:, -2:] = False
-    spec, tensors = identity(
-        "aten.scaled_dot_product_attention.default",
-        q,
-        k,
-        v,
-        attn_mask=mask,
-        dropout_p=0.0,
-        is_causal=causal,
-        scale=0.25,
-        enable_gqa=gqa,
-    )
-    expected = torch.nn.functional.scaled_dot_product_attention(
-        q.double(), k.double(), v.double(), attn_mask=mask, is_causal=causal, scale=0.25, enable_gqa=gqa
-    )
-    torch.testing.assert_close(high_precision(spec, tensors)[0], expected, atol=1e-12, rtol=1e-12)
 
 
 def test_replay_uses_calibrated_bounds_and_all_profiles(
@@ -264,33 +214,32 @@ def test_replay_uses_calibrated_bounds_and_all_profiles(
     assert asdict(task.settings.precision)["mode"] == "tolerance"
 
 
-def test_random_profiles_preserve_masks_and_change_real_values(tmp_path: Path) -> None:
+def test_random_profiles_preserve_masks_and_change_real_values(tmp_path: Path, registry_capture) -> None:
     q = torch.ones(1, 1, 3, 4)
-    mask = torch.tensor([[True, False, True]]).expand(3, 3)
-    capture = record(tmp_path, lambda: torch.ops.aten.scaled_dot_product_attention.default(q, q, q, mask))
-    # Current Torch observes the public SDPA overload atomically.
-    op = next(op for op in capture.operators if op["name"] == "aten.scaled_dot_product_attention.default")
+    prefix = torch.ones(1, 1, 2, 4)
+    suffix = torch.ones(1, 1, 1, 4)
+    mask = torch.tensor([[[[0.0, -1.0, 0.0]]]])
+    capture = registry_capture(
+        tmp_path, [("split_kv_attention", (q, prefix, prefix, suffix, suffix, mask, 0.5), {})]
+    )
+    (op,) = capture.operators
     case = op["workloads"][0]
     real = validation_inputs(op["identity"], case, capture.root, "recorded", 0)
     random = validation_inputs(op["identity"], case, capture.root, "random", 1)
     assert not torch.equal(real[0], random[0])
     assert torch.equal(real[-1], random[-1])
+    expected = production(op["identity"], [value.double() for value in real])
+    torch.testing.assert_close(high_precision(op["identity"], real)[0], expected[0], atol=0, rtol=0)
 
 
-def test_rms_norm_default_epsilon_preserves_input_dtype_semantics() -> None:
-    value = torch.full((2, 4), 0.001, dtype=torch.bfloat16)
-    spec, tensors = identity("aten.rms_norm.default", value, [4])
-    actual = high_precision(spec, tensors)[0]
-    expected = torch.nn.functional.rms_norm(value.double(), [4], eps=torch.finfo(value.dtype).eps)
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-
-def test_calibrate_cli_writes_a_new_capture_before_generation(tmp_path: Path, capsys) -> None:
+def test_calibrate_cli_writes_a_new_capture_before_generation(
+    tmp_path: Path, capsys, registry_capture
+) -> None:
     from scripts.kernel_tuning.__main__ import main
 
     value = torch.ones(2, 3)
     weight = torch.ones(3, 4)
-    raw = record(tmp_path, lambda: value @ weight)
+    raw = registry_capture(tmp_path, [("linear", (value, weight.T), {})])
     destination = tmp_path / "cli-calibrated"
     assert main(["calibrate", "--captured", str(raw.root), "--output", str(destination)]) == 0
     assert "identity" in capsys.readouterr().out

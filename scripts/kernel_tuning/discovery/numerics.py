@@ -12,31 +12,6 @@ from ..contracts import ContractError, digest
 VERSION = "baseline-fp64-v1"
 SEEDS = (0, 1, 2)
 PROFILES = (("recorded", 0), ("random", 1), ("random", 2), ("zeros", 0), ("cancellation", 0))
-# Explicit semantic adapters, not substring matching on arbitrary operator names.
-_ATEN = {
-    "mm",
-    "bmm",
-    "matmul",
-    "mv",
-    "dot",
-    "addmm",
-    "baddbmm",
-    "linear",
-    "sum",
-    "mean",
-    "_softmax",
-    "softmax",
-    "_log_softmax",
-    "log_softmax",
-    "native_layer_norm",
-    "layer_norm",
-    "rms_norm",
-    "scaled_dot_product_attention",
-}
-_BACKENDS = {
-    "embodiinfer.backend.triton.split_kv_attention.split_kv_attention": "split_kv_attention",
-    "embodiinfer.backend.triton.segmented_attention.segmented_attention": "segmented_attention",
-}
 
 
 def implementation_digest() -> str:
@@ -66,10 +41,7 @@ def policy(identity: dict[str, Any]) -> str | None:
         # Registry operators define their mathematics by a Torch reference,
         # which also evaluates it in FP64 (embodiinfer.backend.torch.ops).
         return "registry"
-    name = identity["name"]
-    if identity["kind"] == "aten" and name.split(".")[1] in _ATEN:
-        return "aten"
-    return _BACKENDS.get(name)
+    return None
 
 
 def profile_key(profile: str, seed: int) -> str:

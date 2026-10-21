@@ -1,8 +1,7 @@
-"""Evaluate discovered calls with captured layouts, aliases, and mutable state."""
+"""Evaluate registry calls with captured layouts, aliases, and mutable state."""
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from typing import Any
 
 from scripts.kernel_tuning.contracts import ContractError, Precision, TaskPackage, read_json
@@ -32,7 +31,6 @@ class ReplayAdapter(FlashInferAdapter):
         torch.use_deterministic_algorithms(flags["deterministic_algorithms"])
         self._precision_flags = self._flags()
         self.case: dict[str, Any] = {}
-        self._rng: Any = None
         self.numerical = read_json(task.root / "numerics.json") if "numerics.json" in task.hashes else None
         if self.numerical is not None:
             from .calibration import environment
@@ -42,22 +40,12 @@ class ReplayAdapter(FlashInferAdapter):
                     "Calibration and evaluator environments differ; recalibrate on the target"
                 )
         if self.cfg.profile:
-            raise ContractError("Discovered tasks need a replay-aware NCU adapter before profile=true")
-        if self.replay.get("rng") and self.cfg.timing.mode != "eager":
-            raise ContractError("RNG replay currently requires eager timing")
+            raise ContractError("Registry tasks need a replay-aware NCU adapter before profile=true")
 
     def _load_definition(self, definition: dict[str, Any]) -> Any:
         from .replay_schema import ReplayDefinition
 
         return ReplayDefinition.model_validate(definition)
-
-    def evaluate(self, solutions: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        """Evaluate stateful RNG calls without leaking their state into the caller."""
-        from scripts.kernel_tuning.discovery.rng import preserve
-
-        rng = self.replay.get("rng")
-        with preserve(rng["devices"]) if rng else nullcontext():
-            return super().evaluate(solutions)
 
     def _build_reference(self, registry: Any) -> Any:
         from flashinfer_bench.data import Solution
@@ -66,22 +54,11 @@ class ReplayAdapter(FlashInferAdapter):
         # snapshotted relative imports. Both reference and baseline are immutable.
         return registry.build(self.definition, Solution.model_validate(self.task.baseline()))
 
-    def _seed(self, seed: int) -> None:
-        # RngReplay resets only the declared generators. The ordinary adapter's
-        # global seed would also mutate unrelated CUDA devices.
-        if not self.replay.get("rng"):
-            super()._seed(seed)
-
     def _inputs(self, workload: Any, seed: int) -> list[Any]:
         from scripts.kernel_tuning.discovery.tensors import materialize
 
         self._seed(seed)
         self.case = self.replay["cases"][workload.uuid]
-        from scripts.kernel_tuning.discovery.rng import RngReplay
-
-        self._rng = (
-            RngReplay(self.replay["rng"], self.case, self.task.root, seed) if self.replay.get("rng") else None
-        )
         if getattr(self, "numerical", None) is not None:
             from scripts.kernel_tuning.discovery.numerics import profile_key
 
@@ -138,7 +115,7 @@ class ReplayAdapter(FlashInferAdapter):
 
     def _call(self, runnable: Any, inputs: list[Any]) -> tuple[list[Any], list[Any]]:
         if runnable.metadata.destination_passing_style:
-            raise ContractError("Discovered tasks require return-value style")
+            raise ContractError("Registry tasks require return-value style")
         outputs = self._outputs(runnable(*inputs))
         self._check_outputs(inputs, outputs)
         return list(inputs), outputs
@@ -146,8 +123,6 @@ class ReplayAdapter(FlashInferAdapter):
     def _verify_call(
         self, runnable: Any, reference: Any, inputs: list[Any], seed: int
     ) -> tuple[float, float]:
-        from scripts.kernel_tuning.discovery.rng import preserve
-
         if getattr(self, "numerical", None) is not None:
             from scripts.kernel_tuning.discovery.numerics import PROFILES, profile_key
 
@@ -164,33 +139,20 @@ class ReplayAdapter(FlashInferAdapter):
                 current = self._verify_transition(runnable, reference, values, seed)
                 error = tuple(max(a, b) for a, b in zip(error, current))
             return error
-        rng = getattr(self, "_rng", None)
-        with preserve(rng.devices) if rng else nullcontext():
-            return self._verify_transition(runnable, reference, inputs, seed)
+        return self._verify_transition(runnable, reference, inputs, seed)
 
     def _verify_transition(
         self, runnable: Any, reference: Any, inputs: list[Any], seed: int
     ) -> tuple[float, float]:
         import torch
-        from scripts.kernel_tuning.discovery.rng import snapshot
 
-        rng = getattr(self, "_rng", None)
         expected_inputs = self._clone(inputs)
         self._seed(seed)
-        if rng:
-            rng.reset()
         _, expected = self._call(reference, expected_inputs)
-        if rng:
-            expected_rng = snapshot(rng.devices)
-            rng.check_reference(expected_rng)
         expected = [value.clone() for value in expected]
         self._seed(seed)
         local = self._clone(inputs)
-        if rng:
-            rng.reset()
         _, outputs = self._call(runnable, local)
-        if rng:
-            rng.check(snapshot(rng.devices), expected_rng)
         torch.cuda.synchronize(self.device)
         self._check_flags()
         # Check every byte of backing storage, including aliases and untouched
@@ -200,10 +162,6 @@ class ReplayAdapter(FlashInferAdapter):
         return tuple(max(a, b) for a, b in zip(error, current))
 
     def _compare(self, actual: list[Any], expected: list[Any], inputs: list[Any]) -> tuple[float, float]:
-        # Unspecified bytes (unused dropout RNG state) carry no result to validate.
-        undefined = set(self.replay.get("undefined_outputs", ()))
-        actual = [value for i, value in enumerate(actual) if i not in undefined]
-        expected = [value for i, value in enumerate(expected) if i not in undefined]
         if getattr(self, "numerical", None) is None:
             return compare_outputs(actual, expected, self.cfg.precision)
         from .calibration import compare_calibrated, high_precision
@@ -328,13 +286,6 @@ class ReplayAdapter(FlashInferAdapter):
         return error
 
     def _time(self, runnable: Any, inputs: list[Any]) -> float:
-        from scripts.kernel_tuning.discovery.rng import preserve
-
-        rng = getattr(self, "_rng", None)
-        with preserve(rng.devices) if rng else nullcontext():
-            return self._time_samples(runnable, inputs)
-
-    def _time_samples(self, runnable: Any, inputs: list[Any]) -> float:
         import torch
 
         local = self._clone(inputs)
@@ -353,8 +304,6 @@ class ReplayAdapter(FlashInferAdapter):
         def prepare() -> None:
             for dst, src in pairs:
                 dst.copy_(src)
-            if self._rng:
-                self._rng.reset()
             # Reset copies touch L2 too; evict them before the timed call.
             self._flush.zero_()
 

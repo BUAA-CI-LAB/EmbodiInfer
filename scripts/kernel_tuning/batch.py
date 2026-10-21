@@ -94,7 +94,7 @@ def preflight(root: Path, names: list[str] | None = None) -> dict[str, str | Non
     _verify_model(root, batch)
     if batch.get("model"):
         if names is not None:
-            raise ContractError("Model preflight must include every discovered task")
+            raise ContractError("Model preflight must include every captured registry task")
         batch["preflight_complete"] = False
         atomic_json(root / "batch.json", batch)
     results: dict[str, str | None] = {}
@@ -254,7 +254,7 @@ def verify_model_task(task: TaskPackage) -> Path:
     root = task.root.parent.parent
     if not (root / "batch.json").is_file():
         raise ContractError(
-            "Start discovered tasks with tune-all; standalone run cannot bypass model preflight"
+            "Start captured registry tasks with tune-all; standalone run cannot bypass model preflight"
         )
     record = read_json(root / "batch.json")
     if record.get("schema_version") != 2:
