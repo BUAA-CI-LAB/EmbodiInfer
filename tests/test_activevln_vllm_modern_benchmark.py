@@ -47,6 +47,7 @@ def test_speculative_tokens_after_stop_never_enter_next_observation(modern, monk
 
     monkeypatch.setattr(torch.cuda, "synchronize", lambda *args: None)
     runtime = modern.ModernVLLMReplay.__new__(modern.ModernVLLMReplay)
+    runtime.action_space = "r2r"
     runtime.device = torch.device("cpu")
     runtime.processor = SimpleNamespace(apply_chat_template=lambda *args, **kwargs: "initial")
     runtime.tokenizer = SimpleNamespace(

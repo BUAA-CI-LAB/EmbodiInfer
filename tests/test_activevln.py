@@ -505,6 +505,7 @@ def test_tree_terminal_nodes_preserve_serial_eos_stop_and_budget(script, limit, 
         max_new_tokens = limit
         tokenizer = Tokenizer()
         _inference_graphs = None
+        parse_actions = staticmethod(parse_r2r_actions)
 
         def logits(self, generated):
             next_id = script[len(generated)] if len(generated) < len(script) else 2

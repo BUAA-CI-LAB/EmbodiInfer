@@ -101,6 +101,7 @@ def test_refill_keeps_surviving_history_and_episode_cache_salt(batch_module, mon
     monkeypatch.setattr(torch.cuda, "synchronize", lambda *args: None)
     runtime = batch_module.BatchedVLLMReplay.__new__(batch_module.BatchedVLLMReplay)
     runtime.config = {"batch_size": 2}
+    runtime.action_space = "r2r"
     runtime.device = torch.device("cpu")
     runtime.processor = SimpleNamespace(apply_chat_template=lambda *args, **kwargs: "initial")
     runtime.tokenizer = SimpleNamespace(
