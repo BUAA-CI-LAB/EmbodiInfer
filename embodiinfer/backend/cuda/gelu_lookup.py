@@ -65,6 +65,10 @@ class GeluLookup:
             )
         return self.original.cc_geglu(*args)
 
+    def cc_geglu_packed(self, *args) -> int:
+        """Forward strided packed GeGLU epilogues to the fusion library."""
+        return self.original.cc_geglu_packed(*args)
+
     def cc_geglu_fp4(self, *args) -> int:
         """Append the table and launch selection to the original FP4 ABI."""
         if self.mode == "reference":

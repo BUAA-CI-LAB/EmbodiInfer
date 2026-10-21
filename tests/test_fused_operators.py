@@ -278,3 +278,68 @@ def test_thor_lookup_nvfp4_epilogue_preserves_separate_encoder_bytes():
     actual = LookupGeluMul(quantizer).plan(gate, 4, 0.002).encode(gate, up)
     assert torch.equal(actual.output, expected.output)
     assert torch.equal(actual.blocked.view(torch.uint8), expected.blocked.view(torch.uint8))
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("bits", [8, 16])
+def test_packed_geglu_epilogue_matches_separate_inputs(bits):
+    from embodiinfer.layers import OperatorRequest, gelu_mul_backends, quantization_backends
+
+    request = OperatorRequest("cuda", torch.bfloat16, cuda_graph=True)
+    quantizer = quantization_backends.get(
+        "cuda", OperatorRequest("cuda", torch.bfloat16, bits=8, cuda_graph=True)
+    )
+    fusion = gelu_mul_backends.get("cuda", request, backend=quantizer, approximate="none")
+    packed = torch.randn(32, 512, device="cuda", dtype=torch.bfloat16)
+    gate, up = packed[:, :256].contiguous(), packed[:, 256:].contiguous()
+    scale = 0.05 if bits == 8 else None
+    expected = fusion.plan(gate, bits, scale).encode(gate, up).output.clone()
+    actual = fusion.plan(gate, bits, scale).encode_packed(packed).output.clone()
+    assert torch.equal(actual.view(torch.uint8), expected.view(torch.uint8))
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_reduce_norm_and_norm_quant_match_reference_within_bf16_ulp(adaptive):
+    from embodiinfer.layers import (
+        OperatorRequest,
+        norm_quant_backends,
+        normalization_backends,
+        quantization_backends,
+    )
+
+    request = OperatorRequest("cuda", torch.bfloat16, cuda_graph=True)
+    q_req = OperatorRequest("cuda", torch.bfloat16, bits=8, cuda_graph=True)
+    ref_norm = normalization_backends.get("cuda_strict", request)
+    red_norm = normalization_backends.get("cuda_reduce", request)
+    quant = quantization_backends.get("cuda", q_req)
+    ref_nq = norm_quant_backends.get("cuda_strict", request, quantizer=quant, norm=ref_norm)
+    red_nq = (
+        norm_quant_backends.get("cuda_reduce", request, request_norm=red_norm)
+        if False
+        else norm_quant_backends.get("cuda_reduce", request, quantizer=quant, norm=red_norm)
+    )
+
+    x = torch.randn(1, 16, 256, device="cuda", dtype=torch.bfloat16)
+    upd = torch.randn(1, 16, 256, device="cuda", dtype=torch.bfloat16)
+    gate = torch.randn(1, 1, 256, device="cuda", dtype=torch.bfloat16) if adaptive else None
+    scale = None if adaptive else torch.randn(256, device="cuda", dtype=torch.float32)
+    mod = torch.randn(1, 768, device="cuda", dtype=torch.float32) if adaptive else None
+
+    r_res, r_out, _ = ref_norm.plan(x, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    d_res, d_out, _ = red_norm.plan(x, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    assert torch.equal(r_res, d_res)
+    assert torch.allclose(r_out.float(), d_out.float(), atol=2e-2, rtol=1e-2)
+
+    rq_res, rq_enc, _ = ref_nq.plan(x, bits=8, calibrated_scale=0.05, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    dq_res, dq_enc, _ = red_nq.plan(x, bits=8, calibrated_scale=0.05, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    assert torch.equal(rq_res, dq_res)
+    assert torch.allclose(rq_enc.output.float(), dq_enc.output.float(), atol=8.0, rtol=2e-2)

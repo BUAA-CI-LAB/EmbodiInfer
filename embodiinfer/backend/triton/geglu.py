@@ -97,6 +97,39 @@ def dual_geglu(inputs: torch.Tensor, gate: torch.Tensor, up: torch.Tensor, tile:
 
 
 @triton.jit
+def _packed_geglu_lut(
+    packed,
+    table,
+    output,
+    N: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    row = tl.program_id(0)
+    col_block = tl.program_id(1)
+    cols = col_block * BLOCK + tl.arange(0, BLOCK)
+    mask = cols < N
+    base = packed + row * (2 * N)
+    gate = tl.load(base + cols, mask=mask, other=0.0)
+    up = tl.load(base + N + cols, mask=mask, other=0.0)
+    gate_bits = gate.to(tl.bfloat16).to(tl.uint16, bitcast=True)
+    activated = tl.load(table + gate_bits.to(tl.int32), mask=mask, other=0).to(tl.bfloat16, bitcast=True)
+    hidden = activated.to(tl.float32) * up.to(tl.bfloat16).to(tl.float32)
+    tl.store(output + row * N + cols, hidden.to(tl.bfloat16), mask=mask)
+
+
+def packed_geglu_lut(packed: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
+    """Apply exact table-lookup GeGLU to a contiguous [M, 2*N] packed projection."""
+    rows, total = packed.shape
+    inter = total // 2
+    output = torch.empty((rows, inter), device=packed.device, dtype=packed.dtype)
+    block = 1024
+    _packed_geglu_lut[(rows, triton.cdiv(inter, block))](
+        packed, table, output, N=inter, BLOCK=block, num_warps=4, enable_fp_fusion=False
+    )
+    return output
+
+
+@triton.jit
 def _dual_geglu_lut(
     inputs,
     gate_weight,
@@ -313,6 +346,11 @@ class PairedGelu:
                 tail_m = 64 if large_m else None
             elif profile == (12, 1):
                 tile = GemmTile(64, 64, 64, 4, 3) if large_m else GemmTile(16, 32, 32, 4, 3)
+            elif profile == (8, 9):
+                tile = GemmTile(64, 64, 64, 8, 3) if large_m else GemmTile(16, 64, 64, 4, 3)
+                tail_m = 16 if large_m else None
+                self.use_native_large = large_m
+                self.fast_sm89 = not large_m
             else:
                 raise ValueError("No measured paired GELU launch profile; supply an explicit tile")
         if approximate not in ("none", "tanh"):
@@ -345,10 +383,22 @@ class PairedGeluPlan:
         ):
             raise ValueError("Paired projections require matching CUDA BF16 [output,input] weights")
         self.backend = backend
-        self.gate, self.up = (value.detach().t().contiguous() for value in (gate, up))
+        if getattr(backend, "use_native_large", False):
+            self.packed_w = torch.cat((gate.detach(), up.detach()), dim=0).contiguous()
+            self.gate = self.up = None
+        elif getattr(backend, "fast_sm89", False):
+            self.packed_w = None
+            self.gate, self.up = (value.detach().contiguous() for value in (gate, up))
+        else:
+            self.packed_w = None
+            self.gate, self.up = (value.detach().t().contiguous() for value in (gate, up))
 
     def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
         """Use the prepared tile and optional smaller tail for the current matrix."""
+        if self.packed_w is not None:
+            return packed_geglu_lut(torch.nn.functional.linear(inputs, self.packed_w), self.backend.table)
+        if getattr(self.backend, "fast_sm89", False):
+            return dual_geglu_fast(inputs, self.gate, self.up, self.backend.tile)
         if self.backend.arithmetic:
             return dual_geglu(inputs, self.gate, self.up, self.backend.tile)
         return prefix_geglu(
@@ -373,3 +423,251 @@ class ExactPairedGelu(PairedGelu):
             raise ValueError("Exact paired GEMMs require exact GELU")
         super().__init__(approximate=approximate, large_m=large_m, tile=tile, tail_m=tail_m, profile=profile)
         self.arithmetic = not large_m
+
+
+@triton.jit
+def _linear_bf16_nk(X, W, Y, M, N, K, stride_x, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+    tiles_m = tl.cdiv(M, BM)
+    pid = tl.program_id(0)
+    rows = (pid % tiles_m) * BM + tl.arange(0, BM)
+    cols = (pid // tiles_m) * BN + tl.arange(0, BN)
+    depth = tl.arange(0, BK)
+    x = X + rows[:, None] * stride_x + depth[None, :]
+    w = W + cols[None, :] * K + depth[:, None]
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for _ in range(0, K, BK):
+        a = tl.load(x, mask=rows[:, None] < M, other=0.0)
+        b = tl.load(w, mask=cols[None, :] < N, other=0.0)
+        acc = tl.dot(a, b, acc)
+        x += BK
+        w += BK
+    tl.store(
+        Y + rows[:, None] * N + cols[None, :],
+        acc.to(tl.bfloat16),
+        mask=(rows[:, None] < M) & (cols[None, :] < N),
+    )
+
+
+@triton.jit
+def _gelu_gemm_bf16_nk(X, Wg, Wu, Y, M, N, K, stride_x, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+    tiles_m = tl.cdiv(M, BM)
+    pid = tl.program_id(0)
+    rows = (pid % tiles_m) * BM + tl.arange(0, BM)
+    cols = (pid // tiles_m) * BN + tl.arange(0, BN)
+    depth = tl.arange(0, BK)
+    x = X + rows[:, None] * stride_x + depth[None, :]
+    offsets = cols[None, :] * K + depth[:, None]
+    gate = tl.zeros((BM, BN), dtype=tl.float32)
+    up = tl.zeros((BM, BN), dtype=tl.float32)
+    for start in range(0, K, BK):
+        a = tl.load(x, mask=rows[:, None] < M, other=0.0)
+        gate = tl.dot(a, tl.load(Wg + offsets + start), gate)
+        up = tl.dot(a, tl.load(Wu + offsets + start), up)
+        x += BK
+    g = gate.to(tl.bfloat16).to(tl.float32)
+    u = up.to(tl.bfloat16).to(tl.float32)
+    inner = 0.7978845608028654 * (g + 0.044715 * g * g * g)
+    act = (g * tl.sigmoid(2.0 * inner)).to(tl.bfloat16).to(tl.float32)
+    tl.store(Y + rows[:, None] * N + cols[None, :], (act * u).to(tl.bfloat16), mask=rows[:, None] < M)
+
+
+@triton.jit
+def _linear_fp8_nk(
+    X, W, Y, ScaleX, ScaleW, M, N, K, stride_x, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr
+):
+    tiles_m = tl.cdiv(M, BM)
+    pid = tl.program_id(0)
+    rows = (pid % tiles_m) * BM + tl.arange(0, BM)
+    cols = (pid // tiles_m) * BN + tl.arange(0, BN)
+    depth = tl.arange(0, BK)
+    x_ptrs = X + rows[:, None] * stride_x + depth[None, :]
+    w_ptrs = W + cols[None, :] * K + depth[:, None]
+    acc = tl.zeros((BM, BN), dtype=tl.float32)
+    for _ in range(0, K, BK):
+        a = tl.load(x_ptrs, mask=rows[:, None] < M, other=0.0)
+        b = tl.load(w_ptrs, mask=cols[None, :] < N, other=0.0)
+        acc = tl.dot(a, b, acc, out_dtype=tl.float32)
+        x_ptrs += BK
+        w_ptrs += BK
+    scale = tl.load(ScaleX) * tl.load(ScaleW)
+    y = (acc * scale).to(tl.bfloat16)
+    tl.store(Y + rows[:, None] * N + cols[None, :], y, mask=(rows[:, None] < M) & (cols[None, :] < N))
+
+
+@triton.jit
+def _gelu_gemm_fp8_nk(
+    X,
+    Wg,
+    Wu,
+    Y,
+    ScaleX,
+    ScaleG,
+    ScaleU,
+    InvScaleOut,
+    M,
+    N,
+    K,
+    stride_x,
+    BM: tl.constexpr,
+    BN: tl.constexpr,
+    BK: tl.constexpr,
+):
+    tiles_m = tl.cdiv(M, BM)
+    pid = tl.program_id(0)
+    rows = (pid % tiles_m) * BM + tl.arange(0, BM)
+    cols = (pid // tiles_m) * BN + tl.arange(0, BN)
+    depth = tl.arange(0, BK)
+    x_ptrs = X + rows[:, None] * stride_x + depth[None, :]
+    offsets = cols[None, :] * K + depth[:, None]
+    gate = tl.zeros((BM, BN), dtype=tl.float32)
+    up = tl.zeros((BM, BN), dtype=tl.float32)
+    for start in range(0, K, BK):
+        a = tl.load(x_ptrs, mask=rows[:, None] < M, other=0.0)
+        bg = tl.load(Wg + offsets + start, mask=cols[None, :] < N, other=0.0)
+        bu = tl.load(Wu + offsets + start, mask=cols[None, :] < N, other=0.0)
+        gate = tl.dot(a, bg, gate, out_dtype=tl.float32)
+        up = tl.dot(a, bu, up, out_dtype=tl.float32)
+        x_ptrs += BK
+    sx = tl.load(ScaleX)
+    sg = tl.load(ScaleG)
+    su = tl.load(ScaleU)
+    g = (gate * (sx * sg)).to(tl.bfloat16).to(tl.float32)
+    u = (up * (sx * su)).to(tl.bfloat16).to(tl.float32)
+    inner = 0.7978845608028654 * (g + 0.044715 * g * g * g)
+    act = (g * tl.sigmoid(2.0 * inner)).to(tl.bfloat16).to(tl.float32)
+    val = (act * u).to(tl.bfloat16).to(tl.float32)
+    inv_so = tl.load(InvScaleOut)
+    q = tl.clamp(val * inv_so, -448.0, 448.0).to(tl.float8e4nv)
+    tl.store(Y + rows[:, None] * N + cols[None, :], q, mask=rows[:, None] < M)
+
+
+def dual_geglu_fast(
+    inputs: torch.Tensor, gate_nk: torch.Tensor, up_nk: torch.Tensor, tile: GemmTile
+) -> torch.Tensor:
+    """Small-M BF16 paired gate/up + GeGLU using [N, K] coalesced weight streaming."""
+    rows, width = inputs.shape
+    columns = gate_nk.shape[0]
+    output = torch.empty((rows, columns), device=inputs.device, dtype=inputs.dtype)
+    bm, bn, bk, warps, stages = (16, 32, 64, 4, 3) if rows <= 16 else (64, 16, 64, 4, 3)
+    _gelu_gemm_bf16_nk[(triton.cdiv(rows, bm) * triton.cdiv(columns, bn),)](
+        inputs,
+        gate_nk,
+        up_nk,
+        output,
+        rows,
+        columns,
+        width,
+        inputs.stride(0),
+        BM=bm,
+        BN=bn,
+        BK=bk,
+        num_warps=warps,
+        num_stages=stages,
+    )
+    return output
+
+
+def triton_linear(inputs: torch.Tensor, weight_nk: torch.Tensor) -> torch.Tensor:
+    """Small-M BF16 projection using [N, K] coalesced weight-streaming Triton tiles."""
+    rows, width = inputs.shape
+    columns = weight_nk.shape[0]
+    out = torch.empty((rows, columns), device=inputs.device, dtype=torch.bfloat16)
+    if rows <= 16:
+        if width <= 1024:
+            bm, bn, bk, warps, stages = 16, 16, 64, 4, 4
+        elif width <= 2048:
+            bm, bn, bk, warps, stages = 16, 32, 128, 4, 5
+        else:
+            bm, bn, bk, warps, stages = 16, 32, 256, 4, 4
+    else:
+        bm, bn, bk = 32, 32, 128
+        warps, stages = (4, 3) if width <= 1024 else (8, 5)
+    _linear_bf16_nk[(triton.cdiv(rows, bm) * triton.cdiv(columns, bn),)](
+        inputs,
+        weight_nk,
+        out,
+        rows,
+        columns,
+        width,
+        inputs.stride(0),
+        BM=bm,
+        BN=bn,
+        BK=bk,
+        num_warps=warps,
+        num_stages=stages,
+    )
+    return out
+
+
+def triton_linear_fp8(
+    inputs_fp8: torch.Tensor,
+    weight_nk_fp8: torch.Tensor,
+    scale_x: torch.Tensor,
+    scale_w: torch.Tensor,
+) -> torch.Tensor:
+    """Small-M FP8 projection using [N, K] coalesced weight-streaming Triton tiles."""
+    rows, width = inputs_fp8.shape
+    columns = weight_nk_fp8.shape[0]
+    out = torch.empty((rows, columns), device=inputs_fp8.device, dtype=torch.bfloat16)
+    if rows <= 16:
+        bm, bn, bk, warps = 16, 32, 256, 4
+        stages = 4 if width <= 1024 else 5
+    else:
+        bm, bn = 32, 32
+        bk = 128 if width <= 1024 else 256
+        warps = 4 if width <= 1024 else 8
+        stages = 4 if width <= 2048 else 5
+    _linear_fp8_nk[(triton.cdiv(rows, bm) * triton.cdiv(columns, bn),)](
+        inputs_fp8,
+        weight_nk_fp8,
+        out,
+        scale_x,
+        scale_w,
+        rows,
+        columns,
+        width,
+        inputs_fp8.stride(0),
+        BM=bm,
+        BN=bn,
+        BK=bk,
+        num_warps=warps,
+        num_stages=stages,
+    )
+    return out
+
+
+def dual_geglu_fp8(
+    x_fp8: torch.Tensor,
+    g_nk_fp8: torch.Tensor,
+    u_nk_fp8: torch.Tensor,
+    scale_x: torch.Tensor,
+    scale_g: torch.Tensor,
+    scale_u: torch.Tensor,
+    inv_out: torch.Tensor,
+    out_fp8: torch.Tensor,
+    rows: int,
+) -> torch.Tensor:
+    """Small-M FP8 paired gate/up + GeGLU + FP8 quantization using [N, K] coalesced tiles."""
+    width = x_fp8.shape[1]
+    columns = g_nk_fp8.shape[0]
+    bm, bn, bk, warps, stages = (16, 32, 64, 4, 3) if rows <= 16 else (32, 64, 64, 4, 3)
+    _gelu_gemm_fp8_nk[(triton.cdiv(rows, bm) * triton.cdiv(columns, bn),)](
+        x_fp8,
+        g_nk_fp8,
+        u_nk_fp8,
+        out_fp8,
+        scale_x,
+        scale_g,
+        scale_u,
+        inv_out,
+        rows,
+        columns,
+        width,
+        x_fp8.stride(0),
+        BM=bm,
+        BN=bn,
+        BK=bk,
+        num_warps=warps,
+        num_stages=stages,
+    )
+    return out_fp8

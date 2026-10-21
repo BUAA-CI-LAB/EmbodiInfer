@@ -44,6 +44,22 @@ class NormQuantFusion:
         pointer, integer = ctypes.c_void_p, ctypes.c_int
         self.library.cc_norm_quant.argtypes = [pointer] * 9 + [integer] * 4 + [pointer]
         self.library.cc_norm_quant.restype = integer
+        self.library.cc_norm_quant_reduce.argtypes = [pointer] * 9 + [integer] * 3 + [pointer]
+        self.library.cc_norm_quant_reduce.restype = integer
+        self.library.cc_bhsd_fp8.argtypes = [
+            pointer,
+            pointer,
+            ctypes.c_float,
+            ctypes.c_int64,
+            ctypes.c_int64,
+            ctypes.c_int64,
+            integer,
+            integer,
+            integer,
+            integer,
+            pointer,
+        ]
+        self.library.cc_bhsd_fp8.restype = integer
 
     def plan(
         self,
@@ -136,6 +152,27 @@ class NormQuantPlan:
             or not affine.is_contiguous()
         ):
             raise ValueError("Norm quantization requires contiguous FP32 scale or raw modulation")
+        if getattr(self, "reduce_mode", False) and mean is None:
+            batch, tokens, columns = self.shape
+            with torch.cuda.device(inputs.device):
+                self.backend.norm._check(
+                    self.backend.library.cc_norm_quant_reduce(
+                        inputs.data_ptr(),
+                        None,
+                        None,
+                        scale.data_ptr() if scale is not None else None,
+                        modulation.data_ptr() if modulation is not None else None,
+                        self.residual.data_ptr(),
+                        self.output.data_ptr(),
+                        self.gate.data_ptr() if self.gate is not None else None,
+                        self.scale.data_ptr(),
+                        batch * tokens,
+                        columns,
+                        tokens,
+                        torch.cuda.current_stream(inputs.device).cuda_stream,
+                    )
+                )
+            return self
         if mean is None:
             torch.square(inputs.float(), out=self.square)
             torch.mean(self.square, dim=-1, keepdim=True, out=self.mean)
@@ -189,6 +226,36 @@ class NormQuantPlan:
         ):
             raise ValueError("Residual gate must be contiguous CUDA BF16 [B,1,D]")
         batch, tokens, columns = self.shape
+        if getattr(self, "reduce_mode", False):
+            affine = modulation if self.adaptive else scale
+            affine_shape = (self.shape[0], self.shape[2] * 3) if self.adaptive else (self.shape[2],)
+            if (
+                affine is None
+                or affine.shape != affine_shape
+                or affine.dtype != torch.float32
+                or affine.device != inputs.device
+                or not affine.is_contiguous()
+            ):
+                raise ValueError("Norm quantization requires contiguous FP32 scale or raw modulation")
+            with torch.cuda.device(inputs.device):
+                self.backend.norm._check(
+                    self.backend.library.cc_norm_quant_reduce(
+                        inputs.data_ptr(),
+                        update.data_ptr(),
+                        residual_gate.data_ptr() if residual_gate is not None else None,
+                        scale.data_ptr() if scale is not None else None,
+                        modulation.data_ptr() if modulation is not None else None,
+                        self.residual.data_ptr(),
+                        self.output.data_ptr(),
+                        self.gate.data_ptr() if self.gate is not None else None,
+                        self.scale.data_ptr(),
+                        batch * tokens,
+                        columns,
+                        tokens,
+                        torch.cuda.current_stream(inputs.device).cuda_stream,
+                    )
+                )
+            return self.residual, self, self.gate
         with torch.cuda.device(inputs.device):
             self.backend.norm._check(
                 self.backend.norm.library.cc_residual_square(
@@ -206,3 +273,20 @@ class NormQuantPlan:
         torch.mean(self.square, dim=-1, keepdim=True, out=self.mean)
         self.normalize(self.residual, scale=scale, modulation=modulation, mean=self.mean)
         return self.residual, self, self.gate
+
+
+class NormQuantReduceFusion(NormQuantFusion):
+    """Single-pass shared-memory reduction RMSNorm and FP8 encoding."""
+
+    def plan(
+        self,
+        inputs: torch.Tensor,
+        *,
+        bits: int,
+        calibrated_scale: float,
+        adaptive: bool,
+    ) -> "NormQuantPlan":
+        """Allocate a single-pass reduction norm/encoding plan for FP8."""
+        plan = super().plan(inputs, bits=bits, calibrated_scale=calibrated_scale, adaptive=adaptive)
+        plan.reduce_mode = bits == 8
+        return plan

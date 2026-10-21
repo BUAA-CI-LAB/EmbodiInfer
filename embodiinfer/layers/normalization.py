@@ -94,3 +94,10 @@ normalization_backends.register_lazy("torch", "embodiinfer.backend.torch.normali
 
 norm_quant_backends = BackendRegistry[NormQuantBackend]("residual/norm/quantization")
 norm_quant_backends.register_lazy("cuda_strict", "embodiinfer.backend.cuda.norm_quant", "NormQuantFusion")
+
+normalization_backends.register_lazy(
+    "cuda_reduce", "embodiinfer.backend.cuda.normalization", "NormReduceFusion"
+)
+norm_quant_backends.register_lazy(
+    "cuda_reduce", "embodiinfer.backend.cuda.norm_quant", "NormQuantReduceFusion"
+)

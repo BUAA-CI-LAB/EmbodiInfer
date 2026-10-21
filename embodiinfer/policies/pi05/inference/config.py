@@ -107,10 +107,10 @@ class Pi05OptimizationConfig:
         if (
             self.fused_mlp
             and self.mlp_weights is None
-            and self.hardware not in ("thor", "spark")
+            and self.hardware not in ("thor", "spark", "4090")
             and self.operators.paired_gelu in ("triton_lookup", "triton_exact")
         ):
-            raise ValueError("Paired GEMMs require an explicit Thor or Spark launch profile")
+            raise ValueError("Paired GEMMs require an explicit Thor, Spark or 4090 launch profile")
         if (self.has_quantized_mlp or self.mlp_weights is not None) and self.checkpoint_sha256 is None:
             raise ValueError("Quantized MLPs require a calibration checkpoint SHA256")
         if self.checkpoint_sha256 is not None and (
@@ -165,7 +165,7 @@ class Pi05OptimizationConfig:
 
         ``strict`` preserves LeRobot numerics with pointwise fusion and K/V
         reuse. ``bf16`` and explicit ``prefix-action`` pairs such as
-        ``nvfp4-fp8`` select the measured Thor/Spark B1/H10/ten-step execution
+        ``nvfp4-fp8`` select the measured Thor/Spark/4090 execution
         plan and openpi_rlinf numerics. MLP formats retain calibrated BF16
         protection. Other format pairs require their own checkpoint-bound
         calibration; missing ranges fail explicitly. Use the dataclass or

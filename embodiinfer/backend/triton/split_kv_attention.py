@@ -280,3 +280,284 @@ class TritonSplitKVAttention:
         return split_kv_attention(
             q, cached_k, cached_v, k, v, key_padding_mask, scaling, num_splits=num_splits
         )
+
+    def attend_split_packed(
+        self,
+        q: torch.Tensor,
+        cached_k: torch.Tensor,
+        cached_v: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        scaling: float | None = None,
+        num_splits: int = 16,
+    ) -> torch.Tensor:
+        """Pack GQA queries per KV head and return [B, Q, H*D] directly."""
+        batch, heads, size, width = q.shape
+        kv_heads = cached_k.shape[1]
+        prefix = cached_k.shape[2]
+        scale = width**-0.5 if scaling is None else scaling
+        group = heads // kv_heads
+        block_m = 16 if size <= 16 else 32
+        block_n = 64
+        part_length = triton.cdiv(prefix + size, num_splits * block_n) * block_n
+        partial = torch.empty((batch, heads, num_splits, size, width), device=q.device, dtype=torch.float32)
+        logsum = torch.empty((batch, heads, num_splits, size), device=q.device, dtype=torch.float32)
+        _partial_packed[(batch * kv_heads, triton.cdiv(group * size, block_m), num_splits)](
+            q,
+            cached_k,
+            cached_v,
+            k,
+            v,
+            partial,
+            logsum,
+            *q.stride()[:3],
+            *cached_k.stride()[:3],
+            *cached_v.stride()[:3],
+            *k.stride()[:3],
+            *v.stride()[:3],
+            prefix,
+            size,
+            heads,
+            kv_heads,
+            width,
+            scale,
+            num_splits,
+            part_length,
+            block_m,
+            block_n,
+            num_warps=4,
+            num_stages=1,
+        )
+        if getattr(self, "fp8_scale", None) is not None:
+            from types import SimpleNamespace
+
+            out_fp8 = torch.empty((batch * size, heads * width), device=q.device, dtype=torch.float8_e4m3fn)
+            _merge_bshd_fp8[(size, batch * heads)](
+                partial, logsum, out_fp8, 448.0 / 8.0, size, heads, width, num_splits, num_warps=4
+            )
+            if self.fp8_scale.device != q.device:
+                self.fp8_scale = self.fp8_scale.to(q.device)
+            return SimpleNamespace(output=out_fp8, scale=self.fp8_scale, residual=q[:, 0, :, :1])
+        output = torch.empty((batch, size, heads * width), device=q.device, dtype=q.dtype)
+        _merge_bshd[(size, batch * heads)](
+            partial, logsum, output, size, heads, width, num_splits, num_warps=4
+        )
+        return output
+
+
+if triton is not None:
+
+    @triton.jit
+    def _partial_packed(
+        Q,
+        PK,
+        PV,
+        SK,
+        SV,
+        Part,
+        Lse,
+        qb: tl.constexpr,
+        qh: tl.constexpr,
+        qs: tl.constexpr,
+        pkb: tl.constexpr,
+        pkh: tl.constexpr,
+        pks: tl.constexpr,
+        pvb: tl.constexpr,
+        pvh: tl.constexpr,
+        pvs: tl.constexpr,
+        skb: tl.constexpr,
+        skh: tl.constexpr,
+        sks: tl.constexpr,
+        svb: tl.constexpr,
+        svh: tl.constexpr,
+        svs: tl.constexpr,
+        P_: tl.constexpr,
+        S_: tl.constexpr,
+        H_: tl.constexpr,
+        HK_: tl.constexpr,
+        D_: tl.constexpr,
+        SCALE: tl.constexpr,
+        SPLITS: tl.constexpr,
+        PART_LENGTH: tl.constexpr,
+        BM: tl.constexpr,
+        BN: tl.constexpr,
+    ):
+        bk = tl.program_id(0)
+        b, kv_head = bk // HK_, bk % HK_
+        G: tl.constexpr = H_ // HK_
+        partition = tl.program_id(2)
+        packed = tl.program_id(1) * BM + tl.arange(0, BM)
+        live = packed < G * S_
+        head = kv_head * G + packed // S_
+        rows = packed % S_
+        dims = tl.arange(0, D_)
+        q = tl.load(
+            Q + b * qb + head[:, None] * qh + rows[:, None] * qs + dims[None, :], live[:, None], other=0
+        )
+        maximum = tl.full((BM,), -float("inf"), tl.float32)
+        denom = tl.zeros((BM,), tl.float32)
+        acc = tl.zeros((BM, D_), tl.float32)
+        for offset in range(PART_LENGTH // BN):
+            columns = partition * PART_LENGTH + offset * BN + tl.arange(0, BN)
+            prefix = columns < P_
+            suffix = (columns >= P_) & (columns < P_ + S_)
+            kp = tl.load(
+                PK + b * pkb + kv_head * pkh + columns[:, None] * pks + dims[None, :],
+                prefix[:, None],
+                other=0,
+            )
+            ks = tl.load(
+                SK + b * skb + kv_head * skh + (columns[:, None] - P_) * sks + dims[None, :],
+                suffix[:, None],
+                other=0,
+            )
+            k = tl.where(prefix[:, None], kp, ks)
+            valid = columns < P_ + S_
+            scores = tl.dot(q, tl.trans(k)) * (SCALE * 1.4426950408889634)
+            scores = tl.where(valid[None, :] & live[:, None], scores, -float("inf"))
+            next_max = tl.maximum(maximum, tl.max(scores, 1))
+            safe_max = tl.where(next_max == -float("inf"), 0.0, next_max)
+            correction = tl.exp2(maximum - safe_max)
+            prob = tl.exp2(scores - safe_max[:, None])
+            vp = tl.load(
+                PV + b * pvb + kv_head * pvh + columns[:, None] * pvs + dims[None, :],
+                prefix[:, None],
+                other=0,
+            )
+            vs = tl.load(
+                SV + b * svb + kv_head * svh + (columns[:, None] - P_) * svs + dims[None, :],
+                suffix[:, None],
+                other=0,
+            )
+            v = tl.where(prefix[:, None], vp, vs)
+            acc = acc * correction[:, None] + tl.dot(prob.to(v.dtype), v)
+            denom = denom * correction + tl.sum(prob, 1)
+            maximum = next_max
+        safe_denom = tl.where(denom > 0, denom, 1.0)
+        output = acc / safe_denom[:, None]
+        logsum = tl.where(denom > 0, maximum + tl.log2(safe_denom), -float("inf"))
+        index = ((b * H_ + head) * SPLITS + partition) * S_ + rows
+        tl.store(Part + index[:, None] * D_ + dims[None, :], output, live[:, None])
+        tl.store(Lse + index, logsum, live)
+
+    @triton.jit
+    def _merge_bshd(part, lse, out, M: tl.constexpr, H: tl.constexpr, D: tl.constexpr, S: tl.constexpr):
+        t = tl.program_id(0)
+        bh = tl.program_id(1)
+        b = bh // H
+        h = bh % H
+        s = tl.arange(0, S)
+        d = tl.arange(0, D)
+        indices = (bh * S + s) * M + t
+        lg = tl.load(lse + indices)
+        mx = tl.max(lg, axis=0)
+        w = tl.exp2(lg - mx)
+        p = tl.load(part + indices[:, None] * D + d[None, :]).to(tl.float32)
+        v = tl.sum(p * w[:, None], axis=0) / tl.sum(w, axis=0)
+        tl.store(out + (b * M + t) * (H * D) + h * D + d, v)
+
+    @triton.jit
+    def _merge_bshd_fp8(
+        part,
+        lse,
+        out_fp8,
+        inv_scale: tl.constexpr,
+        M: tl.constexpr,
+        H: tl.constexpr,
+        D: tl.constexpr,
+        S: tl.constexpr,
+    ):
+        t = tl.program_id(0)
+        bh = tl.program_id(1)
+        b = bh // H
+        h = bh % H
+        s = tl.arange(0, S)
+        d = tl.arange(0, D)
+        indices = (bh * S + s) * M + t
+        lg = tl.load(lse + indices)
+        mx = tl.max(lg, axis=0)
+        w = tl.exp2(lg - mx)
+        p = tl.load(part + indices[:, None] * D + d[None, :]).to(tl.float32)
+        v = (tl.sum(p * w[:, None], axis=0) / tl.sum(w, axis=0)).to(tl.bfloat16).to(tl.float32)
+        q = tl.clamp(v * inv_scale, -448.0, 448.0).to(tl.float8e4nv)
+        tl.store(out_fp8 + (b * M + t) * (H * D) + h * D + d, q)
+
+    @triton.jit
+    def _qkv_rope_split_kernel(
+        qkv,
+        cos_ptr,
+        sin_ptr,
+        q_out,
+        k_out,
+        v_out,
+        B: tl.constexpr,
+        T: tl.constexpr,
+        QH: tl.constexpr,
+        KVH: tl.constexpr,
+        D: tl.constexpr,
+        HALF: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        total_heads: tl.constexpr = QH + 2 * KVH
+        h_idx = pid % total_heads
+        bt = pid // total_heads
+        b = bt // T
+        t = bt % T
+        row_stride: tl.constexpr = total_heads * D
+        base = qkv + bt * row_stride + h_idx * D
+        d_half = tl.arange(0, HALF)
+        if h_idx < QH + KVH:
+            x1 = tl.load(base + d_half).to(tl.float32)
+            x2 = tl.load(base + HALF + d_half).to(tl.float32)
+            cs_base = bt * HALF + d_half
+            c = tl.load(cos_ptr + cs_base).to(tl.float32)
+            s = tl.load(sin_ptr + cs_base).to(tl.float32)
+            y1 = (x1 * c - x2 * s).to(tl.bfloat16)
+            y2 = (x2 * c + x1 * s).to(tl.bfloat16)
+            if h_idx < QH:
+                dst = q_out + ((b * QH + h_idx) * T + t) * D
+            else:
+                kh = h_idx - QH
+                dst = k_out + ((b * KVH + kh) * T + t) * D
+            tl.store(dst + d_half, y1)
+            tl.store(dst + HALF + d_half, y2)
+        else:
+            vh = h_idx - (QH + KVH)
+            d_full = tl.arange(0, D)
+            val = tl.load(base + d_full)
+            dst = v_out + ((b * KVH + vh) * T + t) * D
+            tl.store(dst + d_full, val)
+
+
+def split_qkv_rope(
+    qkv: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    batch: int,
+    tokens: int,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split packed QKV and apply RoPE into BHSD tensors in one launch."""
+    q_out = torch.empty((batch, q_heads, tokens, head_dim), device=qkv.device, dtype=torch.bfloat16)
+    k_out = torch.empty((batch, kv_heads, tokens, head_dim), device=qkv.device, dtype=torch.bfloat16)
+    v_out = torch.empty((batch, kv_heads, tokens, head_dim), device=qkv.device, dtype=torch.bfloat16)
+    total_heads = q_heads + 2 * kv_heads
+    _qkv_rope_split_kernel[(batch * tokens * total_heads,)](
+        qkv,
+        cos,
+        sin,
+        q_out,
+        k_out,
+        v_out,
+        B=batch,
+        T=tokens,
+        QH=q_heads,
+        KVH=kv_heads,
+        D=head_dim,
+        HALF=head_dim // 2,
+        num_warps=2,
+    )
+    return q_out, k_out, v_out

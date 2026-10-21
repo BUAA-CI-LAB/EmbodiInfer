@@ -1,5 +1,25 @@
 # PI0.5 Benchmark
 
+## RTX 4090 SM89 原生 BF16 与静态校准 FP8 整请求优化（2026-10-26）
+
+新增 `device_type="4090"` 的 `bf16`、`bf16-fp8`、`fp8-bf16` 与 `fp8-fp8` 部署预设，100% 沿用 `Pi05Policy`、`Pi05OperatorPlans`、`SiglipPlan`、`MlpPlan` 与 `Pi05Runtime.request`（`_RequestGraph`）原生架构：
+
+1. **小 M 连续 `[N, K]` 权重流式 Triton 投影与融合 GeGLU（`triton_small_m` / `PairedGelu`）**：在 Action Expert（`M=10` / `M=50`）中直接按原始 `[N, K]` 连续步长加载 BF16/FP8 权重并在 FP32 累加器上完成 `gate * up` 激活与静态 FP8 编码，消除 cuBLAS 在小 M 下的 Split-K 规约与非对齐开销；
+2. **GQA 打包 Split-KV 注意力与融合 FP8 合并（`attend_split_packed`）**：将 8 个 Query Head 与 `S` 个动作 Token 打包到单个 KV Head Tile（`num_splits=16`），以 `exp2` 快速指令完成在线 Softmax 并在 Merge 阶段直接输出连续 `[B*S, H*D]` BF16/FP8 激活；
+3. **单次归约残差 RMSNorm/编码与零拷贝打包 epilogue（`cuda_reduce` / `cc_geglu_packed` / `cc_bhsd_fp8`）**：消除 64 位整数除法，直接从打包 `[M, 2*N]` 矩阵与 4D Attention 输出完成激活与静态 FP8 量化；
+4. **Schema 2 离线静态校准与离群层保护（`rlinf_libero.json`）**：绑定 `RLinf-Pi05-LIBERO-SFT` 权重 SHA256，对 Prefix 末层高幅值激活施加静态范围保护，无需任何运行时在线校准。
+
+在空闲 RTX 4090（SM89，PyTorch 2.10+cu128，Triton 3.6.0）上加载完整 812 个真实权重张量，B=1、2 路 224×224 相机、10 步去噪，50 次迭代均值如下：
+
+| 视野 | 预设 / 对比 | Vision (2 相机) | Prefix Graph (`seq=576`) | Decode Graph (10 步) | RequestGraph (`seq=576`) | RequestGraph (真实分词 `seq=605`) | RequestGraph (`seq=661`) | 动作余弦相似度 |
+| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `H=10` | `strict` (LeRobot 基线) | — | — | — | — | 63.12 ms | — | 1.000000 (逐位一致) |
+| `H=10` | `4090` `bf16` | **4.67–4.83 ms** | **21.76–22.52 ms** | **10.46 ms** | **31.46–32.36 ms** | **33.23–34.09 ms** | **34.54–35.49 ms** | **0.999999** (7D) / **0.999998** (32D) |
+| `H=10` | `4090` `fp8-fp8` | **3.61 ms** | **13.34–13.85 ms** | **7.03–7.14 ms** | **20.16–20.74 ms** | **21.02–21.66 ms** | **22.16–22.79 ms** | **0.999917** (7D) / **0.999894** (32D) |
+| `H=50` | `strict` (LeRobot 基线) | — | — | — | — | 75.92 ms | — | 1.000000 (逐位一致) |
+| `H=50` | `4090` `bf16` | **4.72–4.88 ms** | **21.99–22.69 ms** | **12.16–12.29 ms** | **33.51–34.55 ms** | **35.08–36.02 ms** | **36.49–37.48 ms** | **0.997475** (vs `openpi_rlinf` ref) |
+| `H=50` | `4090` `fp8-fp8` | **3.52–3.71 ms** | **13.44–13.96 ms** | **8.57–8.81 ms** | **21.78–22.44 ms** | **22.66–23.28 ms** | **23.80–24.50 ms** | **0.991162** (7D) / **0.991149** (32D) |
+
 ## 非量化整请求捕获与精度验收（2026-10-14）
 
 本次新增默认关闭的 `request_cuda_graph=True`：在 native CUDA 推理和

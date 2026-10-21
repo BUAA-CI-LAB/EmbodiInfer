@@ -98,7 +98,7 @@ def test_optimized_presets_compose_independent_tower_precision(device, prefix_ml
         dict(device="thor", preset="mixed"),
         dict(device="thor", preset="fp8"),
         dict(device="thor", preset="optimized"),
-        dict(device="4090", preset="bf16"),
+        dict(device="orin", preset="bf16"),
         dict(device="orin", preset="fp8-fp8"),
         dict(device="4090", preset="nvfp4-bf16"),
         dict(device="thor", preset="strict", calibration="rlinf_libero"),
@@ -234,3 +234,30 @@ def test_nested_backend_configuration_roundtrips(tmp_path):
     assert Pi05OptimizationConfig.from_json(path) == config
     with pytest.raises(ValueError, match="nonempty"):
         OperatorBackends(normalization="")
+
+
+@pytest.mark.parametrize("preset", ["bf16", "fp8-fp8", "bf16-fp8", "fp8-bf16"])
+def test_4090_presets_resolve_and_roundtrip(preset, tmp_path):
+    config = Pi05OptimizationConfig.from_preset("4090", preset)
+    assert config.hardware == "4090" and config.capability == (8, 9)
+    assert config.numerics == "openpi_rlinf" and config.activation == "gelu_pytorch_exact"
+    assert all(
+        (config.batch_cameras, config.compact_prefix, config.prefix_kv_only, config.reuse_action_context)
+    )
+    assert config.fused_mlp and config.attention == "folded_flash"
+    assert config.operators.normalization == "cuda_reduce"
+    assert config.operators.norm_quant == "cuda_reduce"
+    assert config.operators.projection == "triton_small_m"
+    if preset in ("fp8-fp8", "fp8-bf16"):
+        assert len(config.prefix_layers) == 18
+        assert config.prefix_layers[17].down == "bf16"
+    else:
+        assert not config.prefix_layers
+    if preset in ("fp8-fp8", "bf16-fp8"):
+        assert len(config.action_layers) == 18
+        assert all(layer.gate_up == layer.down == "fp8" for layer in config.action_layers)
+    else:
+        assert not config.action_layers
+    path = tmp_path / f"4090_{preset}.json"
+    config.to_json(path)
+    assert Pi05OptimizationConfig.from_json(path) == config

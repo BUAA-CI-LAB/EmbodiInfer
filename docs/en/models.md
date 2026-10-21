@@ -124,8 +124,10 @@ policy = make_policy(
 | `strict` | Thor, Spark, Orin, RTX 4090 | BF16 / BF16 | LeRobot |
 | `w4a16` | Orin SM87 | GPTQ INT4 weights / BF16 activations in both MLP towers | `openpi_rlinf` |
 | `w8a8-w4a16` | Orin SM87 | Rotated native INT8 prefix / GPTQ W4A16 action | `openpi_rlinf` |
-| `bf16` | Thor, Spark | BF16 / BF16 | `openpi_rlinf` |
-| `bf16-fp8` | Thor, Spark | BF16 / protected FP8 | `openpi_rlinf` |
+| `bf16` | Thor, Spark, RTX 4090 | BF16 / BF16 | `openpi_rlinf` |
+| `bf16-fp8` | Thor, Spark, RTX 4090 | BF16 / calibrated FP8 | `openpi_rlinf` |
+| `fp8-bf16` | RTX 4090 | Protected FP8 / BF16 | `openpi_rlinf` |
+| `fp8-fp8` | RTX 4090 | Protected FP8 / calibrated FP8 | `openpi_rlinf` |
 | `nvfp4-bf16` | Thor, Spark | NVFP4 / BF16 | `openpi_rlinf` |
 | `nvfp4-fp8` | Thor, Spark | NVFP4 / protected FP8 | `openpi_rlinf` |
 
