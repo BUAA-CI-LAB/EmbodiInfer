@@ -17,6 +17,7 @@ from embodiinfer.policies.activevln.modeling_activevln import (
     ActiveVLNPrefix,
     _ActiveVLNDecoder,
 )
+from embodiinfer.policies.activevln.prompt_activevln import parse_r2r_actions
 from embodiinfer.policies.base import MemoryState
 from embodiinfer.types import ActionChunk, Observation, SessionKey
 
@@ -119,6 +120,8 @@ class _FakeARPolicy:
     top_p = 1.0
     eos_token_ids = (2,)
     tokenizer = _Tokenizer()
+    action_space = "r2r"
+    parse_actions = staticmethod(parse_r2r_actions)
 
     def __init__(self, max_new_tokens=3):
         self.max_new_tokens = max_new_tokens

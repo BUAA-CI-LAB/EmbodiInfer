@@ -27,6 +27,7 @@ def load_benchmark(profile: str):
 
 
 stream = load_benchmark("streamvln")
+active = load_benchmark("activevln")
 measurement = libero_run = load_benchmark("pi05")
 cosmos = load_benchmark("cosmos")
 NavigationEpisode = stream.NavigationEpisode
@@ -68,6 +69,17 @@ def test_navigation_selects_numeric_ids_and_aligns_initial_dummy(tmp_path: Path)
     assert [episode.episode_id for episode in episodes] == [1, 3]
     assert episodes[0].actions == (1, 2, 3, 0)
     assert episodes[0].instruction == "instruction 1"
+
+
+def test_activevln_uses_the_same_complete_trajectory_selection(tmp_path: Path) -> None:
+    config = navigation_fixture(tmp_path)
+    reference = stream.load_navigation(config)
+    selected = active.load_navigation(config)
+    for left, right in zip(reference, selected, strict=True):
+        assert vars(left) == vars(right)
+    (tmp_path / "images/scene_r2r_000001/rgb/002.jpg").unlink()
+    with pytest.raises(ValueError, match="consecutive"):
+        active.load_navigation(config)
 
 
 def test_missing_selected_episode_never_substitutes_later_available_data(tmp_path: Path) -> None:
@@ -341,7 +353,8 @@ def test_lingbot_native_joint_mapping_round_trips_grippers_without_using_padding
 
 
 @pytest.mark.parametrize(
-    "profile", ["dm05", "gr00t", "lingbot-vla", "openvla-oft", "pi05", "cosmos", "streamvln", "qwenvl"]
+    "profile",
+    ["dm05", "gr00t", "lingbot-vla", "openvla-oft", "pi05", "cosmos", "streamvln", "qwenvl", "activevln"],
 )
 def test_model_timing_covers_both_stages_and_excludes_output_transform(monkeypatch, profile):
     module = load_benchmark(profile)
