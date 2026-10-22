@@ -45,7 +45,7 @@ def load_adapter(task: TaskPackage) -> EvaluationAdapter:
         sys.path.insert(0, str(task.root))
         spec.loader.exec_module(module)
         return module.create_adapter(task)
-    from flashinfer_adapter import FlashInferAdapter
+    from benchmarks.kernel_tuning.flashinfer_adapter import FlashInferAdapter
 
     return FlashInferAdapter(task)
 

@@ -107,7 +107,14 @@ async def evaluate(
                 await _kill_tree(process)
                 raise
         if process.returncode != 0:
-            raise ContractError(f"Evaluator failed (exit {process.returncode}); see {output / 'stderr.log'}")
+            detail = ""
+            with contextlib.suppress(OSError, ValueError, AttributeError):
+                error = read_json(response_path).get("error")
+                if isinstance(error, str):
+                    detail = f": {error[:2000]}"
+            raise ContractError(
+                f"Evaluator failed (exit {process.returncode}){detail}; see {output / 'stderr.log'}"
+            )
         if not response_path.is_file():
             raise ContractError("Evaluator produced no structured response")
         response = read_json(response_path)

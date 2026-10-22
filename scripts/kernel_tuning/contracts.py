@@ -165,6 +165,32 @@ class Acceptance:
             raise ContractError("Acceptance fractions must be less than 1")
 
 
+@dataclass(frozen=True)
+class Diagnostics:
+    """Optional, budgeted NCU evidence independent of acceptance measurements."""
+
+    required: bool = False
+    max_reports: int = 4
+    timeout_seconds: float = 120
+    ncu: str = "ncu"
+    reader_python: str = ""
+    metric_profile: str = "auto"
+    workload: str = ""
+
+    def __post_init__(self) -> None:
+        if type(self.required) is not bool:
+            raise ContractError("diagnostics.required must be a boolean")
+        _positive(self.max_reports, "diagnostics.max_reports", integer=True)
+        _positive(self.timeout_seconds, "diagnostics.timeout_seconds")
+        for key in ("ncu", "reader_python", "workload"):
+            if not isinstance(getattr(self, key), str):
+                raise ContractError(f"diagnostics.{key} must be a string")
+        if not self.ncu.strip():
+            raise ContractError("diagnostics.ncu must name an executable")
+        if self.metric_profile not in ("auto", "generic", "orin", "thor", "b200"):
+            raise ContractError("Unsupported diagnostics.metric_profile")
+
+
 T = TypeVar("T")
 
 
@@ -194,6 +220,7 @@ class Settings:
     search: Search = field(default_factory=Search)
     acceptance: Acceptance = field(default_factory=Acceptance)
     profile: bool = False
+    diagnostics: Diagnostics = field(default_factory=Diagnostics)
 
     @classmethod
     def load(cls, path: Path) -> Settings:
@@ -227,6 +254,7 @@ class Settings:
             ("timing", Timing),
             ("search", Search),
             ("acceptance", Acceptance),
+            ("diagnostics", Diagnostics),
         ):
             data[key] = _settings(kind, data.get(key, {}))
         for key in ("seeds", "target_hardware"):
@@ -244,6 +272,8 @@ class Settings:
                 raise ContractError(f"{key} must be a nonempty string")
         if not isinstance(self.agent, str) or type(self.profile) is not bool:
             raise ContractError("agent must be a string; profile must be a boolean")
+        if self.diagnostics.required and not self.profile:
+            raise ContractError("diagnostics.required requires profile: true")
         if not self.target_hardware or any(not isinstance(x, str) or not x for x in self.target_hardware):
             raise ContractError("target_hardware must list at least one hardware label")
         if not self.seeds or len(set(self.seeds)) != len(self.seeds):
@@ -368,6 +398,8 @@ class TaskPackage:
             raise ContractError("Workloads must be nonempty and have distinct UUIDs")
         if settings.weights and set(settings.weights) != set(ids):
             raise ContractError("Explicit weights must cover exactly every workload UUID")
+        if settings.diagnostics.workload and settings.diagnostics.workload not in ids:
+            raise ContractError("diagnostics.workload must name a declared workload UUID")
         if "replay.json" in hashes:
             from .discovery.contracts import validate_replay
 

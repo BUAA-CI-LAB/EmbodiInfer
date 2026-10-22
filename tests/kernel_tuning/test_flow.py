@@ -86,6 +86,26 @@ def run_fake(store: RunStore, coder, *, resume: bool = False) -> dict:
     )
 
 
+def test_missing_submodule_stops_before_evaluation_or_agent(
+    store, candidate, tmp_path: Path, monkeypatch
+) -> None:
+    # Also cover a partial init: the wiki is present, but the reader is missing.
+    wiki = tmp_path / "skills/KernelWiki"
+    wiki.mkdir(parents=True)
+    (wiki / "SKILL.md").write_text("Initialized wiki", encoding="utf-8")
+    monkeypatch.setattr("scripts.kernel_tuning.skill_context.ROOT", tmp_path)
+
+    async def unexpected_evaluation(*args, **kwargs):
+        pytest.fail("Missing skills must be reported before any evaluator is started")
+
+    monkeypatch.setattr("scripts.kernel_tuning.flow.evaluate", unexpected_evaluation)
+    coder = fake_coder(store, candidate, [])
+    with pytest.raises(ContractError, match="ncu-report-skill.*git submodule update --init"):
+        run_fake(store, coder)
+    assert not coder.prompts
+    assert not RunStore(store.root).manifest["attempts"]
+
+
 def test_full_loop_promotes_then_preserves_failures_and_exports(store, candidate, tmp_path: Path) -> None:
     coder = fake_coder(store, candidate, [8, "crash", 9])
     result = run_fake(store, coder)
@@ -241,3 +261,116 @@ def test_sessions_run_under_the_recorded_fence(store, candidate, unfenced: bool)
     assert coder.sessions
     expected = UNFENCED if unfenced else FENCED
     assert all(session.permission == expected for session in coder.sessions)
+
+
+def diagnostic_store(task_dir: Path, tmp_path: Path, *, available: bool = True, **settings) -> RunStore:
+    """Freeze a CPU diagnostic adapter before creating the run, as with a real task."""
+    import yaml
+    from scripts.kernel_tuning.contracts import TaskPackage
+
+    config = yaml.safe_load((task_dir / "tuning.yaml").read_text(encoding="utf-8"))
+    config.update(profile=True, diagnostics=settings)
+    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    if available:
+        path = task_dir / "benchmark.py"
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + """
+def profile(self, solutions, output):
+    return {"action_count": 2, "source": solutions["candidate"]["name"],
+            "actions": [{"action": "r0a0"}, {"action": "r0a1"}]}
+Adapter.profile = profile
+""",
+            encoding="utf-8",
+        )
+    return RunStore.create(TaskPackage.load(task_dir), tmp_path / "diagnostic-runs", "claude/fake:low")
+
+
+def test_baseline_and_candidate_diagnostics_reach_next_agent(task_dir, tmp_path, candidate) -> None:
+    store = diagnostic_store(task_dir, tmp_path, max_reports=2)
+    coder = fake_coder(store, candidate, [8, 9, 9])
+    result = run_fake(store, coder)
+    first = read_json(store.root / "workspace/0001/diagnostics.json")
+    second = read_json(store.root / "workspace/0002/diagnostics.json")
+    assert [r["candidate"] for r in first] == ["baseline"]
+    assert [r["candidate"] for r in second] == ["baseline", "0001"]
+    assert all(r["status"] == "complete" for r in second)
+    assert second[1]["evidence"]["action_count"] == 2
+    assert len(result["diagnostics"]) == 2
+    assert result["best"] == "0001"
+    assert all("skills/KernelWiki" in p.replace("\\", "/") for p in coder.prompts)
+    RunStore(store.root).verify()  # Diagnostics do not mutate promotion evidence.
+
+
+def test_optional_diagnostic_failure_preserves_promotion(task_dir, tmp_path, candidate) -> None:
+    store = diagnostic_store(task_dir, tmp_path, available=False)
+    result = run_fake(store, fake_coder(store, candidate, [8, 9, 9]))
+    assert result["best"] == "0001"
+    assert all(r["status"] == "unavailable" for r in result["diagnostics"])
+    first = read_json(store.root / "workspace/0001/diagnostics.json")
+    assert "does not implement" in first[0]["error"]
+
+
+def test_required_baseline_failure_prevents_agent_start(task_dir, tmp_path, candidate) -> None:
+    store = diagnostic_store(task_dir, tmp_path, available=False, required=True)
+    coder = fake_coder(store, candidate, [])
+    with pytest.raises(ContractError, match="Required baseline"):
+        run_fake(store, coder)
+    assert not coder.prompts
+    assert not RunStore(store.root).manifest["attempts"]
+
+
+def test_interrupted_diagnostics_remain_counted_on_resume(task_dir, tmp_path, candidate, monkeypatch) -> None:
+    store = diagnostic_store(task_dir, tmp_path, max_reports=1)
+    interrupted = False
+
+    async def cancel_profile(*args, **kwargs):
+        nonlocal interrupted
+        if kwargs.get("operation") == "profile":
+            assert not interrupted, "Interrupted profiling must not be repeated on resume"
+            interrupted = True
+            raise asyncio.CancelledError()
+        return await evaluate(*args, **kwargs)
+
+    monkeypatch.setattr("scripts.kernel_tuning.flow.evaluate", cancel_profile)
+    with pytest.raises(asyncio.CancelledError):
+        run_fake(store, fake_coder(store, candidate, []))
+    resumed = RunStore(store.root)
+    assert resumed.manifest["diagnostics"][0]["status"] == "interrupted"
+    result = run_fake(resumed, fake_coder(resumed, candidate, [8, 9, 9]), resume=True)
+    assert len(result["diagnostics"]) == 1
+    assert result["best"] == "0001"
+
+
+def test_failed_correctness_does_not_consume_profile_budget(
+    task_dir, tmp_path, candidate, monkeypatch
+) -> None:
+    store = diagnostic_store(task_dir, tmp_path)
+
+    async def bad_candidate(*args, **kwargs):
+        report = await evaluate(*args, **kwargs)
+        if kwargs.get("candidate") is not None and kwargs.get("operation") == "evaluate":
+            report["measurement"]["checks"][0]["passed"] = False
+        return report
+
+    monkeypatch.setattr("scripts.kernel_tuning.flow.evaluate", bad_candidate)
+    result = run_fake(store, fake_coder(store, candidate, [8, 9]))
+    assert result["best"] is None
+    assert [r["candidate"] for r in result["diagnostics"]] == ["baseline"]
+
+
+def test_diagnostic_timeout_is_separate_from_evaluation(task_dir, tmp_path, candidate, monkeypatch) -> None:
+    store = diagnostic_store(task_dir, tmp_path, timeout_seconds=0.5, max_reports=1)
+    timeouts = []
+
+    async def timeout_profile(*args, **kwargs):
+        if kwargs.get("operation") == "profile":
+            timeouts.append(kwargs["timeout"])
+            raise ContractError("Evaluator timed out")
+        return await evaluate(*args, **kwargs)
+
+    monkeypatch.setattr("scripts.kernel_tuning.flow.evaluate", timeout_profile)
+    result = run_fake(store, fake_coder(store, candidate, [8, 9, 9]))
+    assert timeouts == [0.5]
+    assert result["best"] == "0001"
+    assert result["diagnostics"][0]["status"] == "unavailable"

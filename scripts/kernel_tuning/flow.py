@@ -28,6 +28,7 @@ from hmz.flows import (
 from scripts.kernel_tuning.artifacts import RunStore, atomic_json
 from scripts.kernel_tuning.contracts import (
     ContractError,
+    digest,
     promotion,
     read_json,
     tree_hashes,
@@ -37,6 +38,7 @@ from scripts.kernel_tuning.contracts import (
 from scripts.kernel_tuning.permissions import Coder, session_agent
 from scripts.kernel_tuning.prompts import implementation_prompt, plan_prompt
 from scripts.kernel_tuning.runner import evaluate
+from scripts.kernel_tuning.skill_context import require_skills
 
 
 class Agents(AgentCollection):
@@ -63,6 +65,7 @@ async def kernel_tuning(
 ) -> dict[str, Any]:
     """Plan, generate, verify, measure, and retain one candidate at a time."""
     del task  # The immutable task package supplies the complete objective.
+    require_skills()
     store = RunStore(Path(params.run_dir))
     state = ctx.state
     if state is None:
@@ -103,8 +106,36 @@ async def kernel_tuning(
             output,
             operation=operation,
             candidate=candidate,
-            timeout=min(cfg.search.evaluation_timeout_seconds, remaining()),
+            timeout=min(
+                cfg.diagnostics.timeout_seconds
+                if operation == "profile"
+                else cfg.search.evaluation_timeout_seconds,
+                remaining(),
+            ),
         )
+
+    async def diagnose(label: str, output: Path, solution: Path) -> None:
+        records = store.manifest.setdefault("diagnostics", [])
+        if any(r["candidate"] == label for r in records):
+            return
+        if len(records) >= cfg.diagnostics.max_reports or remaining() <= 0:
+            return
+        record = {
+            "candidate": label,
+            "status": "running",
+            "archive": str(output),
+            "solution_digest": digest(read_json(solution)),
+        }
+        records.append(record)  # Reserve budget durably, including failed/interrupted calls.
+        checkpoint()
+        try:
+            response = await measure(output, operation="profile", candidate=solution)
+            record.update(status="complete", evidence=response["profile"])
+        except Exception as exc:
+            record.update(status="unavailable", error=f"{type(exc).__name__}: {exc}")
+            atomic_json(output / "error.json", record)
+        finally:
+            checkpoint()
 
     store.manifest.update(status="running", stop_reason=None)
     checkpoint()
@@ -119,6 +150,15 @@ async def kernel_tuning(
             validate_measurement(store.task, report["measurement"])
             store.manifest["baseline_verified"] = True
             checkpoint()
+        if cfg.profile:
+            await diagnose("baseline", store.root / "baseline/profile", store.solution_path())
+            baseline_diagnostic = next(
+                (r for r in store.manifest.get("diagnostics", []) if r["candidate"] == "baseline"), None
+            )
+            if cfg.diagnostics.required and (
+                baseline_diagnostic is None or baseline_diagnostic["status"] != "complete"
+            ):
+                raise ContractError(f"Required baseline diagnostics unavailable: {baseline_diagnostic}")
         while True:
             reason = None
             if len(store.manifest["attempts"]) >= cfg.search.max_candidates:
@@ -178,13 +218,13 @@ async def kernel_tuning(
                 store.finish_attempt(candidate, status=status, decision=decision, solution=solution)
                 checkpoint()
                 if cfg.profile:
-                    # Profiling is evidence only, outside promotion and performance timing.
+                    # Numeric failures are retained but never spend the profiling budget.
                     try:
-                        await measure(
-                            archive / "profile", operation="profile", candidate=archive / "solution.json"
-                        )
-                    except Exception as exc:
-                        atomic_json(archive / "profile/error.json", {"error": str(exc)})
+                        validate_measurement(store.task, report["measurement"])
+                    except ContractError:
+                        pass
+                    else:
+                        await diagnose(candidate, archive / "profile", archive / "solution.json")
             except (asyncio.CancelledError, KeyboardInterrupt):
                 raise
             except Exception as exc:

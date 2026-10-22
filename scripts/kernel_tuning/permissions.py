@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from hmz.flows import Agent, Permission, PermissionKind
 
+from scripts.kernel_tuning.humanize_compat import configure_humanize
+
 #: Humanize2's default grant: write the session workdir, read the rest, stay online.
 FENCED = Permission()
 #: Nothing fenced. Isolation is then the operator's account or container.
@@ -33,4 +35,5 @@ def session_agent(agent: Agent, *, unfenced: bool) -> Agent:
 
     Fenced runs keep the exact permission the flows used before this option existed.
     """
+    configure_humanize()
     return agent if unfenced else agent.derive(permission=FENCED)

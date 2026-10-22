@@ -13,7 +13,13 @@ from benchmarks.kernel_tuning.replay_adapter import ReplayAdapter  # noqa: E402
 from scripts.kernel_tuning import batch  # noqa: E402
 from scripts.kernel_tuning.__main__ import main  # noqa: E402
 from scripts.kernel_tuning.artifacts import atomic_json  # noqa: E402
-from scripts.kernel_tuning.contracts import ContractError, TaskPackage, digest, read_json, tree_hashes  # noqa: E402
+from scripts.kernel_tuning.contracts import (  # noqa: E402
+    ContractError,
+    TaskPackage,
+    digest,
+    read_json,
+    tree_hashes,
+)
 from scripts.kernel_tuning.discovery.contracts import ModelCapture  # noqa: E402
 from scripts.kernel_tuning.discovery.tasks import render_model  # noqa: E402
 from scripts.kernel_tuning.discovery.tensors import clone_inputs, materialize, storage_key  # noqa: E402

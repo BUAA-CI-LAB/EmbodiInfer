@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .artifacts import REPOSITORY
-from .contracts import ContractError, Settings, TaskPackage, read_json
+from .contracts import ContractError, Diagnostics, Settings, TaskPackage, read_json
 from .operators import Operator
 
 VENDOR = "vendor"
@@ -198,6 +198,7 @@ def tuning_settings(operator: Operator, overrides: dict[str, Any] | None = None)
             "evaluation_timeout_seconds": 600,
         },
         "profile": False,
+        "diagnostics": asdict(Diagnostics()),
     }
     weights = {work.uuid: work.weight for work in operator.workloads}
     if len(set(weights.values())) > 1:
