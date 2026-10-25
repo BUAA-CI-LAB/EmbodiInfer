@@ -22,6 +22,7 @@ from .linear import (
     resolve_linear_backend,
 )
 from .normalization import NormalizationBackend, NormQuantBackend, norm_quant_backends, normalization_backends
+from .ops import KernelSelection, available_ops, get_op, register_lazy_op, register_op
 from .quantization import (
     ActivationQuantizer,
     EncodedActivation,
@@ -67,4 +68,9 @@ __all__ = [
     "parse_quantization_config",
     "register_linear",
     "resolve_linear_backend",
+    "KernelSelection",
+    "available_ops",
+    "get_op",
+    "register_lazy_op",
+    "register_op",
 ]

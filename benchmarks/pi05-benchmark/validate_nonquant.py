@@ -77,10 +77,10 @@ def ephemeral_packed_mlp_weights() -> Any:
 
     original = modeling_pi05._fused_linear_pair
 
-    def bounded(inputs: Any, first: Any, second: Any) -> Any:
+    def bounded(inputs: Any, first: Any, second: Any, **kwargs: Any) -> Any:
         if torch.is_grad_enabled() or torch.cuda.is_current_stream_capturing():
             raise RuntimeError("ephemeral packed weights are only for untimed eager inference")
-        result = original(inputs, first, second)
+        result = original(inputs, first, second, **kwargs)
         first._vvla_fused_pair_weight = None
         return result
 

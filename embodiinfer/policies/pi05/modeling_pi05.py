@@ -33,6 +33,8 @@ step (never mutated), so there is no HF ``DynamicCache`` to defend against.
 
 from __future__ import annotations
 
+import functools
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,9 +43,10 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F
+from torch import nn
 
 from ...engine.parallel import TensorParallelContext
-from ...layers import get_attention_backend, get_split_kv_attention_backend
+from ...layers import KernelSelection, get_attention_backend, get_split_kv_attention_backend
 from ...layers.linear import QuantizationConfig, parse_quantization_config
 from ...models.linear import QuantizedLinear, pack_quantized_linears, quantize_linear
 from ...types import Observation
@@ -91,30 +94,68 @@ def _inference_helper(fn, use_inductor: bool):
     return compiled
 
 
+_DEFAULT_KERNELS = KernelSelection("none")
+
+
+def _op(kernels: KernelSelection | None, op: str, use_triton: bool):
+    """Resolve a registry operator with the policy's preferred implementation.
+
+    Torch references run uncompiled. With ``compile_backend='inductor'`` the
+    former per-helper ``_inference_helper`` wrappers were first created while
+    Dynamo traced the prefix encoder, which stores the raw function, so these
+    helpers never ran compiled outside that graph. Keeping them uncompiled
+    preserves those numerics; the prefix encoder graph still inlines them.
+    """
+    selection = _DEFAULT_KERNELS if kernels is None else kernels
+    return selection.resolve(op, "triton" if use_triton else "torch")
+
+
+def _is_gelu_tanh(activation: Any) -> bool:
+    """Recognize plain tanh GELU modules whose calls can use the tensor operator."""
+    if type(activation) is nn.GELU:
+        if activation.approximate != "tanh":
+            return False
+    else:
+        # A loaded SigLIP activation already has this optional dependency in
+        # sys.modules. Compare the class itself, never its name or a subclass.
+        activations = sys.modules.get("transformers.activations")
+        if activations is None or type(activation) is not getattr(activations, "PytorchGELUTanh", None):
+            return False
+        # GELUTanh(use_gelu_tanh_python=True) ("gelu_python_tanh") evaluates a
+        # Python formula that is not bit-identical to F.gelu; only the native
+        # partial may use the operator.
+        act = activation.__dict__.get("act")
+        if not (
+            isinstance(act, functools.partial)
+            and act.func is F.gelu
+            and not act.args
+            and act.keywords == {"approximate": "tanh"}
+        ):
+            return False
+    # Module hooks and instance overrides may change values or gradients.
+    return (
+        "forward" not in activation.__dict__
+        and "_call_impl" not in activation.__dict__
+        and getattr(activation, "_compiled_call_impl", None) is None
+        and not activation._forward_hooks
+        and not activation._forward_pre_hooks
+        and not activation._backward_hooks
+        and not activation._backward_pre_hooks
+    )
+
+
 # ---- attention math (reimplemented to match HF Gemma exactly) ---------------
-def _rotate_half(x: torch.Tensor) -> torch.Tensor:
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def _apply_rope_impl(
-    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    cos = cos.unsqueeze(1)  # [B, 1, seq, hd] broadcast over heads
-    sin = sin.unsqueeze(1)
-    return (q * cos) + (_rotate_half(q) * sin), (k * cos) + (_rotate_half(k) * sin)
-
-
 def _apply_rope(
     q: torch.Tensor,
     k: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
     use_inductor: bool,
+    use_triton: bool = False,
+    kernels: KernelSelection | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    fn = _inference_helper(_apply_rope_impl, use_inductor)
-    return fn(q, k, cos, sin)
+    """Rotate-half Q/K RoPE in BHSD layout through the ``rotate_qk`` operator."""
+    return _op(kernels, "rotate_qk", use_triton)(q, k, cos, sin)
 
 
 def _gated_residual_impl(x: torch.Tensor, y: torch.Tensor, gate: torch.Tensor | None) -> torch.Tensor:
@@ -127,11 +168,10 @@ def _gated_residual(
     gate: torch.Tensor | None,
     use_inductor: bool,
     use_triton: bool = False,
+    kernels: KernelSelection | None = None,
 ) -> torch.Tensor:
-    if use_triton and gate is not None:
-        from ...backend.triton.norm import gated_residual
-
-        return gated_residual(x, y, gate)
+    if gate is not None:
+        return _op(kernels, "gated_residual", use_triton)(x, y, gate)
     fn = _inference_helper(_gated_residual_impl, use_inductor)
     return fn(x, y, gate)
 
@@ -160,18 +200,14 @@ def _rmsnorm(
     use_inductor: bool,
     modulation: torch.Tensor | None = None,
     use_triton: bool = False,
+    kernels: KernelSelection | None = None,
 ):
     """PiGemmaRMSNorm forward (fp32 variance); returns (output, adarms gate)."""
-    fn = _inference_helper(_rmsnorm_math, use_inductor)
     if modulation is None:
         if cond is None or norm.dense is None:
-            return fn(x, norm.weight, norm.eps, None)
+            return _inference_helper(_rmsnorm_math, use_inductor)(x, norm.weight, norm.eps, None)
         modulation = _adarms_projection(norm, cond)
-    if use_triton:
-        from ...backend.triton.norm import ada_rms_norm
-
-        return ada_rms_norm(x, modulation, norm.eps)
-    return fn(x, None, norm.eps, modulation)
+    return _op(kernels, "ada_rms_norm", use_triton)(x, modulation, norm.eps)
 
 
 def _adarms_projection(norm: Any, cond: torch.Tensor) -> torch.Tensor:
@@ -217,7 +253,9 @@ def _packed_quantized_projection(
     return packed
 
 
-def _fused_linear_pair(x: torch.Tensor, first: Any, second: Any) -> tuple[torch.Tensor, torch.Tensor]:
+def _fused_linear_pair(
+    x: torch.Tensor, first: Any, second: Any, *, kernels: KernelSelection | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Evaluate two bias-free projections as one GEMM and split the result."""
     if torch.is_grad_enabled() or first.training or second.training:
         return first(x), second(x)
@@ -235,7 +273,7 @@ def _fused_linear_pair(x: torch.Tensor, first: Any, second: Any) -> tuple[torch.
     if weight is None or weight.device != first.weight.device or weight.dtype != first.weight.dtype:
         weight = torch.cat((first.weight, second.weight), dim=0).contiguous()
         first._vvla_fused_pair_weight = weight
-    fused = F.linear(x, weight)
+    fused = _op(kernels, "linear", False)(x, weight)
     return fused.split((first.out_features, second.out_features), dim=-1)
 
 
@@ -312,30 +350,23 @@ def _mlp(
     use_triton: bool = False,
     *,
     fuse_projections: bool = True,
+    kernels: KernelSelection | None = None,
     approximate: str = "tanh",
 ) -> torch.Tensor:
     if fuse_projections:
-        gate, up = _fused_linear_pair(x, mlp.gate_proj, mlp.up_proj)
+        gate, up = _fused_linear_pair(x, mlp.gate_proj, mlp.up_proj, kernels=kernels)
     else:
         # The eager reference keeps the two native GEMM shapes.  Besides matching
         # LeRobot's eager path, this preserves its rounding on selectively cast
         # (e.g. bf16) checkpoints.
         gate, up = mlp.gate_proj(x), mlp.up_proj(x)
-    if use_triton and approximate == "tanh":
-        from ...backend.triton.activation import gated_gelu
-
-        activated = gated_gelu(gate, up)
+    if approximate == "none":
+        activated = F.gelu(gate) * up
     else:
-        if approximate == "none":
-            activated = F.gelu(gate) * up
-        else:
-            fn = _inference_helper(_gated_gelu_impl, use_inductor)
-            activated = fn(gate, up)
+        activated = _op(kernels, "gated_gelu", use_triton)(gate, up)
+    if type(mlp.down_proj) is nn.Linear:
+        return _op(kernels, "linear", False)(activated, mlp.down_proj.weight, mlp.down_proj.bias)
     return mlp.down_proj(activated)
-
-
-def _gated_gelu_impl(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-    return F.gelu(gate, approximate="tanh") * up
 
 
 def _prepare_compiled_inference_helpers() -> None:
@@ -344,14 +375,12 @@ def _prepare_compiled_inference_helpers() -> None:
     The prefix tower is itself wrapped in ``torch.compile``.  Lazily adding
     helper wrappers while Dynamo traces that outer function invalidates its
     global-dictionary guard and needlessly consumes one cache entry per helper.
-    Creating the four lazy wrappers up front preserves the same compiled
-    operators and numerics while keeping that guard stable across layouts.
+    Creating the remaining lazy wrappers up front keeps that guard stable across
+    layouts. RoPE and tanh-GELU resolve through registry operators instead.
     """
     for helper in (
-        _apply_rope_impl,
         _gated_residual_impl,
         _rmsnorm_math,
-        _gated_gelu_impl,
     ):
         _inference_helper(helper, True)
 
@@ -468,6 +497,7 @@ class Pi05Policy(FlowVLAPolicy):
         request_cuda_graph: bool = False,
         denoise_attention: str = "sdpa",
         prefix_attention: str = "sdpa",
+        kernel_profile: str = "none",
         checkpoint_config: Mapping[str, Any] | None = None,
         optimizations: Pi05OptimizationConfig | None = None,
         tensor_parallel_size: int = 1,
@@ -514,6 +544,10 @@ class Pi05Policy(FlowVLAPolicy):
         self.request_cuda_graph = request_cuda_graph
         self.denoise_attention = denoise_attention
         self.prefix_attention = prefix_attention
+        if not isinstance(kernel_profile, str):
+            raise TypeError("PI0.5 kernel_profile must be a profile name, 'auto', 'torch' or 'none'")
+        self.kernel_profile = kernel_profile
+        self._kernel_selection: KernelSelection | None = None
         self.attention = attention
         self._attn = get_attention_backend(attention)
         self._native_attention = None
@@ -620,14 +654,39 @@ class Pi05Policy(FlowVLAPolicy):
             x = layer.layer_norm1(h)
             a = layer.self_attn
             b, s, _ = x.shape
-            q, k, v = [
-                proj(x).view(b, s, a.num_heads, a.head_dim).transpose(1, 2)
-                for proj in (a.q_proj, a.k_proj, a.v_proj)
-            ]
+            qkv = []
+            for proj in (a.q_proj, a.k_proj, a.v_proj):
+                if type(proj) is nn.Linear:
+                    projected = _op(self._kernels, "linear", False)(x, proj.weight, proj.bias)
+                else:
+                    projected = proj(x)
+                qkv.append(projected.view(b, s, a.num_heads, a.head_dim).transpose(1, 2))
+            q, k, v = qkv
             y = self._vision_attn.attend(q, k, v, scaling=a.scale)
-            h = h + a.out_proj(y.transpose(1, 2).reshape(b, s, -1).contiguous())
+            if type(a.out_proj) is nn.Linear:
+                h = h + _op(self._kernels, "linear", False)(
+                    y.transpose(1, 2).reshape(b, s, -1).contiguous(),
+                    a.out_proj.weight,
+                    a.out_proj.bias,
+                )
+            else:
+                h = h + a.out_proj(y.transpose(1, 2).reshape(b, s, -1).contiguous())
             x = layer.layer_norm2(h)
-            h = h + layer.mlp.fc2(layer.mlp.activation_fn(layer.mlp.fc1(x)))
+            if type(layer.mlp.fc1) is nn.Linear:
+                activated = _op(self._kernels, "linear", False)(x, layer.mlp.fc1.weight, layer.mlp.fc1.bias)
+            else:
+                activated = layer.mlp.fc1(x)
+            activation_fn = layer.mlp.activation_fn
+            if _is_gelu_tanh(activation_fn):
+                activated = _op(self._kernels, "gelu_tanh", False)(activated)
+            else:
+                activated = activation_fn(activated)
+            if type(layer.mlp.fc2) is nn.Linear:
+                h = h + _op(self._kernels, "linear", False)(
+                    activated, layer.mlp.fc2.weight, layer.mlp.fc2.bias
+                )
+            else:
+                h = h + layer.mlp.fc2(activated)
         h = vision.post_layernorm(h)
         h = pg.multi_modal_projector.linear(h)
         # Preserve both operations in LeRobot's embedding path: eliminating
@@ -660,6 +719,16 @@ class Pi05Policy(FlowVLAPolicy):
             and self._m.action_in_proj.weight.device.type == "cuda"
         )
 
+    @property
+    def _kernels(self) -> KernelSelection:
+        """Operator selection for ``kernel_profile``, chosen on first use on the current device."""
+        selection = self.__dict__.get("_kernel_selection")
+        if selection is None:
+            selection = KernelSelection(self.__dict__.get("kernel_profile", "none"))
+            selection.prepare()
+            self._kernel_selection = selection
+        return selection
+
     def _prepare_native_attention(self) -> None:
         """Resolve optional kernels before native execution or graph capture."""
         if self._native_attention is None and "triton" in (self.denoise_attention, self.prefix_attention):
@@ -689,6 +758,7 @@ class Pi05Policy(FlowVLAPolicy):
         runtime = getattr(self, "_runtime", None)
         if runtime is not None:
             runtime.clear()
+        self._kernel_selection = None
         operators = getattr(self, "_fused_ops", None)
         if operators is not None:
             operators.clear()
@@ -798,19 +868,25 @@ class Pi05Policy(FlowVLAPolicy):
         v = v.view(B, S, -1, hd).transpose(1, 2)
         if openpi_rlinf:
             q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
-        elif native_expert and q.dtype in (torch.bfloat16, torch.float16):
-            from ...backend.triton.rotary import rotate_qk
-
-            q, k = rotate_qk(q, k, cos, sin)
         else:
-            q, k = _apply_rope(q, k, cos, sin, self.compile_backend == "inductor")
+            q, k = _apply_rope(
+                q,
+                k,
+                cos,
+                sin,
+                self.compile_backend == "inductor",
+                native_expert and q.dtype in (torch.bfloat16, torch.float16),
+                self._kernels,
+            )
         if collected is not None:  # prefix pass: cache this layer's K/V
-            collected.append((k, v))
+            # Contiguous like Inductor's outputs, so the cache layout (which
+            # layout-gated tuned kernels match) is the same with or without compile.
+            collected.append((k.contiguous(), v.contiguous()))
         if native_expert and self.denoise_attention == "triton":
             # All action queries share the same prefix/suffix key validity.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
-            out = self._native_attention.attend_split(
-                q, *prefix_kv, k, v, key_padding_mask=key_padding_mask, scaling=attn.scaling
+            out = _op(self._kernels, "split_kv_attention", True)(
+                q, *prefix_kv, k, v, key_padding_mask, attn.scaling
             )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         if prefix_kv is not None:  # denoise pass: attend [prefix ++ suffix]
@@ -837,7 +913,9 @@ class Pi05Policy(FlowVLAPolicy):
         if native_prefix:
             # Prefix preparation supplies a shared key mask; masked query outputs are unused.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
-            out = self._native_attention.attend(q, k, v, attn_mask=key_padding_mask, scaling=attn.scaling)
+            out = _op(self._kernels, "split_kv_attention", True)(
+                q, k[:, :, :0], v[:, :, :0], k, v, key_padding_mask, attn.scaling
+            )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         # K/V stay at num_kv_heads; the attention backend does the GQA repeat
         # (materialized for 'eager', broadcast for 'eager_bc').
@@ -908,6 +986,7 @@ class Pi05Policy(FlowVLAPolicy):
                 self.compile_backend == "inductor",
                 None if modulations is None else modulations[2 * i],
                 fused,
+                self._kernels,
             )
             attn = self._attn_sublayer(
                 layer.self_attn,
@@ -926,6 +1005,7 @@ class Pi05Policy(FlowVLAPolicy):
                 gate,
                 self.compile_backend == "inductor",
                 fused,
+                self._kernels,
             )
             residual = hidden
             h, gate = _rmsnorm(
@@ -935,6 +1015,7 @@ class Pi05Policy(FlowVLAPolicy):
                 self.compile_backend == "inductor",
                 None if modulations is None else modulations[2 * i + 1],
                 fused,
+                self._kernels,
             )
             hidden = _gated_residual(
                 residual,
@@ -944,10 +1025,12 @@ class Pi05Policy(FlowVLAPolicy):
                     self.compile_backend == "inductor",
                     fused,
                     fuse_projections=self.attention != "eager",
+                    kernels=self._kernels,
                 ),
                 gate,
                 self.compile_backend == "inductor",
                 fused,
+                self._kernels,
             )
         hidden, _ = _rmsnorm(
             tower.norm,
@@ -956,6 +1039,7 @@ class Pi05Policy(FlowVLAPolicy):
             self.compile_backend == "inductor",
             None if modulations is None else modulations[-1],
             fused,
+            self._kernels,
         )
         return hidden, collected
 
@@ -1020,6 +1104,7 @@ class Pi05Policy(FlowVLAPolicy):
             key_mask = prefix_pad_masks[:, None, :].expand(-1, length, -1)
             mask4d = self._attention_mask_4d(key_mask)
         if self.compile_backend == "inductor":
+            self._kernels  # noqa: B018 - resolve operators before graph tracing reads them
             policy_key = (id(self), native_prefix)
             prefix_encoder = _COMPILED_PREFIX_ENCODERS.get(policy_key)
             if prefix_encoder is None:
@@ -1318,6 +1403,7 @@ def _build_pi05(
     request_cuda_graph: bool = False,
     denoise_attention: str = "sdpa",
     prefix_attention: str = "sdpa",
+    kernel_profile: str = "none",
     low_cpu_mem_usage: bool = False,
     checkpoint_config: Mapping[str, Any] | None = None,
     device_type: str | None = None,
@@ -1366,6 +1452,7 @@ def _build_pi05(
         request_cuda_graph=request_cuda_graph,
         denoise_attention=denoise_attention,
         prefix_attention=prefix_attention,
+        kernel_profile=kernel_profile,
         low_cpu_mem_usage=low_cpu_mem_usage,
         checkpoint_config=checkpoint_config,
         optimizations=optimizations,

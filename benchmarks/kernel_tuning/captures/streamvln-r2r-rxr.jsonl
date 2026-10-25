@@ -1,0 +1,3 @@
+{"axes": {"H": 3584, "M": 1}, "operator": "add_rms_norm", "scalars": {"eps": 1e-06}, "count": 330400}
+{"axes": {"I": 18944, "M": 1}, "operator": "swiglu", "count": 165200}
+{"axes": {"H": 3584, "M": 1}, "operator": "rms_norm", "scalars": {"eps": 1e-06}, "count": 5900}
