@@ -66,11 +66,18 @@ EmbodiInfer 可以运行视觉—语言—动作策略、世界动作模型和�
 
 </div>
 
-## 选择模型与运行环境
+## 选择模型与运行时
 
-[模型列表](models.md)列出各模型的检查点、依赖组和优化选项。
-π0.5 的 HTTP 和 WirelessComm 服务支持[多客户端批处理](serving.md#share-one-service-across-clients)。
-有状态导航策略会在同一轮任务内保留历史状态，供后续推理使用。
+[模型参考](models.md)列出检查点、依赖环境、优化与 rollout 能力。
+以下模型提供网络服务：
+
+| 策略 | HTTP / WirelessComm 执行 |
+|---|---|
+| π0.5 | 通过 `--max-batch` 开启跨会话批处理，默认 1。 |
+| DM0.5 / StreamVLN | 保持 `--max-batch 1`，逐请求执行，按模型管理会话与历史。 |
+
+其他模型通过 Python API 调用。多个客户端共享 π0.5 服务的配置步骤见
+[多客户端服务](serving.md#share-one-service-across-clients)。
 
 机器人或仿真器部署请搭配 [EmbodiRun](https://embodirun.readthedocs.io/)。
 
