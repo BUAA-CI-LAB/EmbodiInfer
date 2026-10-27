@@ -247,16 +247,24 @@ def _run(args: argparse.Namespace, episodes: list[list[Any]], kind: str, profile
 
 def run(profile: str, output: Path, driver_args: list[str], *, samples: int | None = None, seed: int = 1000):
     """Run reference, baseline and candidate on the driver inputs and write the gate report."""
+    from embodiinfer.backend.triton.tuned import PROFILE_ROOT
     from embodiinfer.engine.serve.factory import add_policy_arguments
 
+    from .artifacts import artifact_fingerprint
     from .discovery.drive import load_inputs
 
     if output.exists():
         raise ContractError(f"{output} already exists")
+    if not profile.isidentifier() or profile in ("auto", "none", "torch"):
+        raise ContractError("Verify requires an explicit installed candidate profile")
+    if samples is not None and (isinstance(samples, bool) or samples <= 0):
+        raise ContractError("Verification samples must be positive")
     parser = argparse.ArgumentParser(prog="verify driver arguments")
     add_policy_arguments(parser)
     parser.add_argument("--inputs", type=Path, required=True)
     args = parser.parse_args(driver_args)
+    input_fingerprint = artifact_fingerprint(args.inputs)
+    profile_fingerprint = artifact_fingerprint(PROFILE_ROOT / profile)
     kind, episodes = load_inputs(args.inputs)
     if samples is not None:
         remaining, kept = samples, []
@@ -279,10 +287,17 @@ def run(profile: str, output: Path, driver_args: list[str], *, samples: int | No
             "dtype": dtype,
             "seed": seed,
             "driver_args": driver_args,
+            "input_fingerprint": input_fingerprint,
+            "profile_fingerprint": profile_fingerprint,
             "floors": {"max_abs": MAX_ABS_FLOOR, "rmse": RMSE_FLOOR},
             "factors": {"mean": MEAN_FACTOR, "worst": WORST_FACTOR},
         }
     )
+    if (
+        artifact_fingerprint(args.inputs) != input_fingerprint
+        or artifact_fingerprint(PROFILE_ROOT / profile) != profile_fingerprint
+    ):
+        raise ContractError("Verification inputs or profile changed during model execution")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report

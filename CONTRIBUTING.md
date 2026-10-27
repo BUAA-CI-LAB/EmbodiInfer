@@ -179,10 +179,15 @@ uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning check res
 
 For the end-to-end workflow, start with the
 [profiling-to-model-benchmark guide](docs/proposals/0008-kernel-tuning.md#11-automated-tuning-workflow).
-Use `profile` to select registered operators, then `capture-ops`, `calibrate`,
-`tune-all`, `install`, `verify`, and the existing model benchmark. Selection is
-manual; there is no unified `optimize` command. Only registry captures produce
-exports accepted by `install`.
+Use `profile` and `select` to produce a registered-operator plan, then
+`capture-ops --plan`, `calibrate`, `tune-all`, `install`, `verify`, and the existing
+model benchmark. `optimize CONFIG --output DIR` runs explicit commands for these
+stages with frozen-input/output receipts and a mandatory model verification gate;
+`optimize --resume DIR` skips intact completed stages. Only registry captures
+produce exports accepted by `install`. `hardware --output DIR` writes target
+properties and guidance for `--hardware-notes DIR/HARDWARE.md`. Optional
+`--set profile=true` collects NCU diagnostics outside promotion timing;
+`--set search.min_candidates=N` reserves exploration before patience can stop.
 
 For full operator discovery instead, capture the existing preparation forward and calibrate numerical
 contracts in its model runtime, then generate and preflight every eligible call
