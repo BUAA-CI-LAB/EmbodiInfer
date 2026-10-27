@@ -255,7 +255,12 @@ def test_replay_uses_calibrated_bounds_and_all_profiles(
     for seed in task.settings.seeds:
         adapter._verify_graph(more_accurate, reference, workload, seed)
     saved = production(operator, adapter._inputs(workload, 0))
-    with pytest.raises(ContractError, match="frozen calibrated"):
+    # The failure names where and by how much, since it becomes the next agent's feedback.
+    with pytest.raises(
+        ContractError,
+        match=rf"frozen calibrated tolerance: workload {workload.uuid}, input profile \w+:\d; "
+        r"output 0 has \d+/\d+ elements over the bound, max \|error\| .*worst error/bound",
+    ):
         adapter._verify_call(Runnable(lambda args: saved), reference, adapter._inputs(workload, 0), 0)
     with pytest.raises(ContractError, match="frozen calibrated"):
         adapter._verify_graph(Runnable(lambda args: saved), reference, workload, 0)

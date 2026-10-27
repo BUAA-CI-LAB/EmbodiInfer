@@ -14,6 +14,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -485,58 +486,107 @@ class FlashInferAdapter:
     def _build_reference(self, registry: Any) -> Any:
         return registry.build_reference(self.definition)
 
+    def profiled_workload(self) -> Any:
+        """The workload NCU evidence describes: the heaviest-weighted one, else the first."""
+        weights = self.cfg.weights
+        return max(self.traces, key=lambda trace: weights.get(trace.workload.uuid, 1.0)).workload
+
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
-        """Capture optional NCU evidence in a separate worker, never promotion timing."""
+        """Capture optional NCU evidence in a separate worker, never promotion timing.
+
+        The worker calls the candidate once to compile and autotune it, then once inside
+        the NVTX range ``candidate`` that NCU is restricted to. ``profile_command`` may
+        prefix NCU with a privilege wrapper (``sudo -n``), which resets the environment,
+        so the worker is started through ``env`` with the variables it needs. Secrets
+        are never among them: the whole command line is visible to other users.
+        """
         from scripts.kernel_tuning.artifacts import atomic_json
 
-        if not shutil.which("ncu"):
-            raise ContractError("profile: true requires ncu on PATH")
+        ncu = list(self.cfg.profile_command)
+        if not shutil.which(ncu[0]):
+            raise ContractError(f"profile: true requires {ncu[0]} on PATH")
         candidate = output / "candidate.json"
         atomic_json(candidate, solutions["candidate"])
+        report = output / "ncu.ncu-rep"
+        keep = {
+            name: value
+            for name, value in os.environ.items()
+            if name in _PROFILE_ENVIRONMENT or name.startswith(("TRITON_", "FIB_", "CUDA_"))
+        }
+        # A privileged worker must not write into the evaluator's caches or home, nor leave
+        # directories in the run archive that the evaluator's user cannot remove.
+        scratch = Path(tempfile.gettempdir()) / f"kernel-tuning-ncu-{os.getuid()}"
+        scratch.mkdir(mode=0o700, exist_ok=True)
+        keep["HOME"] = str(scratch / "home")
+        keep["TRITON_CACHE_DIR"] = str(scratch / "triton")
+        keep["TORCH_EXTENSIONS_DIR"] = str(scratch / "torch")
         command = [
-            "ncu",
+            *ncu,
             "--target-processes",
             "all",
+            "--nvtx",
+            "--nvtx-include",
+            "candidate/",
             "--set",
-            "basic",
+            "full",
+            "--import-source",
+            "yes",
             "--force-overwrite",
             "--export",
-            str(output / "ncu"),
+            str(report.with_suffix("")),
+            "env",
+            *(f"{name}={value}" for name, value in sorted(keep.items())),
             sys.executable,
-            str(Path(__file__).resolve()),
+            str(Path(__file__).resolve().with_name("evaluate.py")),
             "--profile-once",
             str(self.task.root),
             str(candidate),
         ]
+        timeout = self.cfg.search.evaluation_timeout_seconds
         with (output / "ncu.log").open("w", encoding="utf-8") as log:
+            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+        with (output / "details.txt").open("w", encoding="utf-8") as details:
             subprocess.run(
-                command,
-                stdout=log,
+                [*ncu, "--import", str(report), "--page", "details", "--print-units", "base"],
+                stdout=details,
                 stderr=subprocess.STDOUT,
                 check=True,
-                timeout=self.cfg.search.evaluation_timeout_seconds,
+                timeout=timeout,
             )
         return {
             "command": command,
-            "report": str(output / "ncu.ncu-rep"),
-            "workload": self.traces[0].workload.uuid,
+            "report": str(report),
+            "details": str(output / "details.txt"),
+            "workload": self.profiled_workload().uuid,
         }
 
+    def profile_once(self, solution: dict[str, Any]) -> None:
+        """NCU worker body: compile and warm the candidate, then call it once under NVTX."""
+        import torch
+        from flashinfer_bench.compile import BuilderRegistry
+        from flashinfer_bench.data import Solution
 
-if __name__ == "__main__":
-    # NCU child: one representative workload, excluded from optimization metrics.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from flashinfer_bench.compile import BuilderRegistry
-    from flashinfer_bench.data import Solution
-    from scripts.kernel_tuning.contracts import read_json
+        runnable = BuilderRegistry.get_instance().build(self.definition, Solution.model_validate(solution))
+        workload = self.profiled_workload()
+        self._call(runnable, self._inputs(workload, self.cfg.seeds[0]))
+        torch.cuda.synchronize(self.device)
+        inputs = self._inputs(workload, self.cfg.seeds[0])
+        torch.cuda.synchronize(self.device)
+        with torch.cuda.nvtx.range("candidate"):
+            self._call(runnable, inputs)
+            torch.cuda.synchronize(self.device)
 
-    if len(sys.argv) != 4 or sys.argv[1] != "--profile-once":
-        raise SystemExit("Internal NCU worker; use tuning.yaml profile: true")
-    adapter = FlashInferAdapter(TaskPackage.load(Path(sys.argv[2])))
-    runnable = BuilderRegistry.get_instance().build(
-        adapter.definition, Solution.model_validate(read_json(Path(sys.argv[3])))
-    )
-    adapter._call(runnable, adapter._inputs(adapter.traces[0].workload, adapter.cfg.seeds[0]))
-    import torch
 
-    torch.cuda.synchronize(adapter.device)
+#: Variables the NCU worker needs from the evaluator; ``TRITON_*``, ``FIB_*``, ``CUDA_*`` too.
+_PROFILE_ENVIRONMENT = frozenset(
+    {
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "CPATH",
+        "LIBRARY_PATH",
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "HF_HUB_OFFLINE",
+        "TORCH_EXTENSIONS_DIR",
+    }
+)

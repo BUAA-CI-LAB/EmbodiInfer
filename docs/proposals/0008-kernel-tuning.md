@@ -177,10 +177,48 @@ checks every workload and times baseline, incumbent and candidate. Feedback driv
 the next attempt, including rejected attempts. Agent turns do source/JSON checks;
 the evaluator owns GPU compilation and validation.
 
+The flow (`scripts/kernel_tuning/flow/`) drives two chasers in turn, in the manner
+of Humanize2's `flame_chase`: attempt *n* is planned and implemented by
+`first_chaser` when *n* is odd and `second_chaser` otherwise, each in a fresh
+session that starts from the incumbent and every earlier attempt's evidence.
+`--agent` takes one hmz spec for both chasers or two comma-separated specs, e.g.
+a Claude Code and a Codex harness, whose different habits (rewrites against
+refinements) the alternation exploits. The KDA skills `KernelWiki` and
+`ncu-report-skill` travel with the flow when linked into its untracked `skills/`
+directory; each run records the digest of every carried skill and refuses to
+resume after they change. NVlabs' originals are B200-specific; device-routed forks
+(SM87/Orin, SM89, SM90, SM100, SM103, SM110/Thor) keep the same names, and the plan
+prompt asks agents to select the target matching `environment.json`.
+
+A turn is stopped after `agent_timeout_seconds`. A stopped turn whose deliverable
+(`PLAN.md`, then `solution.json`) already exists still counts, and the attempt
+continues in a fresh session; without it the attempt fails. An evaluator failure
+reaches the next agent with the worker's final exception line, and a calibrated
+tolerance failure names the workload, input profile and how far the output
+exceeded its bound.
+
+With `profile: true` the evaluator collects Nsight Compute evidence (`--set full`,
+restricted by NVTX to one warmed call of the heaviest workload) for the baseline
+and for every evaluated candidate. Each attempt receives copies for the incumbent
+and the previous attempt under `profiles/` (`ncu.ncu-rep`, `details.txt`); agents
+never run the profiler. `profile_command` names NCU and an optional privilege
+wrapper (`[sudo, -n, /path/to/ncu]` where counters need root). The worker is then
+started through `env` with an allow-list of build variables and its own caches and
+home, never secrets, because its command line is visible to other users. A
+privileged NCU runs candidate code with those privileges; use it only where
+counters cannot be opened otherwise, and only with agents that cannot invoke it.
+
 `tune-all` generates tasks and preflights all baselines before opening any model
 batch agent. Missing fixtures, unsupported contracts or a failed baseline block
 the batch. A later individual search failure is recorded and other tasks may
-continue. Each task runs serially in its own `run`/`resume` process.
+continue. Each task runs in its own `run`/`resume` process, one at a time unless
+`--parallel N` (also accepted with `--resume`) starts N at once. Agent turns then
+overlap, but every evaluator worker (probe, check, timing, profile) holds a
+per-device `flock` in the temporary directory, so measurements never share the
+GPU; the evaluation timeout starts once the lock is held, and `command.json`
+records the wait. Agents spend most of a run's wall time, so on one device this
+multiplies throughput without changing what is measured. A preflighted item may
+be set to `skipped` in `batch.json` to leave it out of the batch.
 
 Promotion requires at least 3% weighted latency improvement and at most 5%
 regression on every workload, against both the initial baseline and incumbent,
@@ -204,8 +242,13 @@ archives and reproduction.
 `install` accepts an exported registry task from `capture-ops`, with a
 Python/Triton solution and an operator already registered in the current tree.
 ATen-discovery/catalog exports and CUDA C++ solutions are not installable through
-this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/` and
-`profile.json`; overwriting an installed operator requires `--replace`.
+this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/<variant>/`
+and `profile.json`. An operator's layouts are often split across tasks (FP32 vision
+and BF16 language GEMMs, prefix and decode rotations), so each installed task becomes
+one variant and the generated `<op>/__init__.py` sends a call to the variant that
+verified its exact layout. A variant whose layouts overlap an installed one, a
+reinstall of the same task, or rebuilding an older single-kernel package requires
+`--replace`, which drops the overlapping variants.
 
 The manifest records device name, compute capability, Torch/Triton match keys,
 source digest, verified layout count and kernel-search provenance. CUDA version
@@ -673,7 +716,8 @@ ATen operation in the model.
 ```bash
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
   --model pi05 --captured results/kernel_tuning/captures/pi05-ops-calibrated \
-  --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+  --agent 'HARNESS/MODEL:EFFORT[,HARNESS/MODEL:EFFORT]' \
+  --set evaluator_python=/absolute/runtime/python
 
 # Resume with the printed Batch path; omit agent, selection options and --set.
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \

@@ -41,8 +41,6 @@ class ReplayAdapter(FlashInferAdapter):
                 raise ContractError(
                     "Calibration and evaluator environments differ; recalibrate on the target"
                 )
-        if self.cfg.profile:
-            raise ContractError("Discovered tasks need a replay-aware NCU adapter before profile=true")
         if self.replay.get("rng") and self.cfg.timing.mode != "eager":
             raise ContractError("RNG replay currently requires eager timing")
 
@@ -58,6 +56,14 @@ class ReplayAdapter(FlashInferAdapter):
         rng = self.replay.get("rng")
         with preserve(rng["devices"]) if rng else nullcontext():
             return super().evaluate(solutions)
+
+    def profile_once(self, solution: dict[str, Any]) -> None:
+        """Profile on replayed fixtures, leaving declared generator state as evaluation does."""
+        from scripts.kernel_tuning.discovery.rng import preserve
+
+        rng = self.replay.get("rng")
+        with preserve(rng["devices"]) if rng else nullcontext():
+            super().profile_once(solution)
 
     def _build_reference(self, registry: Any) -> Any:
         from flashinfer_bench.data import Solution
@@ -210,7 +216,29 @@ class ReplayAdapter(FlashInferAdapter):
 
         reference = high_precision(self.replay["numerical_identity"], inputs)
         bounds = self.numerical["cases"][self.case["id"]][self._sample]
-        return compare_calibrated(actual, reference, bounds)
+        try:
+            return compare_calibrated(actual, reference, bounds)
+        except ContractError as exc:
+            raise ContractError(f"{exc}: {self._excess(actual, reference, bounds)}") from exc
+
+    def _excess(self, actual: list[Any], reference: list[Any], bounds: list[dict[str, Any]]) -> str:
+        """Locate a calibrated failure for feedback: workload, input profile, and how far over."""
+        import torch
+
+        found = []
+        for index, (value, ref, bound) in enumerate(zip(actual, reference, bounds)):
+            if value.shape != ref.shape or not torch.isfinite(value).all():
+                continue
+            error = (value.double() - ref).abs()
+            limit = bound["atol"] + bound["rtol"] * ref.abs()
+            over = error > limit
+            if over.any():
+                found.append(
+                    f"output {index} has {int(over.sum())}/{error.numel()} elements over the bound, "
+                    f"max |error| {error.max().item():.3g} (baseline {bound.get('baseline_max_abs', float('nan')):.3g}, "
+                    f"atol {bound['atol']:.3g}), worst error/bound {(error / limit).max().item():.3g}"
+                )
+        return f"workload {self.case['id']}, input profile {self._sample}; " + "; ".join(found)
 
     def _check_metadata(self) -> dict[str, Any]:
         if self.numerical is None:

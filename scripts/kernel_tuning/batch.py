@@ -1,9 +1,11 @@
-"""One-command tuning of every selected catalog operator, serially on one machine.
+"""One-command tuning of every selected catalog operator on one machine.
 
 A batch directory holds freshly generated tasks, one ordinary run archive per
 operator, logs, exports of promoted kernels, and a summary. Each operator runs
 in its own ``run``/``resume`` subprocess, so one failure or crash does not stop
-the others, and an interrupted batch continues where it stopped.
+the others, and an interrupted batch continues where it stopped. Operators run
+one at a time unless ``--parallel`` asks for more; evaluator workers then still
+take turns on the device.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +31,8 @@ from .runner import evaluate
 
 Launcher = Callable[[list[str], Path], int]
 ARCHIVE = re.compile(r"^Run archive: (.+)$", re.MULTILINE)
-DONE = ("completed", "preflight_failed")
+# "skipped" is set by hand in batch.json to leave a preflighted operator out of this batch.
+DONE = ("completed", "preflight_failed", "skipped")
 
 
 def launch(argv: list[str], log: Path) -> int:
@@ -287,15 +291,56 @@ def _state(root: Path, item: dict[str, Any]) -> dict[str, Any] | None:
     return read_json(root / item["run"] / "manifest.json")
 
 
-def execute(root: Path, *, launcher: Launcher = launch) -> dict[str, Any]:
-    """Start or resume every unfinished operator in order; return the batch record."""
+def execute(root: Path, *, launcher: Launcher = launch, parallel: int = 1) -> dict[str, Any]:
+    """Start or resume every unfinished operator in order; return the batch record.
+
+    ``parallel`` operators run at once, each in its own subprocess. Their agent turns
+    overlap, while every evaluator worker holds the machine's device lock
+    (:func:`runner.device_lock`), so no timing or profile ever shares the GPU.
+    """
+    if parallel < 1:
+        raise ContractError("--parallel must be at least 1")
     batch = read_json(root / "batch.json")
     _verify_model(root, batch, require_preflight=True)
-    for name, item in batch["items"].items():
-        if item["status"] in DONE:
-            continue
+    queue = iter([name for name, item in batch["items"].items() if item["status"] not in DONE])
+    guard = threading.Lock()  # One writer of batch.json and the summary at a time.
+    stop = threading.Event()
+
+    def lane() -> None:
+        while not stop.is_set():
+            with guard:
+                name = next(queue, None)
+            if name is None:
+                return
+            if _run_item(root, batch, name, launcher, guard) == 130:
+                stop.set()
+
+    if parallel == 1:
+        lane()
+    else:
+        lanes = [threading.Thread(target=lane, name=f"batch-lane-{n}") for n in range(parallel)]
+        for thread in lanes:
+            thread.start()
+        try:
+            for thread in lanes:
+                thread.join()
+        except KeyboardInterrupt:
+            # The children share this process group and stop on the same signal.
+            stop.set()
+            for thread in lanes:
+                thread.join()
+            raise
+    if stop.is_set():
+        raise KeyboardInterrupt
+    write_summary(root)
+    return batch
+
+
+def _run_item(root: Path, batch: dict[str, Any], name: str, launcher: Launcher, guard: threading.Lock) -> int:
+    """Run or resume one operator and record its outcome; return the subprocess exit code."""
+    item = batch["items"][name]
+    with guard:
         _verify_model(root, batch, require_preflight=True)
-        log = root / "logs" / f"{name}.log"
         command = [sys.executable, "-m", "scripts.kernel_tuning"]
         if item["run"]:
             command += ["resume", str(root / item["run"])]
@@ -312,10 +357,12 @@ def execute(root: Path, *, launcher: Launcher = launch) -> dict[str, Any]:
                 command.append("--unfenced")
         item["status"] = "running"
         atomic_json(root / "batch.json", batch)
-        try:
-            code = launcher(command, log)
-        except KeyboardInterrupt:
-            code = 130
+    log = root / "logs" / f"{name}.log"
+    try:
+        code = launcher(command, log)
+    except KeyboardInterrupt:
+        code = 130
+    with guard:
         if not item["run"] and (found := ARCHIVE.findall(log.read_text(encoding="utf-8", errors="replace"))):
             item["run"] = Path(found[-1].strip()).resolve().relative_to(root).as_posix()
         manifest = _state(root, item)
@@ -325,14 +372,12 @@ def execute(root: Path, *, launcher: Launcher = launch) -> dict[str, Any]:
             if manifest["best"]:
                 _export(root, name, item)
         else:
-            item["status"] = "interrupted" if code == 130 else "failed"
+            interrupted = code == 130 or (manifest or {}).get("status") == "interrupted"
+            item["status"] = "interrupted" if interrupted else "failed"
             item["error"] = (manifest or {}).get("stop_reason") or f"exit {code}; see logs/{name}.log"
         atomic_json(root / "batch.json", batch)
         write_summary(root)
-        if code == 130:
-            raise KeyboardInterrupt
-    write_summary(root)
-    return batch
+    return code
 
 
 def _export(root: Path, name: str, item: dict[str, Any]) -> None:

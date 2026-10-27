@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, TypeVar
 
-HMZ_REVISION = "b70d4427f11308442aef20f9b2233dfbbc34a39e"
+HMZ_REVISION = "58dd43a419b9d1967c8028f3b999192b040b7b60"
 FLASHINFER_VERSION = "0.1.2"
 ROLES = ("baseline", "incumbent", "candidate")
 
@@ -194,6 +194,9 @@ class Settings:
     search: Search = field(default_factory=Search)
     acceptance: Acceptance = field(default_factory=Acceptance)
     profile: bool = False
+    #: The Nsight Compute command, optionally behind a privilege wrapper, e.g.
+    #: ``[sudo, -n, /opt/nvidia/nsight-compute/2025.2.1/ncu]`` where counters need root.
+    profile_command: tuple[str, ...] = ("ncu",)
 
     @classmethod
     def load(cls, path: Path) -> Settings:
@@ -229,7 +232,7 @@ class Settings:
             ("acceptance", Acceptance),
         ):
             data[key] = _settings(kind, data.get(key, {}))
-        for key in ("seeds", "target_hardware"):
+        for key in ("seeds", "target_hardware", "profile_command"):
             if key in data:
                 if not isinstance(data[key], list):
                     raise ContractError(f"{key} must be a list")
@@ -246,6 +249,8 @@ class Settings:
             raise ContractError("agent must be a string; profile must be a boolean")
         if not self.target_hardware or any(not isinstance(x, str) or not x for x in self.target_hardware):
             raise ContractError("target_hardware must list at least one hardware label")
+        if not self.profile_command or any(not isinstance(x, str) or not x for x in self.profile_command):
+            raise ContractError("profile_command must list the NCU executable and its wrapper arguments")
         if not self.seeds or len(set(self.seeds)) != len(self.seeds):
             raise ContractError("seeds must be nonempty and unique")
         for seed in self.seeds:
