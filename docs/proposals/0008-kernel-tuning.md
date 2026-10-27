@@ -427,9 +427,11 @@ Implemented components are the Humanize2 Flow/archive, discovery and registry
 capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
 loader, install, model verification, the CPU registration controller, and an
 opt-in `--unfenced` agent mode for hosts without Landlock (Section 11.1). The
-pi0.5 call sites are integrated. One hardware profile is committed: `orin_pi05`
-for Jetson AGX Orin (Section 9.1); `kernel_profile` still defaults to `none`, so
-it is used only when selected by name or by `auto` on matching hardware.
+pi0.5 call sites are integrated. Two hardware profiles are committed for Jetson
+AGX Orin: `orin_pi05` (Section 9.1) and `orin_pi05_r2` (Section 9.2).
+`kernel_profile` still defaults to `none`, so a profile is used only when
+selected by name or by `auto` on matching hardware; `auto` takes the first
+matching profile in name order, which on Orin is `orin_pi05`.
 
 Remaining work from the merged design:
 
@@ -543,6 +545,113 @@ accepts it. The decode export was tuned after capture recorded the production
 output layout (a contiguous query). Replacing the existing Triton decode
 rotation with it changed end-to-end latency by less than 1 ms and left actions
 bit-identical.
+
+### 9.2 `orin_pi05_r2` on Jetson AGX Orin
+
+`orin_pi05_r2` holds eight kernels from a second Orin round, tuned with the
+two-chaser flow (Section 4.4). The chasers were a Claude Code and a Codex harness,
+both on DeepSeek-V4.1-Flash. They carried the device-routed `KernelWiki` and
+`ncu-report-skill` forks and Nsight Compute evidence collected through `sudo -n`,
+and ran `--unfenced`. Every prefix-side task covers both prompt buckets that
+occur with this checkpoint (prefix length 672 or 712), and the attention task
+also covers the denoise shapes of both, so one kernel serves either bucket.
+
+The round ran two batches over the same capture:
+
+- The first batch ran the ten operators one at a time and reached eight of them
+  before it was stopped: 110 minutes, 16 candidates, patience 6, 15-minute turns
+  and 10-minute evaluations per task.
+- The second batch took the five tasks the first left without a kernel. These
+  were the three `linear` tasks and two it had not reached. They ran at once
+  (`--parallel 5`) with 5 hours, no candidate or patience limit, and 30-minute
+  limits. A host reboot stopped it after 286 of its 300 minutes, and its best
+  attempts were exported from the run archives.
+
+Measured 2026-10-27 under the conditions of Section 9.1, with the following
+differences:
+
+- The source tree was `e131b3e` plus this profile.
+- The GPU clock was not locked: a reboot had cleared the lock, leaving
+  `nvhost_podgov` at 306–930.75 MHz.
+- Rows ran in the order `none`, `orin_pi05_r2`, `orin_pi05`, `orin_pi05_r2`,
+  `none`, each with ten warmup calls and 600 timed calls. The mean is over the
+  runs of each profile.
+
+`none` and `orin_pi05` reproduced their Section 9.1 means within 1.0 ms.
+
+| `kernel_profile` | Runs | Mean (ms) | P50 (ms) | P95 (ms) | vs `none` |
+|---|---|---|---|---|---|
+| `none` (existing Triton) | 2 | 610.8 | 609.8 / 609.8 | 611.1 / 612.9 | — |
+| `orin_pi05` | 1 | 537.6 | 537.4 | 538.9 | −12.0% |
+| `orin_pi05_r2` | 2 | 515.0 | 514.3 / 514.6 | 516.2 / 516.9 | −15.7% (−4.2% vs `orin_pi05`) |
+
+**Numerical gate.** The Section 6 gate (`scripts.kernel_tuning.verify.gate`)
+passed over the 200 inputs with shared noise, worst ratio 0.854. The reference
+was `kernel_profile: torch` in the same mixed precision, because an FP32
+reference does not fit in the 32 GB unified memory. For the action chunk:
+
+| Measure | `orin_pi05_r2` | Limit | `none` |
+|---|---|---|---|
+| Mean max-abs error | 0.00513 | 0.00605 | 0.00484 |
+| Mean RMSE | 0.00167 | 0.00196 | 0.00156 |
+| Worst max-abs error | 0.0254 | 0.0391 | 0.0195 |
+
+**Dispatch.** The check used six inputs covering both buckets and the first 20
+recorded inputs; the 20 recorded inputs all fall in the 672 bucket. Every call
+of the six tuned operators dispatched to a tuned kernel. `linear` falls back only
+for the layouts without a promoted kernel:
+
+- the FP32 vision projections,
+- the fused 2048→32768 gate/up projections,
+- the expert 1024→8192 gate/up.
+
+Operators, from the promoted attempt's paired evaluator rounds against the
+task's Torch baseline (calls per inference in parentheses; the chaser that wrote
+the kernel in brackets):
+
+| Operator (run) | Workload | Torch (ms) | Tuned (ms) |
+|---|---|---|---|
+| `split_kv_attention` (`20261026T192726Z-44b77e65fd`) [Claude Code] | prefix, 672 / 712 keys (18) | 3.61 / 3.81 | 0.690 / 0.859 |
+| | denoise, 672 / 712 + 50 keys (180) | 0.905 / 0.934 | 0.092 / 0.100 |
+| `linear` (`20261027T083101Z-f3a3fe58e8`) [Codex] | prefix `down_proj`, 672 / 712×16384→2048 (18) | 6.43 / 6.61 | 3.06 / 3.09 |
+| | expert `down_proj`, 50×4096→1024 (180) | 0.0765 | 0.0765 |
+| `rotate_qk` prefix (`20261027T041343Z-ef7e804e63`) [Claude Code] | 672 / 712 tokens (18) | 0.432 / 0.461 | 0.050 / 0.052 |
+| `rotate_qk` decode (`20261027T022339Z-cc147a0ad6`) [Claude Code] | 50 tokens (180) | 0.071 | 0.0125 |
+| `gated_gelu` prefix (`20261027T003333Z-273b3ff7e2`) [Claude Code] | 672 / 712×16384 (18) | 1.27 / 1.35 | 0.354 / 0.375 |
+| `gated_gelu` expert (`20261027T055939Z-b94ceefecd`) [Codex] | 50×4096 (180) | 0.0387 | 0.0163 |
+| `gated_residual` (`20261027T083103Z-13ee35774e`) [Claude Code] | 50×1024 (360) | 0.0164 | 0.0093 |
+| `gelu_tanh` (`20261027T083104Z-63d432d46f`) [Claude Code] | SigLIP 256×4304, FP32 (54) | 0.0586 | 0.0546 |
+
+No candidate was promoted for the two remaining `linear` tasks:
+
+- BF16 gate/up: 8 evaluated attempts, all slower than cuBLAS, which already
+  reaches about 79% of the 26.7 TFLOP/s BF16 tensor peak at 930.75 MHz.
+- FP32 vision projections: 6 attempts in the first batch and 7 in the second.
+  They either exceeded the calibrated bounds, produced non-finite output, or
+  were slower than cuBLAS.
+
+**In-model attribution.** These per-operator gains overstate the end-to-end
+saving. Weighted by calls, they predict about 300 ms per inference, against 96 ms
+measured. One inference was profiled with Nsight Compute using an
+experiment-local driver. NCU fixes the clock at its base, so durations were
+converted from cycles to 930.75 MHz. The kernel sums are 589.6 ms (`none`) and
+498.3 ms (`orin_pi05_r2`), against 610.8 and 515.0 ms end to end; the rest is
+mostly launch gaps in the CUDA Graph. By stage:
+
+| Stage | `none` (ms) | `orin_pi05_r2` (ms) |
+|---|---|---|
+| SigLIP vision tower and projector, FP32 | 248.5 | 248.6 |
+| Gemma prefix | 257.2 | 181.0 |
+| Action expert (ten steps) and input/output | 83.8 | 68.7 |
+
+The prefix gain is mostly `down_proj` (−61 ms) and `gated_gelu` (−12 ms).
+`split_kv_attention` accounts for most of the overestimate. Its task baseline is
+the registry's Torch reference: 3.6 ms per prefix call and 0.9 ms per denoise
+call. `none`, however, already runs the existing Triton split-KV kernels, at
+0.49 ms per prefix call and 0.155 ms per denoise call in the model. Against that
+path the tuned kernel saves 14.7 ms in the denoise loop and costs 3.3 ms in the
+prefix, at 0.67 ms against 0.49 ms per call. A task should therefore be measured
+against the implementation its production configuration actually runs.
 
 ## 10. Risks and limitations
 
