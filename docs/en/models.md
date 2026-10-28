@@ -36,7 +36,7 @@ one request at a time. Policies without a network adapter use the Python API.
 | Cosmos | `cosmos` | No | Model-specific candidate planning | Diffusion step | No |
 | ActiveVLN | `activevln` | No | Explicit recurrent session, B=1 | Eager path | No |
 | Qwen R2R low / panoramic, NaViDA | `qwen25-vln` | No | Explicit recurrent session, B=1 | Policy-native decode | No |
-| StreamVLN | `streamvln` | Yes | Explicit recurrent session, B=1 | Policy-native decode | No |
+| StreamVLN | `streamvln` | Yes | Generic serving B=1; explicit native tensor batches | Vision/prefill/decode/tree | No |
 
 For GR00T, follow the environment and asset preparation in its
 [benchmark guide](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md).
@@ -329,6 +329,32 @@ slow-memory prefix, and starts a new fast cache. Both the feature history and th
 update are part of the recurrent transaction and are committed only after decoding
 succeeds.
 
+Closed-loop callers that execute action chunks must distinguish primitive steps
+from request IDs. Set `Observation.metadata["stream_step_id"]` to the current
+primitive frame index and supply all new frames since the last model call in
+`Observation.images`, ordered oldest to newest. Intermediate frames update sparse
+visual history without additional language turns. The fast window resets after
+crossing a 32-primitive boundary. The serialized B1 policy supports this contract;
+the explicit native batching runtime rejects strides above one. Without the
+metadata, the recorded-input contract remains one new frame per request.
+The HTTP adapter accepts the same `stream_step_id` metadata with one to four
+images named `observation.images.rgb.0` through `.3` in chronological order
+(or the configured camera field with those suffixes). Frames must share a
+resolution. Single-frame requests may retain the original camera field name;
+request `step_id` still counts model calls. Session retries do not advance the
+primitive history twice.
+
+INT8 loading converts CPU projections individually before transferring their
+packed payloads to the serving device, avoiding a full BF16 allocation first.
+Vision, embeddings, LM head and excluded projections keep the requested dtype.
+W8A8 output quality still requires a separate comparison against BF16.
+
+The eager attention path retains at most 64 MiB of reusable causal masks per
+backbone, evicting the least recently used shapes. Larger masks are created for
+the current call without being cached. This bounds retained mask storage across
+episodes without changing attention values or the recurrent KV cache; it is not
+a limit on total inference memory.
+
 ```python
 from embodiinfer import Vvla
 
@@ -350,7 +376,7 @@ that require a different Torch or Transformers runtime. The separately measured 
 [`benchmarks/streamvln-benchmark/setup_env.py`](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/setup_env.py)
 and that directory's platform-specific requirements files.
 
-StreamVLN currently runs one recurrent session per replica. Its optimised path captures
+StreamVLN generic serving runs one recurrent session per replica. Its original optimised path captures
 up to four dependent autoregressive tokens per CUDA Graph replay and uses compiled vision
 and prefill runners. Q/K/V and MLP gate/up weights share contiguous storage but retain
 independent GEMM boundaries, so BF16 accumulation matches the published projection
@@ -362,6 +388,73 @@ grammar. A mismatch rolls the logical KV length back and runs the ordinary
 autoregressive decoder. Set `fast_action_decode=False` for direct reference
 measurements. Tensor parallelism is not supported. The upstream code and weights are
 non-commercial; downstream use must comply with their license.
+
+Three independent, disabled-by-default options extend this path:
+
+- `gpu_preprocess=True` uploads uint8 pixels and performs Pillow-compatible
+  integer bicubic resize and SigLIP normalization on CUDA. Host validation and
+  float-to-uint8 conversion remain on the CPU. It requires the published slow
+  SigLIP processor configuration and preserves its integer-valued image behavior.
+- `gpu_history_features=True` keeps owned copies of the existing sparse visual
+  history on the GPU. This avoids host offload and reload at window boundaries,
+  uses additional device memory, and requires `cache_history_features=True`.
+- `speculative_tokens=2` through `8` enables experimental repeated-action
+  proposals (`0` disables them). Verification uses full-vocabulary greedy
+  selection and the original repetition penalty, commits only the matching
+  prefix, and decodes non-action tokens serially. It requires CUDA, Triton,
+  BF16 and `cuda_graph=True`. The verifier retains serial GEMM shapes and
+  attention/residual-normalization arithmetic, while batching independent row
+  operators and capturing candidate graphs during startup. It bypasses the
+  existing response-envelope prefill shortcut even if `fast_action_decode=True`.
+  Validate token/action parity and performance on the target checkpoint/device;
+  extra rejected projections can make speculation slower than serial decoding.
+
+The additional ActiveVLN-style profile is opt-in and changes floating-point
+execution. `tree_decode=True` batches a budgeted grammar tree (default
+`tree_budget=31`, range 1–127), including the assistant envelope, action branches
+and EOS. Root partitioning and online counts use only previous model responses;
+all selections remain full-vocabulary greedy. Ancestor masks and depth-based
+RoPE isolate branches; only the selected path is committed. This is an
+alternative to `speculative_tokens`, with genuinely batched projections.
+
+Independent switches are `fused_ops` (rounded RMSNorm/RoPE/SwiGLU),
+`split_attention` with `attention_kernel="gqa"` or `"split"`, `decode_linear`
+(weight-streaming GEMM plus fused QKV/gated projections), and
+`vision_kernel="hf"|"sdpa"|"fused"`. The two manual SigLIP paths stop at the
+selected hidden layer. `tree_fp32_projection=True` is an alternative to
+`decode_linear`, requires a tree and floating-point weights, and uses Torch
+CUDA FP32-output GEMM. These switches require BF16 and CUDA graphs. Configure
+before any session; changing profiles invalidates graphs and requires callers
+to discard existing episode memories. Unknown graph shapes use counted eager
+execution; capture is restricted to startup. Numerical equivalence of individual
+operators does not establish action parity or navigation success.
+
+Use `make_streamvln_observation(rgb_chw_uint8, instruction, uint8=True)` from
+`policies.streamvln.processing` to retain byte inputs. Generic `Observation`
+keeps its existing float contract. The HTTP adapter selects byte transport
+when GPU preprocessing is configured.
+
+`policy.create_batched_runtime(batch_size=2, workspace_tokens=8192)` provides
+explicit multi-episode execution in `eval()` and `torch.inference_mode()`. It
+requires optimized GQA attention, cached history, and either tree decoding or
+serial decoding with `fast_action_decode=False`. Call
+`runtime.infer(observations, request_ids, memories)`; results preserve caller
+order. Warm representative calls inside `runtime.startup_capture()` before
+measurement. The runtime batches vision, packs live prefill queries, skips
+padded attention queries, and batches independent trees. It owns a pooled KV
+scratch arena and commits private episode memories incrementally. Optional
+`kv_pool_tokens` bounds the total scratch arena; rows grow and relocate within
+that shared budget instead of each reserving the maximum context. Cancellation,
+reordering and forks preserve input prefixes. Reconfiguration/refit, a different
+CUDA stream, or concurrent calls require another runtime; capacity failures do
+not truncate history. `packed_prefill=False` keeps the padded comparison path.
+This API does not enable generic cross-session HTTP batching or tensor parallelism.
+
+The paired checker in `benchmarks/streamvln-benchmark/validate_optimizations.py`
+compares all options with serial decoding and the existing fast response path.
+It records raw tokens, actions, effective cache lengths, log-probability
+differences, graph counters and synchronized stage timings. These options do
+not reduce checkpoint storage enough to fit the full BF16 model on Orin NX 16 GB.
 
 For separated model timing, `StreamVLNPolicy.prepare_prefix` performs observation
 preprocessing and the device transfer of the current input, and `encode_prepared_prefix`

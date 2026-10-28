@@ -35,7 +35,7 @@ HTTP 与 WirelessComm 启动器使用相同的服务适配器。π0.5 支持
 | Cosmos | `cosmos` | 否 | 模型特定的候选规划 | 扩散步 | 否 |
 | ActiveVLN | `activevln` | 否 | 显式有状态会话，B=1 | eager 路径 | 否 |
 | Qwen R2R low / panoramic、NaViDA | `qwen25-vln` | 否 | 显式有状态会话，B=1 | 策略原生解码 | 否 |
-| StreamVLN | `streamvln` | 是 | 显式有状态会话，B=1 | 策略原生解码 | 否 |
+| StreamVLN | `streamvln` | 是 | 通用服务 B=1；独立原生张量批处理 | 视觉/prefill/decode/tree | 否 |
 
 对于 GR00T，请遵循其
 [benchmark 指南](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md)中的环境与资产准备步骤。
@@ -186,6 +186,24 @@ StreamVLN 是一种有状态策略，每个副本分配一个 episode。
 窗口结束时，从完整任务历史中均匀选取八个特征，重建 slow-memory 前缀并开始新的 fast 缓存。
 历史特征和 KV 更新都包含在会话事务中，仅在解码成功后提交。
 
+闭环执行动作块时，需要区分实际动作步数与请求编号：在
+`Observation.metadata["stream_step_id"]` 中填写当前实际帧编号，并通过
+`Observation.images` 按时间顺序传入上次模型调用后新增的全部帧。
+中间帧只更新稀疏视觉历史，不增加语言轮次；跨过每 32 个实际动作的边界后重建 fast 窗口。
+该协议当前由串行 B1 策略支持，独立原生批处理运行时会拒绝多帧步进。
+未提供该 metadata 时，保留每个请求对应一帧的回放协议。
+HTTP 适配器也支持 `stream_step_id` metadata：按时间顺序传入一至四张同分辨率图片，
+名称使用 `observation.images.rgb.0` 至 `.3`（自定义相机字段使用相同编号后缀）。
+单帧请求可以保留原始相机字段名；请求中的 `step_id` 仍按模型调用计数。
+同一会话的请求重试不会重复推进实际帧历史。
+
+INT8 加载在 CPU 上逐投影转换，再将打包后的权重移至运行设备，避免先分配完整 BF16 模型。
+视觉、embedding、LM head 和排除的投影仍保留指定 dtype；W8A8 任务质量需要单独对照 BF16。
+
+eager attention 路径每个 backbone 最多保留 64 MiB 的可复用因果 mask，按最近使用顺序淘汰旧形状。
+超过该预算的 mask 仅用于当前调用，不进入缓存。这一限制避免 mask 跨 episode 无限累积，
+保持 attention 数值和有状态 KV 缓存不变；它不代表推理总内存的上限。
+
 ```python
 from embodiinfer import Vvla
 
@@ -206,7 +224,7 @@ CUDA 13.0 wheel 和 Triton 3.6.0，不能与要求不同 Torch 或 Transformers 
 [`benchmarks/streamvln-benchmark/setup_env.py`](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/setup_env.py)
 以及该目录下平台特定的 requirements 文件创建。
 
-StreamVLN 每个副本运行一个有状态会话。优化实现使用编译后的视觉编码和 prefill，
+StreamVLN 的通用服务每个副本运行一个有状态会话。原有优化实现使用编译后的视觉编码和 prefill，
 每次 CUDA Graph 重放最多生成四个相互依赖的自回归 token。
 Q/K/V 与 MLP gate/up 权重采用连续存储，但仍分别执行 GEMM，以保持原有的 BF16 累加顺序。
 设置 `cuda_graph=False` 可使用 eager 参考实现。
@@ -214,6 +232,54 @@ Q/K/V 与 MLP gate/up 权重采用连续存储，但仍分别执行 GEMM，以�
 固定响应加速会先在因果 prefill 中评估官方 assistant 前缀，再用完整词表和常规重复惩罚逐 token 校验。
 只有动作 token 和结束符 EOS 全部符合响应格式，才接受四动作结果；否则回滚逻辑 KV 长度，改用普通自回归解码。
 测量参考实现时，设置 `fast_action_decode=False`。当前不支持张量并行；上游代码和权重采用非商业许可。
+
+新增三个独立选项，默认均关闭：
+
+- `gpu_preprocess=True`：上传 uint8 图像，在 CUDA 上执行与 Pillow 一致的整数 bicubic
+  resize 和 SigLIP 归一化。输入校验与 float-to-uint8 转换仍在 CPU 上完成；要求官方 slow
+  SigLIP 处理器配置，并保留整数值浮点图像的特殊处理语义。
+- `gpu_history_features=True`：将原有稀疏视觉历史保存为 GPU 上的独立副本，省去窗口切换时的
+  主机卸载与回传，代价是额外设备内存；要求 `cache_history_features=True`。
+- `speculative_tokens=2` 至 `8`：启用实验性的重复动作投机解码，`0` 表示关闭。使用完整词表
+  和原有重复惩罚验证候选，只提交一致前缀，非动作 token 走串行解码。要求 CUDA、Triton、
+  BF16 和 `cuda_graph=True`。验证器保留串行 GEMM 形状及 attention/残差归一化计算方式，
+  批量执行独立的逐行算子，并在启动期捕获候选图。启用后跳过现有响应前缀 prefill 捷径，
+  即使 `fast_action_decode=True` 也如此。启用前核验 token/动作一致性和性能；
+  候选被拒绝时的额外投影可能使投机路径比串行更慢。
+
+另可显式启用 ActiveVLN 风格的完整配置；它会改变浮点执行方式，不承诺逐 token 无损。
+`tree_decode=True` 将 assistant 前缀、动作分支和 EOS 放入预算树并行验证，
+`tree_budget` 默认 31，范围 1–127。按已选 root 分区，在线先验只使用此前模型输出。
+每个节点仍在完整词表上选择；ancestor mask 和按深度计算的 RoPE 隔离分支，
+只压缩提交被接受路径的 KV。它与 `speculative_tokens` 二选一，并真正批量执行投影。
+
+独立开关包括 `fused_ops`（保留中间舍入的 RMSNorm/RoPE/SwiGLU）、
+`split_attention` 配合 `attention_kernel="gqa"|"split"`、`decode_linear`
+（权重流式 GEMM、融合 QKV/gated 投影）以及 `vision_kernel="hf"|"sdpa"|"fused"`。
+后两种视觉实现只执行到选定的 SigLIP 隐藏层。`tree_fp32_projection=True`
+是 `decode_linear` 的替代投影，要求树解码、浮点权重及 Torch CUDA FP32-output GEMM。
+这些选项要求 BF16 和 CUDA Graph；应在会话开始前配置，重新配置会清除图，调用方须丢弃旧历史。
+只在启动阶段捕获图，未知形状使用有计数的 eager 回退。算子数值测试通过不代表动作一致或导航成功率不变。
+
+`policies.streamvln.processing.make_streamvln_observation(rgb_chw_uint8, instruction, uint8=True)`
+保留 byte 输入，省去主机 float 转换；通用 `Observation` 的 float 契约不变。
+HTTP adapter 在配置 GPU 预处理时自动选择 byte 输入。
+
+在 `eval()` 和 `torch.inference_mode()` 中使用
+`policy.create_batched_runtime(batch_size=2, workspace_tokens=8192)` 可执行独立 episode 的张量批处理。
+要求优化 GQA attention、历史特征缓存，以及树解码或 `fast_action_decode=False` 的串行解码。
+`runtime.infer(observations, request_ids, memories)` 按输入顺序返回结果；
+在 `runtime.startup_capture()` 内预热代表性调用后再测量。
+运行时合并视觉编码、打包有效 prefill token、跳过 attention 填充查询并批量验证多路树，
+使用独立 pooled KV 工作区和增量提交的私有 episode memory。
+可选 `kv_pool_tokens` 限定整个工作区的 token 容量，各行按需扩展和重排，避免每行预留最大上下文。
+取消、换序和分叉不覆盖输入前缀；更换配置/权重、CUDA stream 或并发调用须使用新运行时，
+容量不足显式失败而不会截断历史。`packed_prefill=False` 保留填充式对照路径。
+此 API 不改变通用 HTTP B=1 契约，也不提供张量并行。
+
+`benchmarks/streamvln-benchmark/validate_optimizations.py` 配对比较串行解码、现有快速响应和
+这些选项，记录原始 token、动作、有效 cache 长度、log-prob 差异、图计数与同步分段耗时。
+这些选项不足以使完整 BF16 权重装入 Orin NX 16 GB。
 
 分阶段计时时，`StreamVLNPolicy.prepare_prefix` 负责观测预处理和输入传输到设备，
 `encode_prepared_prefix` 负责视觉与文本编码，`StreamVLNDecoder.generate_tokens` 生成完整 token 序列，

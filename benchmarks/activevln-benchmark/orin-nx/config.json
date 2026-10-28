@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "model": "activevln",
+  "checkpoint_revision": "160987313e3e869705f42400d1b8f28177044518",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 42,
+  "warmup_calls": 33,
+  "repeats": 1,
+  "attention": "sdpa",
+  "cuda_graph": true,
+  "fused_ops": true,
+  "split_attention": true,
+  "tree_decode": false,
+  "tree_fp32_projection": false,
+  "tree_repeat_actions": 1,
+  "query_bucket_size": 1,
+  "prewarm_context_buckets": [
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+  ],
+  "graph_workspace_tokens": 65536,
+  "max_new_tokens": 512,
+  "max_context": 128000,
+  "do_sample": false,
+  "repetition_penalty": 1.05,
+  "cpu_threads": 4,
+  "max_steps_per_episode": null,
+  "datasets": [
+    {
+      "name": "R2R",
+      "repository": "cywan/StreamVLN-Trajectory-Data",
+      "revision": "dc61ee9b4e90aa7ba63c1163b2134df5610dccb9",
+      "split": "published_training_trajectories",
+      "episode_limit": 48,
+      "selection_sha256": "b1fe693db13a4dcf3fbca696c796250c35b31e8e11126ab39b22deec54231457",
+      "root": "assets/R2R",
+      "annotations": "assets/R2R/annotations_v1-3.json",
+      "purpose": "startup warmup only; excluded from navigation metrics"
+    }
+  ],
+  "batch_size": 1,
+  "kv_pool_tokens": 65536,
+  "grammar_tree_budget": 31,
+  "grammar_prefix_weight": 1.0,
+  "grammar_local_weight": 1.0,
+  "grammar_refresh": 64,
+  "sampling_seed": 0,
+  "gpu_preprocess": true,
+  "uint8_observations": true,
+  "attention_kernel": "gqa",
+  "incremental_kv_commit": true,
+  "vision_kernel": "fused",
+  "skip_padded_queries": true,
+  "packed_prefill": true,
+  "packed_prefill_bucket": 64,
+  "decode_linear": true,
+  "action_space": "r2r",
+  "checkpoint_storage": "Derived BF16 snapshot; exact torch.bfloat16 cast of pinned FP32 weights. conversion-manifest.json records hashes.",
+  "checkpoint_repository": "Arvil/Qwen2.5-VL-3B_rl_r2r_4000",
+  "checkpoint_source_sha256": {
+    "model-00001-of-00004.safetensors": "5ab533033c989449952de1166dbf6704dace27c5984f4382a7ca6d9eb45f916d",
+    "model-00002-of-00004.safetensors": "2e41a61e0afd7736d8f8048a3e6c7952253208179d1cacc465423b776ab251d5",
+    "model-00003-of-00004.safetensors": "66b39a9e4ffc349449f23d1cf61511cd256798e9938fa13d245ace5cd4d80193",
+    "model-00004-of-00004.safetensors": "ba8d5863729d41b8081aa1b134fccb8375cdcf9ffc10fcfacdac3417ca598e41"
+  },
+  "reference_environment": {
+    "source_revision": "2003f2ad3c7edd12c22ac925ded03129d3a4d374",
+    "device": "Jetson Orin NX 16GB",
+    "power_mode": "MAXN (mode 0)",
+    "gpu_max_frequency_hz": 918000000,
+    "l4t": "R36.4.7",
+    "python": "3.10.20",
+    "cuda": "12.6",
+    "torch": "2.10.0",
+    "torchvision": "0.25.0",
+    "transformers": "4.51.3",
+    "triton": "3.4.0",
+    "tokenizers": "0.21.4",
+    "accelerate": "1.12.0",
+    "numpy": "2.2.6",
+    "Pillow": "10.3.0",
+    "h5py": "3.16.0"
+  },
+  "checkpoint": "assets/r2r-1609873-bf16",
+  "output_dir": "results/orin-nx",
+  "resident_kv": true,
+  "int8_profile": {
+    "variant": "smooth_both",
+    "calibration_sha256": "58e965eb1462d050e8b36b8d2207de6af07c4634cb853a226ab4fcaf84fdff69",
+    "calibration_episode_ids": [
+      1
+    ],
+    "calibration_dataset": null,
+    "fused_smoothing": true,
+    "script_sha256": "9709a7423c2b1675fb36c674344e4a5e57a763d1d62cbb88186bd622520a4190"
+  },
+  "streamed_loading": true,
+  "allocator_config": "backend:native,garbage_collection_threshold:0.7,max_split_size_mb:128",
+  "navigation": {
+    "episode_count": 256,
+    "split": "val_unseen",
+    "sampling_seed": 42,
+    "sampling_method_version": "sha256-seed-dataset-scene-python-random-min1-v1",
+    "checkpoint_protocol": "R2R checkpoint and R2R action grammar for both datasets; cross-dataset evaluation on RxR",
+    "selections": {
+      "r2r": {
+        "sha256": "ea4c07eeff3eaa2b5cb4085269404b04d5ef19aea8a3db0a44e2f8f576e9f7d8"
+      },
+      "rxr": {
+        "sha256": "3b4d565d6170a54041f449ae9ffceb9c71aeb5b2f8e496bdae0cff9308cc282d"
+      }
+    }
+  }
+}

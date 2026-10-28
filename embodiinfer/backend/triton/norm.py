@@ -68,7 +68,9 @@ if triton is not None:
         )
 
 
-def supports_rms_norm(inputs: torch.Tensor, weight: torch.Tensor) -> bool:
+def supports_rms_norm(
+    inputs: torch.Tensor, weight: torch.Tensor, *, allow_multiple_rows: bool = False
+) -> bool:
     return (
         triton is not None
         and inputs.is_cuda
@@ -78,7 +80,7 @@ def supports_rms_norm(inputs: torch.Tensor, weight: torch.Tensor) -> bool:
         and inputs.is_contiguous()
         and weight.is_contiguous()
         and inputs.shape[-1] == weight.numel()
-        and inputs.numel() == weight.numel()
+        and (allow_multiple_rows or inputs.numel() == weight.numel())
         and inputs.shape[-1] <= 65536
     )
 
@@ -87,8 +89,11 @@ def rms_norm(
     inputs: torch.Tensor,
     weight: torch.Tensor,
     epsilon: float,
+    *,
+    allow_multiple_rows: bool = False,
 ) -> torch.Tensor:
-    if not supports_rms_norm(inputs, weight):
+    """Normalize independent rows with decode arithmetic; multi-row use is opt-in."""
+    if not supports_rms_norm(inputs, weight, allow_multiple_rows=allow_multiple_rows):
         raise ValueError("unsupported input for VVLA Triton RMSNorm")
     output = torch.empty_like(inputs)
     width = inputs.shape[-1]
@@ -110,8 +115,13 @@ def add_rms_norm(
     update: torch.Tensor,
     weight: torch.Tensor,
     epsilon: float,
+    *,
+    allow_multiple_rows: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if residual.shape != update.shape or not supports_rms_norm(residual, weight):
+    """Return rounded residuals and normalized FP32 sums, optionally for multiple rows."""
+    if residual.shape != update.shape or not supports_rms_norm(
+        residual, weight, allow_multiple_rows=allow_multiple_rows
+    ):
         raise ValueError("unsupported input for VVLA Triton residual RMSNorm")
     if not update.is_contiguous() or update.dtype != residual.dtype:
         raise ValueError("residual RMSNorm inputs must share contiguous layout and dtype")

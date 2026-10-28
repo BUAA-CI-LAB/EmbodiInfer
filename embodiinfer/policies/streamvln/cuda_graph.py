@@ -144,4 +144,45 @@ class StreamVLNDecodeGraph:
         )
 
 
-__all__ = ["StreamVLNDecodeGraph"]
+class StreamVLNVerificationGraph:
+    """Capture one parallel candidate block against fixed-address recurrent K/V."""
+
+    def __init__(self, backbone: StreamVLNBackbone, cache: StreamVLNCache, width: int) -> None:
+        if width < 2 or not cache.key_storage.is_cuda:
+            raise ValueError("candidate capture requires CUDA and at least two tokens")
+        self.key_pointer = cache.key_storage.data_ptr()
+        self.value_pointer = cache.value_storage.data_ptr()
+        self.tokens = torch.zeros((1, width), dtype=torch.long, device=cache.key_storage.device)
+        self.position = torch.tensor([cache.seq_len], dtype=torch.long, device=cache.key_storage.device)
+        current = torch.cuda.current_stream(cache.key_storage.device)
+        warmup = torch.cuda.Stream(device=cache.key_storage.device)
+        warmup.wait_stream(current)
+        with torch.cuda.stream(warmup):
+            for _ in range(2):
+                backbone.decode_tokens_graph(cache, self.tokens, self.position)
+        current.wait_stream(warmup)
+        current.synchronize()
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.graph, capture_error_mode="thread_local"):
+            self.hidden = backbone.decode_tokens_graph(cache, self.tokens, self.position)
+
+    def matches(self, cache: StreamVLNCache) -> bool:
+        """Whether the graph still targets this session's K/V storage."""
+        return (
+            self.key_pointer == cache.key_storage.data_ptr()
+            and self.value_pointer == cache.value_storage.data_ptr()
+        )
+
+    def replay(self, cache: StreamVLNCache, tokens: torch.Tensor) -> torch.Tensor:
+        """Return graph-owned hidden states, valid until the next replay."""
+        if not self.matches(cache) or tokens.shape != self.tokens.shape:
+            raise ValueError("candidate graph storage or token shape changed")
+        if cache.seq_len + tokens.shape[1] > cache.capacity:
+            raise RuntimeError("StreamVLN cache capacity exceeded")
+        self.tokens.copy_(tokens)
+        self.position.fill_(cache.seq_len)
+        self.graph.replay()
+        return self.hidden
+
+
+__all__ = ["StreamVLNDecodeGraph", "StreamVLNVerificationGraph"]
