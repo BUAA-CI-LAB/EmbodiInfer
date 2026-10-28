@@ -3,6 +3,7 @@
 from .activation import GeluMulBackend, PairedGeluBackend, gelu_mul_backends, paired_gelu_backends
 from .attention import (
     AttentionBackend,
+    ScopedAttentionBackend,
     SplitKVAttentionBackend,
     available_attention_backends,
     get_attention_backend,
@@ -54,6 +55,7 @@ __all__ = [
     "quantization_backends",
     "projection_backends",
     "AttentionBackend",
+    "ScopedAttentionBackend",
     "SplitKVAttentionBackend",
     "get_attention_backend",
     "get_split_kv_attention_backend",

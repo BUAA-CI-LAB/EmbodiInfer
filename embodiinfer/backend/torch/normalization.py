@@ -10,6 +10,7 @@ from ...layers.registry import OperatorCapabilities
 class TorchRMSNorm:
     """Prepare model-independent RMSNorm plans using Torch's FP32 mean."""
 
+    supports_adaptive = True
     capabilities = OperatorCapabilities(
         ("cpu", "cuda"), (torch.bfloat16, torch.float16, torch.float32), "torch_rmsnorm_bf16_rounding", rank=3
     )

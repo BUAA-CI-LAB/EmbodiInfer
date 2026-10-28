@@ -6,10 +6,12 @@ have further implementations such as ``triton``. Callers ask for an operator by
 name with their preferred implementation instead of importing a backend, so a
 verified tuned kernel can replace it without changing model code.
 
-``kernel_profile`` selects tuned kernels (see :mod:`embodiinfer.backend.triton.tuned`):
+``kernel_profile`` selects built-in backends or verified tuned kernels:
 
 * ``none`` (default): the caller's preferred implementation, exactly as before.
 * ``torch``: every registered operator uses its Torch reference.
+* ``flashinfer``: prepared attention/norm/projection backends use FlashInfer;
+  tensor operators not covered by this profile retain the caller's preference.
 * ``auto``: the profile matching this device and Torch/Triton versions, else ``none``.
 * a profile name: that profile; a mismatched environment raises.
 
@@ -32,7 +34,19 @@ TorchWrapper = Callable[[OpFunction], OpFunction]
 
 _REGISTRY: dict[str, dict[str, OpFunction]] = {}
 _LAZY_REGISTRY: dict[str, dict[str, tuple[str, str]]] = {}
-_PROFILE_MODES = ("none", "torch", "auto")
+_PROFILE_MODES = ("none", "torch", "auto", "flashinfer")
+_BACKEND_PROFILES = {
+    "torch": {
+        "attention": "sdpa",
+        "normalization": "torch",
+        "projection": "torch",
+    },
+    "flashinfer": {
+        "attention": "flashinfer_fa2",
+        "normalization": "flashinfer",
+        "projection": "flashinfer_cublaslt",
+    },
+}
 
 
 def register_op(op: str, impl: str, fn: OpFunction) -> None:
@@ -87,6 +101,16 @@ class KernelSelection:
         )
         self._cache: dict[tuple[str, str, TorchWrapper | None], OpFunction] = {}
 
+    def resolve_backend(self, family: str, prefer: str) -> str:
+        """Select a prepared registry backend without importing or constructing it.
+
+        Built-in profiles can override backend families whose execution requires
+        scoped plans instead of stateless tensor callables. Uncovered families
+        keep the caller's choice; the owning policy still decides fusion placement,
+        precision and plan lifetime.
+        """
+        return _BACKEND_PROFILES.get(self.mode, {}).get(family, prefer)
+
     def prepare(self, torch_wrappers: tuple[TorchWrapper | None, ...] = (None,)) -> None:
         """Resolve every registered operator and implementation ahead of time.
 
@@ -135,7 +159,7 @@ def _select_profile(name: str) -> Any:
 
     if not isinstance(name, str):
         raise TypeError(f"kernel_profile must be a string; got {type(name).__name__}")
-    if name in ("none", "torch"):
+    if name in ("none", "torch") or name in _BACKEND_PROFILES:
         return None
     profiles = available_profiles()
     environment = current_environment()

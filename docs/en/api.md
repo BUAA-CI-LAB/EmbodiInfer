@@ -203,6 +203,75 @@ The registries also expose `register_lazy(name, module, class_name)` and
 fixed-layout plans. The nested JSON `operators` mapping has the same field names
 as `OperatorBackends`. See [prepared operator lifetimes](architecture.md#prepared-operator-interfaces).
 
+### Optional FlashInfer operators
+
+After installing the [FlashInfer extra](installation.md#optional-flashinfer-backends),
+select the three integrated backends with the existing `kernel_profile` option:
+
+```python
+from embodiinfer import make_policy
+
+policy = make_policy(
+    "pi05",
+    checkpoint="/path/to/pi05-checkpoint",
+    kernel_profile="flashinfer",
+)
+# Preserve mixed checkpoint dtypes with EngineConfig(device="cuda", dtype="auto").
+```
+
+No `Pi05OptimizationConfig` or hardware preset is required. The profile enables
+native inference and resolves the existing prepared-operator registries:
+
+| `kernel_profile` | Behavior |
+| --- | --- |
+| `none` | Preserve each call site's existing implementation preference, including native Triton kernels. |
+| `torch` | Route registered tensor operators to Torch/ATen references, as before. |
+| `flashinfer` | Select Gemma FA2 attention, Gemma RMSNorm and BF16 cuBLASLt MLP projections; uncovered operators retain their existing paths. |
+
+`auto` and installed tuned-profile names retain their existing matching rules;
+`auto` does not select FlashInfer. `flashinfer` owns these three backend choices,
+enables norm execution and disables paired-MLP fusion so all gate/up/down GEMMs
+reach cuBLASLt. It also supersedes the separate `attention`, `prefix_attention`
+and `denoise_attention` choices for Gemma. If combined with `optimizations=` or
+an unquantized preset, unrelated options, numerical conventions and the preset's
+schedule are retained. Quantized MLP recipes, global quantization, Inductor and
+TP greater than one are rejected. Execution requires CUDA eval/no-grad mode;
+the profile does not silently fall back to a CPU/training path.
+
+`flashinfer_fa2` handles Gemma prefix and action attention with BF16 Q/K/V,
+native GQA heads, head widths 64/128/256, and dynamic Boolean padding masks.
+Pi05 converts its zero/negative masks at the policy boundary. Action attention
+uses noncausal multi-query prefill over prefix plus suffix K/V. SigLIP vision
+attention (head width 72) retains its existing backend. Direct backend calls
+reject additive attention biases, dropout and unsupported head widths; completely
+masked query rows produce zeros.
+
+`normalization="flashinfer"` selects nonadaptive Gemma RMSNorm with the `1 + weight`
+convention. AdaRMS keeps the selected policy reference. The checkpoint's FP32
+scales must be exactly representable in BF16 for this backend; otherwise it raises.
+For per-operator ablations, use `kernel_profile="none"` and an explicit
+`Pi05OptimizationConfig`, choosing `torch` or `cuda_strict` normalization when
+necessary. Residual addition retains its existing BF16 rounding before
+normalization. No scale parameter is
+modified, and no implicit lossy conversion or fused-add norm is used.
+
+`projection="flashinfer_cublaslt"` selects BF16 gate, up and down MLP GEMMs in both
+Gemma towers, even with `fused_mlp=False` (the default). It preserves the selected
+GELU/product implementation and leaves attention Q/K/V/O, vision and FP32
+action/time projections on their existing paths. Outside the `flashinfer` profile,
+setting `fused_mlp=True` still selects the configured paired gate/up implementation;
+that is a separate ablation.
+The first-stage FlashInfer norm/projection configuration rejects FP8/NVFP4 and
+offline quantized MLP archives.
+
+All selections are opt-in and may change floating-point reduction order; they
+are not a bit-exact or performance-validated preset. Warm each shape, mask mode,
+scale and execution scope before capture. The policy controller binds and releases
+private graph buffers; changed tensor values and masks remain replay inputs.
+Refit invalidates graphs and prepared weights. No `hardware` setting is needed
+for the FlashInfer profile. An optional `optimizations.hardware="orin"` checks
+SM87; it does not enable a tuned Orin kernel profile.
+
 ## Generating RL rollouts
 
 The rollout surface is available only for policies whose decoder implements
