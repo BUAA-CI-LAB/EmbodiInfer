@@ -12,8 +12,7 @@ Both datasets use `Arvil/Qwen2.5-VL-3B_rl_r2r_4000` at revision
 
 See [RTX 4090](rtx-4090/README.md) and [Orin NX](orin-nx/README.md) for
 batch-one BF16 / calibrated INT8 navigation profiles and the same first 128
-episodes of the fixed 256-episode selection. Historical 256-episode results
-are identified separately. These runs use EmbodiRun's Habitat runner; they
+episodes of the fixed 256-episode selection. These runs use EmbodiRun's Habitat runner; they
 are distinct from the 48-episode offline replay below.
 
 ## Tensor batches
