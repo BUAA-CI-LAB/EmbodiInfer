@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, TypeVar
 
-HMZ_REVISION = "b70d4427f11308442aef20f9b2233dfbbc34a39e"
+HMZ_REVISION = "58dd43a419b9d1967c8028f3b999192b040b7b60"
 FLASHINFER_VERSION = "0.1.2"
 ROLES = ("baseline", "incumbent", "candidate")
 
@@ -165,32 +165,6 @@ class Acceptance:
             raise ContractError("Acceptance fractions must be less than 1")
 
 
-@dataclass(frozen=True)
-class Diagnostics:
-    """Optional, budgeted NCU evidence independent of acceptance measurements."""
-
-    required: bool = False
-    max_reports: int = 4
-    timeout_seconds: float = 120
-    ncu: str = "ncu"
-    reader_python: str = ""
-    metric_profile: str = "auto"
-    workload: str = ""
-
-    def __post_init__(self) -> None:
-        if type(self.required) is not bool:
-            raise ContractError("diagnostics.required must be a boolean")
-        _positive(self.max_reports, "diagnostics.max_reports", integer=True)
-        _positive(self.timeout_seconds, "diagnostics.timeout_seconds")
-        for key in ("ncu", "reader_python", "workload"):
-            if not isinstance(getattr(self, key), str):
-                raise ContractError(f"diagnostics.{key} must be a string")
-        if not self.ncu.strip():
-            raise ContractError("diagnostics.ncu must name an executable")
-        if self.metric_profile not in ("auto", "generic", "orin", "thor", "b200"):
-            raise ContractError("Unsupported diagnostics.metric_profile")
-
-
 T = TypeVar("T")
 
 
@@ -220,7 +194,9 @@ class Settings:
     search: Search = field(default_factory=Search)
     acceptance: Acceptance = field(default_factory=Acceptance)
     profile: bool = False
-    diagnostics: Diagnostics = field(default_factory=Diagnostics)
+    #: The Nsight Compute command, optionally behind a privilege wrapper, e.g.
+    #: ``[sudo, -n, /opt/nvidia/nsight-compute/2025.2.1/ncu]`` where counters need root.
+    profile_command: tuple[str, ...] = ("ncu",)
 
     @classmethod
     def load(cls, path: Path) -> Settings:
@@ -254,10 +230,9 @@ class Settings:
             ("timing", Timing),
             ("search", Search),
             ("acceptance", Acceptance),
-            ("diagnostics", Diagnostics),
         ):
             data[key] = _settings(kind, data.get(key, {}))
-        for key in ("seeds", "target_hardware"):
+        for key in ("seeds", "target_hardware", "profile_command"):
             if key in data:
                 if not isinstance(data[key], list):
                     raise ContractError(f"{key} must be a list")
@@ -272,10 +247,10 @@ class Settings:
                 raise ContractError(f"{key} must be a nonempty string")
         if not isinstance(self.agent, str) or type(self.profile) is not bool:
             raise ContractError("agent must be a string; profile must be a boolean")
-        if self.diagnostics.required and not self.profile:
-            raise ContractError("diagnostics.required requires profile: true")
         if not self.target_hardware or any(not isinstance(x, str) or not x for x in self.target_hardware):
             raise ContractError("target_hardware must list at least one hardware label")
+        if not self.profile_command or any(not isinstance(x, str) or not x for x in self.profile_command):
+            raise ContractError("profile_command must list the NCU executable and its wrapper arguments")
         if not self.seeds or len(set(self.seeds)) != len(self.seeds):
             raise ContractError("seeds must be nonempty and unique")
         for seed in self.seeds:
@@ -398,8 +373,6 @@ class TaskPackage:
             raise ContractError("Workloads must be nonempty and have distinct UUIDs")
         if settings.weights and set(settings.weights) != set(ids):
             raise ContractError("Explicit weights must cover exactly every workload UUID")
-        if settings.diagnostics.workload and settings.diagnostics.workload not in ids:
-            raise ContractError("diagnostics.workload must name a declared workload UUID")
         if "replay.json" in hashes:
             from .discovery.contracts import validate_replay
 

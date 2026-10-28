@@ -1,4 +1,4 @@
-"""CPU coverage of the skill bridge, native-reader seam, and replay profiling scope."""
+"""CPU checks of remote-style NCU collection and standalone report analysis."""
 
 from __future__ import annotations
 
@@ -9,35 +9,24 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from benchmarks.kernel_tuning.ncu_analysis import analyze
-from benchmarks.kernel_tuning.profiling import choose_sections, collect, profile_task
-from scripts.kernel_tuning.contracts import ContractError, Settings, TaskPackage
-from scripts.kernel_tuning.skill_context import ROOT, skill_instructions
+from benchmarks.kernel_tuning.flashinfer_adapter import FlashInferAdapter
+from benchmarks.kernel_tuning.ncu_analysis import ROOT, analyze
+from scripts.kernel_tuning.contracts import ContractError, Settings
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
-        {"max_reports": 0},
-        {"max_reports": True},
-        {"timeout_seconds": -1},
-        {"metric_profile": "sm110"},
-        {"ncu": ""},
-        {"required": "yes"},
-    ],
-)
-def test_invalid_diagnostic_settings(values: dict) -> None:
+@pytest.mark.parametrize("command", [[], [""], [True], "ncu"])
+def test_invalid_profile_command(command) -> None:
     with pytest.raises(ContractError):
-        Settings.load_mapping({"language": "triton", "profile": True, "diagnostics": values})
+        Settings.load_mapping({"language": "triton", "profile_command": command})
 
 
-def test_required_diagnostics_need_profiling() -> None:
-    with pytest.raises(ContractError, match="profile: true"):
-        Settings.load_mapping({"language": "triton", "diagnostics": {"required": True}})
+def test_legacy_diagnostic_config_requires_migration() -> None:
+    with pytest.raises(ContractError):
+        Settings.load_mapping({"language": "triton", "diagnostics": {"max_reports": 2}})
 
 
-@pytest.mark.parametrize("architecture,device", [("sm87", "orin"), ("sm110", "thor")])
-def test_wiki_query_from_attempt_directory(tmp_path: Path, architecture: str, device: str) -> None:
+@pytest.mark.parametrize(("architecture", "device"), [("sm87", "orin"), ("sm110", "thor")])
+def test_pinned_wiki_remains_queryable(tmp_path: Path, architecture: str, device: str) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -56,110 +45,48 @@ def test_wiki_query_from_attempt_directory(tmp_path: Path, architecture: str, de
         check=True,
     )
     assert device in result.stdout.lower()
-    instructions = skill_instructions()
-    assert str(ROOT / "skills/KernelWiki/SKILL.md") in instructions
-    assert str(ROOT / "skills/ncu-report-skill/SKILL.md") in instructions
-    assert sys.executable in instructions
 
 
-def test_section_discovery_never_assumes_full_set() -> None:
-    assert choose_sections("Identifier | Name\nLaunchStats | Launch Statistics\nOccupancy") == [
-        "LaunchStats",
-        "Occupancy",
-    ]
-    with pytest.raises(ContractError, match="section discovery failed"):
-        choose_sections("OldSectionWithoutSupport")
-
-
-@pytest.mark.parametrize("stream", ["stdout", "stderr"])
-def test_collector_retains_zero_exit_permission_warning(
-    task_dir: Path, tmp_path: Path, monkeypatch, stream: str
-) -> None:
-    warning = (
-        "==WARNING== Insufficient privileges to launch app for profiling. Launch app with root privileges"
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_profile_command_collects_weighted_workload_and_details(tmp_path, monkeypatch, wrapped) -> None:
+    adapter = object.__new__(FlashInferAdapter)
+    command = ["sudo", "-n", "/opt/ncu"] if wrapped else ["ncu"]
+    adapter.cfg = Settings.load_mapping(
+        {
+            "language": "triton",
+            "profile_command": command,
+            "weights": {"small": 1.0, "large": 3.0},
+        }
     )
+    adapter.task = SimpleNamespace(root=tmp_path / "task")
+    adapter.traces = [SimpleNamespace(workload=SimpleNamespace(uuid=x)) for x in ("small", "large")]
+    assert adapter.profiled_workload().uuid == "large"
     calls = []
 
-    def run(command, **kwargs):
-        calls.append(command)
-        output = {"stdout": "", "stderr": ""}
-        output[stream] = warning if command[1] == "--list-sections" else "NCU"
-        return SimpleNamespace(returncode=0, **output)
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "--export" in argv:
+            Path(argv[argv.index("--export") + 1] + ".ncu-rep").write_bytes(b"report")
+        else:
+            kwargs["stdout"].write("counter details")
+        return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr("benchmarks.kernel_tuning.profiling.shutil.which", lambda _: "/ncu")
-    monkeypatch.setattr("benchmarks.kernel_tuning.profiling.subprocess.run", run)
-    output = tmp_path / "profile"
-    with pytest.raises(ContractError, match="Insufficient privileges"):
-        collect(TaskPackage.load(task_dir), {}, output)
-    assert next(output.glob("ncu-*/list-sections.txt")).read_text() == warning
-    assert all("--export" not in command for command in calls)
-
-
-def test_profile_worker_uses_frozen_custom_adapter(task_dir: Path, tmp_path: Path) -> None:
-    marker = tmp_path / "worker.json"
-    (task_dir / "benchmark.py").write_text(
-        "import json\nfrom pathlib import Path\n"
-        "class Adapter:\n"
-        "    def profile_once(self, solution, workload):\n"
-        "        Path(solution['marker']).write_text(json.dumps({'workload': workload}))\n"
-        "def create_adapter(task):\n    return Adapter()\n",
-        encoding="utf-8",
+    monkeypatch.setattr("benchmarks.kernel_tuning.flashinfer_adapter.shutil.which", lambda _: "/ncu")
+    monkeypatch.setattr("benchmarks.kernel_tuning.flashinfer_adapter.subprocess.run", run)
+    monkeypatch.setattr("benchmarks.kernel_tuning.flashinfer_adapter.os.getuid", lambda: 123, raising=False)
+    monkeypatch.setattr(
+        "benchmarks.kernel_tuning.flashinfer_adapter.tempfile.gettempdir", lambda: str(tmp_path)
     )
-    solution = tmp_path / "solution.json"
-    solution.write_text(json.dumps({"marker": str(marker)}), encoding="utf-8")
-    profile_task(task_dir, solution, "broadcast-small")
-    assert json.loads(marker.read_text())["workload"] == "broadcast-small"
-
-
-@pytest.mark.parametrize("mode", ["eager", "cuda_graph"])
-def test_profile_scope_preserves_replay_aliases_and_resets_mutations(mode: str, monkeypatch) -> None:
-    torch = pytest.importorskip("torch")
-    from benchmarks.kernel_tuning.replay_adapter import ReplayAdapter
-
-    adapter = object.__new__(ReplayAdapter)
-    adapter.cfg = Settings.load_mapping({"language": "triton", "timing": {"mode": mode, "warmup": 2}})
-    adapter.device = "cpu"
-    buffer = torch.arange(8, dtype=torch.float32)
-    inputs = [buffer[::2], buffer[2::2]]
-    events = []
-    active = False
-
-    def start():
-        nonlocal active
-        active = True
-        events.append("start")
-
-    def stop():
-        nonlocal active
-        active = False
-        events.append("stop")
-
-    def runnable(left, right):
-        assert left.stride() == (2,)
-        assert right.storage_offset() == 2
-        assert left.untyped_storage().data_ptr() == right.untyped_storage().data_ptr()
-        assert torch.equal(left, inputs[0])
-        assert torch.equal(right, inputs[1])
-        if active:
-            events.extend(["kernel-1", "kernel-2"])
-        left.add_(10)
-        return right
-
-    def capture(fn, local):
-        runnable(*local)  # Capture mutates storage; worker must restore before replay.
-        return SimpleNamespace(replay=lambda: fn(*local)), local, [local[1]]
-
-    monkeypatch.setattr(adapter, "_inputs", lambda workload, seed: inputs)
-    monkeypatch.setattr(adapter, "_seed", lambda seed: events.append("seed"))
-    monkeypatch.setattr(adapter, "_call", lambda fn, local: (local, [fn(*local)]))
-    monkeypatch.setattr(adapter, "_capture", capture)
-    monkeypatch.setattr(adapter, "_check_flags", lambda: None)
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: events.append("sync"))
-    monkeypatch.setattr(torch.cuda.profiler, "start", start)
-    monkeypatch.setattr(torch.cuda.profiler, "stop", stop)
-    adapter._profile_runnable(runnable, object())
-    assert events[events.index("start") :] == ["start", "kernel-1", "kernel-2", "sync", "stop"]
-    assert torch.equal(buffer, torch.arange(8, dtype=torch.float32))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-secret-not-for-command")
+    result = adapter.profile({"candidate": {"name": "candidate"}}, tmp_path)
+    assert calls[0][: len(command)] == command
+    assert calls[0][calls[0].index("--nvtx-include") + 1] == "candidate/"
+    assert calls[0][calls[0].index("--set") + 1] == "full"
+    assert "--profile-once" in calls[0]
+    assert not any("test-secret-not-for-command" in arg for arg in calls[0])
+    assert result["workload"] == "large"
+    assert Path(result["report"]).read_bytes() == b"report"
+    assert Path(result["details"]).read_text() == "counter details"
 
 
 def test_all_actions_keep_units_availability_and_source_gaps(tmp_path: Path, monkeypatch) -> None:
@@ -231,39 +158,3 @@ def test_conflicting_device_profile_preserves_native_capture(tmp_path: Path, mon
     assert (target / "native-capture.json").exists()
     assert (target / "metrics_all_kernel_r0a0.json").exists()
     assert json.loads((target / "summary.json").read_text())["profile_conflicts"] == ["r0a0"]
-
-
-def test_collector_uses_discovered_sections_and_separate_reader(
-    task_dir: Path, tmp_path: Path, monkeypatch
-) -> None:
-    import yaml
-
-    config = yaml.safe_load((task_dir / "tuning.yaml").read_text())
-    config.update(profile=True, diagnostics={"reader_python": "/reader/python"})
-    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config))
-    calls = []
-
-    def run(command, **kwargs):
-        calls.append(command)
-        if command[1] == "--list-sections":
-            return SimpleNamespace(stdout="LaunchStats SourceCounters", stderr="")
-        if command[1] in ("--version", "--help"):
-            return SimpleNamespace(stdout="NCU config-file graph-profiling", stderr="")
-        if "--export" in command:
-            Path(command[command.index("--export") + 1]).write_bytes(b"native report")
-        else:
-            target = Path(command[command.index("--output") + 1])
-            target.mkdir()
-            (target / "summary.json").write_text('{"action_count": 2}')
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr("benchmarks.kernel_tuning.profiling.shutil.which", lambda _: "/ncu")
-    monkeypatch.setattr("benchmarks.kernel_tuning.profiling.subprocess.run", run)
-    result = collect(TaskPackage.load(task_dir), {}, tmp_path / "profile")
-    command = result["command"]
-    assert command[command.index("--profile-from-start") + 1] == "off"
-    assert "--launch-count" not in command and "--force-overwrite" not in command
-    assert result["sections"] == ["LaunchStats", "SourceCounters"]
-    assert "PmSampling" in result["unavailable_sections"]
-    assert calls[-1][0] == "/reader/python"
-    assert result["action_count"] == 2

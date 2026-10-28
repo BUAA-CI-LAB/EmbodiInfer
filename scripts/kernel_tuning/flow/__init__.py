@@ -1,4 +1,14 @@
-"""The KDA minimal loop as a resumable Humanize2 Flow.
+"""The KDA minimal loop, driven flame-chase style, as a resumable Humanize2 Flow.
+
+Two coding agents take turns, one candidate apiece, the way Humanize2's builtin
+``flame_chase`` alternates two fresh agents on one repository: each turn starts a
+fresh session from the incumbent and every earlier attempt's evidence, whichever
+agent produced them. Attempt ``n`` belongs to ``CHASERS[(n - 1) % 2]``, so a
+resumed run hands the next attempt to the same agent it would have had.
+
+The kernel-design skills of NVlabs KDA travel with the flow when they are linked
+into ``skills/`` beside this file (``KernelWiki``, ``ncu-report-skill``); the
+directory is local, untracked, and each run records what it carried.
 
 Only this module needs hmz. Importing it defines a flow; executing the developer
 CLI's run/resume command is what opens coding-agent sessions.
@@ -25,10 +35,9 @@ from hmz.flows import (
     flow,
 )
 
-from scripts.kernel_tuning.artifacts import RunStore, atomic_json
+from scripts.kernel_tuning.artifacts import RunStore, atomic_json, carried_skills
 from scripts.kernel_tuning.contracts import (
     ContractError,
-    digest,
     promotion,
     read_json,
     tree_hashes,
@@ -38,13 +47,27 @@ from scripts.kernel_tuning.contracts import (
 from scripts.kernel_tuning.permissions import Coder, session_agent
 from scripts.kernel_tuning.prompts import implementation_prompt, plan_prompt
 from scripts.kernel_tuning.runner import evaluate
-from scripts.kernel_tuning.skill_context import require_skills
+
+#: The roles, in the order they take turns.
+CHASERS = ("first_chaser", "second_chaser")
+
+
+def chaser_of(candidate: str) -> str:
+    """The role whose turn produces attempt ``candidate`` (a 1-based, zero-padded ID)."""
+    return CHASERS[(int(candidate) - 1) % len(CHASERS)]
+
+
+class Chaser(Coder):
+    """A coding-agent role carrying whichever KDA skills are linked into ``skills/``."""
+
+    _skills = carried_skills()
 
 
 class Agents(AgentCollection):
-    """An existing coding agent, selected by an explicit hmz agent specification."""
+    """Two coding agents, each selected by an explicit hmz agent specification."""
 
-    coder: Coder
+    first_chaser: Chaser
+    second_chaser: Chaser
 
 
 class Envs(EnvCollection):
@@ -63,9 +86,8 @@ class Params(FlowParams):
 async def kernel_tuning(
     task: str, *, agents: Agents, envs: Envs, params: Params, ctx: FlowContext
 ) -> dict[str, Any]:
-    """Plan, generate, verify, measure, and retain one candidate at a time."""
+    """Plan, generate, verify, measure, and retain one candidate at a time, chasers in turn."""
     del task  # The immutable task package supplies the complete objective.
-    require_skills()
     store = RunStore(Path(params.run_dir))
     state = ctx.state
     if state is None:
@@ -77,7 +99,8 @@ async def kernel_tuning(
         store.manifest = ledger
     store.verify()
     store.recover()
-    coder = session_agent(agents["coder"], unfenced=bool(store.manifest.get("unfenced")))
+    unfenced = bool(store.manifest.get("unfenced"))
+    chasers = {role: session_agent(agents[role], unfenced=unfenced) for role in CHASERS}
     cfg = store.task.settings
     base_elapsed = store.manifest["elapsed_seconds"]
     started = time.monotonic()
@@ -106,36 +129,8 @@ async def kernel_tuning(
             output,
             operation=operation,
             candidate=candidate,
-            timeout=min(
-                cfg.diagnostics.timeout_seconds
-                if operation == "profile"
-                else cfg.search.evaluation_timeout_seconds,
-                remaining(),
-            ),
+            timeout=min(cfg.search.evaluation_timeout_seconds, remaining()),
         )
-
-    async def diagnose(label: str, output: Path, solution: Path) -> None:
-        records = store.manifest.setdefault("diagnostics", [])
-        if any(r["candidate"] == label for r in records):
-            return
-        if len(records) >= cfg.diagnostics.max_reports or remaining() <= 0:
-            return
-        record = {
-            "candidate": label,
-            "status": "running",
-            "archive": str(output),
-            "solution_digest": digest(read_json(solution)),
-        }
-        records.append(record)  # Reserve budget durably, including failed/interrupted calls.
-        checkpoint()
-        try:
-            response = await measure(output, operation="profile", candidate=solution)
-            record.update(status="complete", evidence=response["profile"])
-        except Exception as exc:
-            record.update(status="unavailable", error=f"{type(exc).__name__}: {exc}")
-            atomic_json(output / "error.json", record)
-        finally:
-            checkpoint()
 
     store.manifest.update(status="running", stop_reason=None)
     checkpoint()
@@ -150,15 +145,12 @@ async def kernel_tuning(
             validate_measurement(store.task, report["measurement"])
             store.manifest["baseline_verified"] = True
             checkpoint()
-        if cfg.profile:
-            await diagnose("baseline", store.root / "baseline/profile", store.solution_path())
-            baseline_diagnostic = next(
-                (r for r in store.manifest.get("diagnostics", []) if r["candidate"] == "baseline"), None
-            )
-            if cfg.diagnostics.required and (
-                baseline_diagnostic is None or baseline_diagnostic["status"] != "complete"
-            ):
-                raise ContractError(f"Required baseline diagnostics unavailable: {baseline_diagnostic}")
+        if cfg.profile and not (store.root / "baseline/profile/result.json").is_file():
+            # The first chaser plans from the baseline's counters, not from timings alone.
+            try:
+                await measure(store.root / "baseline/profile", operation="profile")
+            except Exception as exc:
+                atomic_json(store.root / "baseline/profile/error.json", {"error": str(exc)})
         while True:
             reason = None
             if len(store.manifest["attempts"]) >= cfg.search.max_candidates:
@@ -171,29 +163,47 @@ async def kernel_tuning(
                 store.manifest.update(status="completed", stop_reason=reason)
                 break
             candidate, archive, scratch = store.begin_attempt(persist=checkpoint)
+            role = chaser_of(candidate)
+            coder = chasers[role]
+            store.manifest["attempts"][-1]["chaser"] = role
             checkpoint()
             solution = None
             session = None
             try:
                 work_env = await envs["workspace"].derive_subdir(subdir=candidate)
-                session = await coder.spawn(env=work_env)
-                for stage, prompt in (
-                    ("plan", plan_prompt(store.task)),
-                    ("implement", implementation_prompt(store.task)),
+                for stage, prompt, deliverable in (
+                    (
+                        "plan",
+                        plan_prompt(store.task, role=role, skills=Chaser._skills, profiles=cfg.profile),
+                        "PLAN.md",
+                    ),
+                    ("implement", implementation_prompt(store.task), "solution.json"),
                 ):
                     store.verify()
                     if remaining() <= 0:
                         raise TimeoutError("Search duration exhausted")
                     seconds = min(cfg.search.agent_timeout_seconds, remaining())
                     (archive / f"{stage}-prompt.txt").write_text(prompt, encoding="utf-8")
-                    reply = await asyncio.wait_for(
-                        coder.run(
-                            prompt,
-                            session=session,
-                            budget=Budget(duration=timedelta(seconds=seconds), graceful=False),
-                        ),
-                        timeout=seconds,
-                    )
+                    if session is None:
+                        session = await coder.spawn()
+                    try:
+                        reply = await asyncio.wait_for(
+                            coder.run(
+                                prompt,
+                                session=session,
+                                env=work_env,
+                                budget=Budget(duration=timedelta(seconds=seconds), graceful=False),
+                            ),
+                            timeout=seconds,
+                        )
+                    except TimeoutError:
+                        # The prompts promise that a turn stopped after writing its deliverable
+                        # still counts. The stopped session takes no further turn.
+                        written = scratch / deliverable
+                        if not written.is_file() or written.is_symlink() or not written.stat().st_size:
+                            raise
+                        reply = f"Turn stopped after {seconds:g} s with {deliverable} written."
+                        session = None
                     (archive / f"{stage}-reply.txt").write_text(reply, encoding="utf-8")
                     plan = scratch / "PLAN.md"
                     if (
@@ -218,13 +228,13 @@ async def kernel_tuning(
                 store.finish_attempt(candidate, status=status, decision=decision, solution=solution)
                 checkpoint()
                 if cfg.profile:
-                    # Numeric failures are retained but never spend the profiling budget.
+                    # Profiling is evidence only, outside promotion and performance timing.
                     try:
-                        validate_measurement(store.task, report["measurement"])
-                    except ContractError:
-                        pass
-                    else:
-                        await diagnose(candidate, archive / "profile", archive / "solution.json")
+                        await measure(
+                            archive / "profile", operation="profile", candidate=archive / "solution.json"
+                        )
+                    except Exception as exc:
+                        atomic_json(archive / "profile/error.json", {"error": str(exc)})
             except (asyncio.CancelledError, KeyboardInterrupt):
                 raise
             except Exception as exc:

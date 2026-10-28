@@ -167,82 +167,39 @@ the installed kernel falls back even if its isolated benchmark improves.
 
 #### Project skills and diagnostic feedback
 
-The Thor/Orin adaptations of KernelWiki and ncu-report-skill are Git submodules
-under `skills/`, pointing to ZhouBencheng's repositories. The parent repository's
-gitlinks pin the exact modified commits; initialize them with
-`git submodule update --init --recursive` before tuning. Run/resume fails before
-evaluation or agent turns if either skill is missing. Agent prompts name their
-entry points and executable commands; agents read the relevant pages and analyze
-existing reports. There is no separate skill installer, download lock, or per-run
-copy of the corpus. Repository instructions and the frozen numerical contract
-take precedence over generic skill recipes.
+The flow loads optional KernelWiki and ncu-report-skill directories from
+`scripts/kernel_tuning/flow/skills/`, using Humanize2's skill mechanism.
+The pinned Thor/Orin submodules under the repository's `skills/` can supply those
+directories through local links. Each run records the carried SKILL.md digests
+and rejects resume after they change. Missing optional skills do not block tuning.
+Repository instructions and the frozen numerical contract take precedence over
+generic skill recipes. Registration snapshots preserve submodule gitlink commits.
 
-Registration baseline snapshots retain submodule gitlink commits without
-traversing or initializing their contents in the isolated registration worktrees.
+With `profile: true`, the evaluator collects the baseline before planning and
+every evaluated candidate after the promotion decision. The remote-style
+`profile_command` selects NCU and any explicit privilege wrapper; reports and
+details are handed to the next chaser under `profiles/`, as described below.
+Collection failures remain evidence and do not revoke promotion. Collection uses
+the evaluator timeout and whole-run budget, without a separate report-count cap.
 
-GPU collection remains evaluator-owned. With `profile: true`, collect a baseline
-before the first planning turn and bounded candidate diagnostics after successful
-correctness evaluation. Profiling never supplies promotion timings. The worker
-loads the task's own adapter and uses its actual workload materialization,
-alias-preserving clone and call semantics; compilation and warmup happen outside
-the profiler range. All launches in that range are retained, including auxiliary
-kernels. Graph-mode tasks are diagnosed by one graph replay.
-
-NCU sections are discovered from the installed collector. The reader interpreter
-is separately configurable for aarch64 installations. Native typed captures and
-the skill's human-readable analyses are retained with the workload and source
-identity. Each new attempt receives baseline and recent candidate diagnostics,
-including explicit unavailable/error states. Optional profiling failures do not
-change a promotion decision; required profiling fails before search when baseline
-diagnostics cannot be produced. Diagnostic calls and their timeout consume the
-existing run budget and have an additional fixed call limit.
-
-`diagnostics.max_reports` defaults to four collection attempts per run (baseline
-included); failures and interrupted calls consume a slot and are not retried on
-resume. `diagnostics.timeout_seconds` defaults to 120 seconds, capped by the
-remaining run duration. `diagnostics.workload` selects a declared UUID or defaults
-to the first workload; collection uses the first frozen seed. This limited
-diagnostic sample is not evidence for performance across all shapes. The existing
-paired evaluator still validates and times every workload. Optional candidate
-diagnostic failures never revoke an accepted candidate; `diagnostics.required`
-requires successful baseline diagnostics only. Once the call limit is reached,
-later attempts keep receiving the existing evidence with its candidate identity.
-
-`diagnostics.ncu` selects the collector and `diagnostics.reader_python` selects a
-separate native reader environment (empty means the evaluator interpreter).
-`diagnostics.metric_profile` defaults to `auto`: the skill reader uses its
-qualified device selection rules, falling back to `generic` for unqualified
-identities. An explicit conflicting device profile fails analysis and preserves
-the raw capture. All actions remain archived; only the first 16 action summaries
-per report enter the agent feedback, with an explicit truncation marker and paths
-to the complete capture. Existing captures can be re-analyzed on CPU by
-`benchmarks/kernel_tuning/ncu_analysis.py --capture FILE --output NEW_DIR`.
-
-The collector follows NVIDIA's [CLI collection controls](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html):
-it discovers installed sections, disables collection until the worker calls the
-profiler API, and has no launch-count filter. Kernel/graph-node replay diagnostics
-can serialize execution and do not represent end-to-end latency. Missing source
-mapping or PM sampling is preserved as missing evidence. The implementation adds
-no compiler flags or build changes to manufacture source mappings.
-
-This extends repository developer tooling only. It does not add inference runtime
-dependencies or relax any correctness or paired-timing gate. CPU tests exercise
-the agent handoff, multi-action parsing, replay preparation, failures and resume;
-actual collection still requires a prepared target GPU.
+Migration: `diagnostics.*` settings and the old budgeted collector are retired.
+Replace `diagnostics.ncu` with `profile_command: [/absolute/path/to/ncu]` and
+remove the remaining `diagnostics` mapping before freezing a new task. Older runs
+retain their snapshotted tools; they cannot resume under changed controller code.
+The standalone `benchmarks/kernel_tuning/ncu_analysis.py` remains available for
+CPU analysis of archived reports or detached native captures, using the pinned
+NCU skill submodule. It is not an automatic step in the tuning flow.
 
 A task contains `README.md`, `definition.json`, `workloads.jsonl`, `baseline.py`,
 `tuning.yaml`, and optionally trusted `benchmark.py`; replay tasks also include
 layout/fixture contracts. Task and solution schemas reuse NVlabs KDA/FlashInfer
 formats. Humanize2 is pinned in the isolated tooling environment.
 
-The project applies a process-local Codex event compatibility shim at session
-setup. With the pinned Humanize2 driver and Codex 0.162.1, a recovered stream's
-`idle` notification can precede `turn/completed`; retaining an earlier reconnect
-notice then replays an already successful planning turn. Only explicit
-`willRetry: true` error notifications are excluded from terminal failure handling.
-Actual errors, failed/interrupted completions, budgets and permissions are unchanged.
-Regression tests replay the observed ordering through the real driver; review
-this private-driver shim whenever the Humanize2 pin changes.
+Humanize2 revision `58dd43a` fixes the Codex event-order issue upstream: an `idle`
+notification does not end the turn, and successful `turn/completed` clears earlier
+reconnect errors. Failed or interrupted completion still fails. The former local
+event-filter shim is removed; bounded event-replay tests exercise success, failure,
+interruption and waiting for completion through the pinned driver.
 
 The agent reads the task and recent candidate source/evidence, writes a hypothesis
 and executable plan, and produces a candidate. A separate evaluator compiles it,
@@ -250,10 +207,48 @@ checks every workload and times baseline, incumbent and candidate. Feedback driv
 the next attempt, including rejected attempts. Agent turns do source/JSON checks;
 the evaluator owns GPU compilation and validation.
 
+The flow (`scripts/kernel_tuning/flow/`) drives two chasers in turn, in the manner
+of Humanize2's `flame_chase`: attempt *n* is planned and implemented by
+`first_chaser` when *n* is odd and `second_chaser` otherwise, each in a fresh
+session that starts from the incumbent and every earlier attempt's evidence.
+`--agent` takes one hmz spec for both chasers or two comma-separated specs, e.g.
+a Claude Code and a Codex harness, whose different habits (rewrites against
+refinements) the alternation exploits. The KDA skills `KernelWiki` and
+`ncu-report-skill` travel with the flow when linked into its untracked `skills/`
+directory; each run records the digest of every carried skill and refuses to
+resume after they change. NVlabs' originals are B200-specific; device-routed forks
+(SM87/Orin, SM89, SM90, SM100, SM103, SM110/Thor) keep the same names, and the plan
+prompt asks agents to select the target matching `environment.json`.
+
+A turn is stopped after `agent_timeout_seconds`. A stopped turn whose deliverable
+(`PLAN.md`, then `solution.json`) already exists still counts, and the attempt
+continues in a fresh session; without it the attempt fails. An evaluator failure
+reaches the next agent with the worker's final exception line, and a calibrated
+tolerance failure names the workload, input profile and how far the output
+exceeded its bound.
+
+With `profile: true` the evaluator collects Nsight Compute evidence (`--set full`,
+restricted by NVTX to one warmed call of the heaviest workload) for the baseline
+and for every evaluated candidate. Each attempt receives copies for the incumbent
+and the previous attempt under `profiles/` (`ncu.ncu-rep`, `details.txt`); agents
+never run the profiler. `profile_command` names NCU and an optional privilege
+wrapper (`[sudo, -n, /path/to/ncu]` where counters need root). The worker is then
+started through `env` with an allow-list of build variables and its own caches and
+home, never secrets, because its command line is visible to other users. A
+privileged NCU runs candidate code with those privileges; use it only where
+counters cannot be opened otherwise, and only with agents that cannot invoke it.
+
 `tune-all` generates tasks and preflights all baselines before opening any model
 batch agent. Missing fixtures, unsupported contracts or a failed baseline block
 the batch. A later individual search failure is recorded and other tasks may
-continue. Each task runs serially in its own `run`/`resume` process.
+continue. Each task runs in its own `run`/`resume` process, one at a time unless
+`--parallel N` (also accepted with `--resume`) starts N at once. Agent turns then
+overlap, but every evaluator worker (probe, check, timing, profile) holds a
+per-device `flock` in the temporary directory, so measurements never share the
+GPU; the evaluation timeout starts once the lock is held, and `command.json`
+records the wait. Agents spend most of a run's wall time, so on one device this
+multiplies throughput without changing what is measured. A preflighted item may
+be set to `skipped` in `batch.json` to leave it out of the batch.
 
 Promotion requires at least 3% weighted latency improvement and at most 5%
 regression on every workload, against both the initial baseline and incumbent,
@@ -277,8 +272,13 @@ archives and reproduction.
 `install` accepts an exported registry task from `capture-ops`, with a
 Python/Triton solution and an operator already registered in the current tree.
 Catalog exports and CUDA C++ solutions are not installable through
-this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/` and
-`profile.json`; overwriting an installed operator requires `--replace`.
+this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/<variant>/`
+and `profile.json`. An operator's layouts are often split across tasks (FP32 vision
+and BF16 language GEMMs, prefix and decode rotations), so each installed task becomes
+one variant and the generated `<op>/__init__.py` sends a call to the variant that
+verified its exact layout. A variant whose layouts overlap an installed one, a
+reinstall of the same task, or rebuilding an older single-kernel package requires
+`--replace`, which drops the overlapping variants.
 
 The manifest records device name, compute capability, Torch/Triton match keys,
 source digest, verified layout count and kernel-search provenance. CUDA version
@@ -455,9 +455,11 @@ Implemented components are the Humanize2 Flow/archive, registry
 capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
 loader, install, model verification, the CPU registration controller, and an
 opt-in `--unfenced` agent mode for hosts without Landlock (Section 11.1). The
-pi0.5 call sites are integrated. One hardware profile is committed: `orin_pi05`
-for Jetson AGX Orin (Section 9.1); `kernel_profile` still defaults to `none`, so
-it is used only when selected by name or by `auto` on matching hardware.
+pi0.5 call sites are integrated. Two hardware profiles are committed for Jetson
+AGX Orin: `orin_pi05` (Section 9.1) and `orin_pi05_r2` (Section 9.2).
+`kernel_profile` still defaults to `none`, so a profile is used only when
+selected by name or by `auto` on matching hardware; `auto` takes the first
+matching profile in name order, which on Orin is `orin_pi05`.
 
 Remaining work from the merged design:
 
@@ -571,6 +573,113 @@ accepts it. The decode export was tuned after capture recorded the production
 output layout (a contiguous query). Replacing the existing Triton decode
 rotation with it changed end-to-end latency by less than 1 ms and left actions
 bit-identical.
+
+### 9.2 `orin_pi05_r2` on Jetson AGX Orin
+
+`orin_pi05_r2` holds eight kernels from a second Orin round, tuned with the
+two-chaser flow (Section 4.4). The chasers were a Claude Code and a Codex harness,
+both on DeepSeek-V4.1-Flash. They carried the device-routed `KernelWiki` and
+`ncu-report-skill` forks and Nsight Compute evidence collected through `sudo -n`,
+and ran `--unfenced`. Every prefix-side task covers both prompt buckets that
+occur with this checkpoint (prefix length 672 or 712), and the attention task
+also covers the denoise shapes of both, so one kernel serves either bucket.
+
+The round ran two batches over the same capture:
+
+- The first batch ran the ten operators one at a time and reached eight of them
+  before it was stopped: 110 minutes, 16 candidates, patience 6, 15-minute turns
+  and 10-minute evaluations per task.
+- The second batch took the five tasks the first left without a kernel. These
+  were the three `linear` tasks and two it had not reached. They ran at once
+  (`--parallel 5`) with 5 hours, no candidate or patience limit, and 30-minute
+  limits. A host reboot stopped it after 286 of its 300 minutes, and its best
+  attempts were exported from the run archives.
+
+Measured 2026-10-27 under the conditions of Section 9.1, with the following
+differences:
+
+- The source tree was `e131b3e` plus this profile.
+- The GPU clock was not locked: a reboot had cleared the lock, leaving
+  `nvhost_podgov` at 306–930.75 MHz.
+- Rows ran in the order `none`, `orin_pi05_r2`, `orin_pi05`, `orin_pi05_r2`,
+  `none`, each with ten warmup calls and 600 timed calls. The mean is over the
+  runs of each profile.
+
+`none` and `orin_pi05` reproduced their Section 9.1 means within 1.0 ms.
+
+| `kernel_profile` | Runs | Mean (ms) | P50 (ms) | P95 (ms) | vs `none` |
+|---|---|---|---|---|---|
+| `none` (existing Triton) | 2 | 610.8 | 609.8 / 609.8 | 611.1 / 612.9 | — |
+| `orin_pi05` | 1 | 537.6 | 537.4 | 538.9 | −12.0% |
+| `orin_pi05_r2` | 2 | 515.0 | 514.3 / 514.6 | 516.2 / 516.9 | −15.7% (−4.2% vs `orin_pi05`) |
+
+**Numerical gate.** The Section 6 gate (`scripts.kernel_tuning.verify.gate`)
+passed over the 200 inputs with shared noise, worst ratio 0.854. The reference
+was `kernel_profile: torch` in the same mixed precision, because an FP32
+reference does not fit in the 32 GB unified memory. For the action chunk:
+
+| Measure | `orin_pi05_r2` | Limit | `none` |
+|---|---|---|---|
+| Mean max-abs error | 0.00513 | 0.00605 | 0.00484 |
+| Mean RMSE | 0.00167 | 0.00196 | 0.00156 |
+| Worst max-abs error | 0.0254 | 0.0391 | 0.0195 |
+
+**Dispatch.** The check used six inputs covering both buckets and the first 20
+recorded inputs; the 20 recorded inputs all fall in the 672 bucket. Every call
+of the six tuned operators dispatched to a tuned kernel. `linear` falls back only
+for the layouts without a promoted kernel:
+
+- the FP32 vision projections,
+- the fused 2048→32768 gate/up projections,
+- the expert 1024→8192 gate/up.
+
+Operators, from the promoted attempt's paired evaluator rounds against the
+task's Torch baseline (calls per inference in parentheses; the chaser that wrote
+the kernel in brackets):
+
+| Operator (run) | Workload | Torch (ms) | Tuned (ms) |
+|---|---|---|---|
+| `split_kv_attention` (`20261026T192726Z-44b77e65fd`) [Claude Code] | prefix, 672 / 712 keys (18) | 3.61 / 3.81 | 0.690 / 0.859 |
+| | denoise, 672 / 712 + 50 keys (180) | 0.905 / 0.934 | 0.092 / 0.100 |
+| `linear` (`20261027T083101Z-f3a3fe58e8`) [Codex] | prefix `down_proj`, 672 / 712×16384→2048 (18) | 6.43 / 6.61 | 3.06 / 3.09 |
+| | expert `down_proj`, 50×4096→1024 (180) | 0.0765 | 0.0765 |
+| `rotate_qk` prefix (`20261027T041343Z-ef7e804e63`) [Claude Code] | 672 / 712 tokens (18) | 0.432 / 0.461 | 0.050 / 0.052 |
+| `rotate_qk` decode (`20261027T022339Z-cc147a0ad6`) [Claude Code] | 50 tokens (180) | 0.071 | 0.0125 |
+| `gated_gelu` prefix (`20261027T003333Z-273b3ff7e2`) [Claude Code] | 672 / 712×16384 (18) | 1.27 / 1.35 | 0.354 / 0.375 |
+| `gated_gelu` expert (`20261027T055939Z-b94ceefecd`) [Codex] | 50×4096 (180) | 0.0387 | 0.0163 |
+| `gated_residual` (`20261027T083103Z-13ee35774e`) [Claude Code] | 50×1024 (360) | 0.0164 | 0.0093 |
+| `gelu_tanh` (`20261027T083104Z-63d432d46f`) [Claude Code] | SigLIP 256×4304, FP32 (54) | 0.0586 | 0.0546 |
+
+No candidate was promoted for the two remaining `linear` tasks:
+
+- BF16 gate/up: 8 evaluated attempts, all slower than cuBLAS, which already
+  reaches about 79% of the 26.7 TFLOP/s BF16 tensor peak at 930.75 MHz.
+- FP32 vision projections: 6 attempts in the first batch and 7 in the second.
+  They either exceeded the calibrated bounds, produced non-finite output, or
+  were slower than cuBLAS.
+
+**In-model attribution.** These per-operator gains overstate the end-to-end
+saving. Weighted by calls, they predict about 300 ms per inference, against 96 ms
+measured. One inference was profiled with Nsight Compute using an
+experiment-local driver. NCU fixes the clock at its base, so durations were
+converted from cycles to 930.75 MHz. The kernel sums are 589.6 ms (`none`) and
+498.3 ms (`orin_pi05_r2`), against 610.8 and 515.0 ms end to end; the rest is
+mostly launch gaps in the CUDA Graph. By stage:
+
+| Stage | `none` (ms) | `orin_pi05_r2` (ms) |
+|---|---|---|
+| SigLIP vision tower and projector, FP32 | 248.5 | 248.6 |
+| Gemma prefix | 257.2 | 181.0 |
+| Action expert (ten steps) and input/output | 83.8 | 68.7 |
+
+The prefix gain is mostly `down_proj` (−61 ms) and `gated_gelu` (−12 ms).
+`split_kv_attention` accounts for most of the overestimate. Its task baseline is
+the registry's Torch reference: 3.6 ms per prefix call and 0.9 ms per denoise
+call. `none`, however, already runs the existing Triton split-KV kernels, at
+0.49 ms per prefix call and 0.155 ms per denoise call in the model. Against that
+path the tuned kernel saves 14.7 ms in the denoise loop and costs 3.3 ms in the
+prefix, at 0.67 ms against 0.49 ms per call. A task should therefore be measured
+against the implementation its production configuration actually runs.
 
 ## 10. Risks and limitations
 
@@ -744,7 +853,8 @@ ATen operation in the model.
 ```bash
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
   --model pi05 --captured results/kernel_tuning/captures/pi05-ops-calibrated \
-  --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+  --agent 'HARNESS/MODEL:EFFORT[,HARNESS/MODEL:EFFORT]' \
+  --set evaluator_python=/absolute/runtime/python
 
 # Resume with the printed Batch path; omit agent, selection options and --set.
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
@@ -894,7 +1004,8 @@ source, baseline Solution, every scratch attempt, candidate Solutions/source tre
 worker requests/commands/stdout/stderr/results, decisions, and environment data.
 `best.json` appears only after promotion. Winning evidence is hashed and checked
 before export; source export writes the exact UTF-8 bytes embedded in the measured
-Solution. Optional NCU profiling runs separately on the first workload; profile
+Solution. Optional NCU profiling runs separately on the highest-weight workload
+(the first when weights tie); profile
 failure never changes promotion.
 
 Humanize2 owns resumable FlowState and the agent/session trace. The manifest is an
@@ -959,8 +1070,9 @@ preserved, including the reference relayout described in Section 4.3. Replay
 checks every output and rejects input mutation, resets storage outside timed
 events, and validates changed-input graph replay. Registry tasks default to
 CUDA Graph timing; eager timing remains available. NCU profiling uses the same
-replay adapter, cloning shared storage and resetting mutable inputs outside the
-profiling range; graph mode captures first and profiles the graph's kernel nodes.
+replay adapter to materialize fresh inputs before one eager call under NVTX.
+This diagnostic call does not reproduce CUDA Graph replay latency, even when
+paired promotion measurements use graph timing.
 
 The shared `discovery.contracts`, `tasks`, `tensors` and `numerics` modules remain
 in place for registry capture, calibration, task generation, batch preflight and

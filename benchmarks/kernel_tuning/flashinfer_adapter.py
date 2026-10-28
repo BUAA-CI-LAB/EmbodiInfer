@@ -14,6 +14,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -485,63 +486,107 @@ class FlashInferAdapter:
     def _build_reference(self, registry: Any) -> Any:
         return registry.build_reference(self.definition)
 
+    def profiled_workload(self) -> Any:
+        """The workload NCU evidence describes: the heaviest-weighted one, else the first."""
+        weights = self.cfg.weights
+        return max(self.traces, key=lambda trace: weights.get(trace.workload.uuid, 1.0)).workload
+
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
-        """Capture optional NCU evidence in a separate worker, never promotion timing."""
-        from benchmarks.kernel_tuning.profiling import collect
+        """Capture optional NCU evidence in a separate worker, never promotion timing.
 
-        return collect(self.task, solutions["candidate"], output)
-
-    @staticmethod
-    def _reset(destination: list[Any], source: list[Any]) -> None:
-        import torch
-
-        for dst, src in zip(destination, source):
-            if isinstance(dst, torch.Tensor):
-                dst.copy_(src)
-
-    def profile_once(self, solution: dict[str, Any], workload_id: str) -> None:
-        """Profile one actual call, after build/warmup/reset, using this adapter's inputs.
-
-        ReplayAdapter overrides cloning, reset and graph capture to preserve shared
-        storage and mutations. All launches in the call are visible to NCU; neither
-        allocation/poisoning nor input preparation is inside the profiling range.
+        The worker calls the candidate once to compile and autotune it, then once inside
+        the NVTX range ``candidate`` that NCU is restricted to. ``profile_command`` may
+        prefix NCU with a privilege wrapper (``sudo -n``), which resets the environment,
+        so the worker is started through ``env`` with the variables it needs. Secrets
+        are never among them: the whole command line is visible to other users.
         """
+        from scripts.kernel_tuning.artifacts import atomic_json
+
+        ncu = list(self.cfg.profile_command)
+        if not shutil.which(ncu[0]):
+            raise ContractError(f"profile: true requires {ncu[0]} on PATH")
+        candidate = output / "candidate.json"
+        atomic_json(candidate, solutions["candidate"])
+        report = output / "ncu.ncu-rep"
+        keep = {
+            name: value
+            for name, value in os.environ.items()
+            if name in _PROFILE_ENVIRONMENT or name.startswith(("TRITON_", "FIB_", "CUDA_"))
+        }
+        # A privileged worker must not write into the evaluator's caches or home, nor leave
+        # directories in the run archive that the evaluator's user cannot remove.
+        scratch = Path(tempfile.gettempdir()) / f"kernel-tuning-ncu-{os.getuid()}"
+        scratch.mkdir(mode=0o700, exist_ok=True)
+        keep["HOME"] = str(scratch / "home")
+        keep["TRITON_CACHE_DIR"] = str(scratch / "triton")
+        keep["TORCH_EXTENSIONS_DIR"] = str(scratch / "torch")
+        command = [
+            *ncu,
+            "--target-processes",
+            "all",
+            "--nvtx",
+            "--nvtx-include",
+            "candidate/",
+            "--set",
+            "full",
+            "--import-source",
+            "yes",
+            "--force-overwrite",
+            "--export",
+            str(report.with_suffix("")),
+            "env",
+            *(f"{name}={value}" for name, value in sorted(keep.items())),
+            sys.executable,
+            str(Path(__file__).resolve().with_name("evaluate.py")),
+            "--profile-once",
+            str(self.task.root),
+            str(candidate),
+        ]
+        timeout = self.cfg.search.evaluation_timeout_seconds
+        with (output / "ncu.log").open("w", encoding="utf-8") as log:
+            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+        with (output / "details.txt").open("w", encoding="utf-8") as details:
+            subprocess.run(
+                [*ncu, "--import", str(report), "--page", "details", "--print-units", "base"],
+                stdout=details,
+                stderr=subprocess.STDOUT,
+                check=True,
+                timeout=timeout,
+            )
+        return {
+            "command": command,
+            "report": str(report),
+            "details": str(output / "details.txt"),
+            "workload": self.profiled_workload().uuid,
+        }
+
+    def profile_once(self, solution: dict[str, Any]) -> None:
+        """NCU worker body: compile and warm the candidate, then call it once under NVTX."""
+        import torch
         from flashinfer_bench.compile import BuilderRegistry
         from flashinfer_bench.data import Solution
 
         runnable = BuilderRegistry.get_instance().build(self.definition, Solution.model_validate(solution))
-        workload = next(t.workload for t in self.traces if t.workload.uuid == workload_id)
-        self._profile_runnable(runnable, workload)
-
-    def _profile_runnable(self, runnable: Any, workload: Any) -> None:
-        import torch
-
-        seed = self.cfg.seeds[0]
-        inputs = self._inputs(workload, seed)
-        for _ in range(self.cfg.timing.warmup):
-            self._seed(seed)
-            self._call(runnable, self._clone(inputs))
-        local = self._clone(inputs)
-        if self.cfg.timing.mode == "cuda_graph":
-            graph, args, outputs = self._capture(runnable, local)
-            launch = graph.replay
-        else:
-            # Prepare DPS output buffers and validate the signature outside NCU.
-            args, outputs = self._call(runnable, local)
-
-            def launch() -> Any:
-                return runnable(*args)
-
-        self._reset(local, inputs)
-        self._seed(seed)
+        workload = self.profiled_workload()
+        self._call(runnable, self._inputs(workload, self.cfg.seeds[0]))
         torch.cuda.synchronize(self.device)
-        self._check_flags()
-        torch.cuda.profiler.start()
-        try:
-            result = launch()
+        inputs = self._inputs(workload, self.cfg.seeds[0])
+        torch.cuda.synchronize(self.device)
+        with torch.cuda.nvtx.range("candidate"):
+            self._call(runnable, inputs)
             torch.cuda.synchronize(self.device)
-        finally:
-            torch.cuda.profiler.stop()
-        # Hold outputs and graph buffers through the final device synchronization.
-        del result, outputs
-        self._check_flags()
+
+
+#: Variables the NCU worker needs from the evaluator; ``TRITON_*``, ``FIB_*``, ``CUDA_*`` too.
+_PROFILE_ENVIRONMENT = frozenset(
+    {
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "CPATH",
+        "LIBRARY_PATH",
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "HF_HUB_OFFLINE",
+        "TORCH_EXTENSIONS_DIR",
+    }
+)

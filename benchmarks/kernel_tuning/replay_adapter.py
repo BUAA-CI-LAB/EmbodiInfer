@@ -166,7 +166,29 @@ class ReplayAdapter(FlashInferAdapter):
 
         reference = high_precision(self.replay["numerical_identity"], inputs)
         bounds = self.numerical["cases"][self.case["id"]][self._sample]
-        return compare_calibrated(actual, reference, bounds)
+        try:
+            return compare_calibrated(actual, reference, bounds)
+        except ContractError as exc:
+            raise ContractError(f"{exc}: {self._excess(actual, reference, bounds)}") from exc
+
+    def _excess(self, actual: list[Any], reference: list[Any], bounds: list[dict[str, Any]]) -> str:
+        """Locate a calibrated failure for feedback: workload, input profile, and how far over."""
+        import torch
+
+        found = []
+        for index, (value, ref, bound) in enumerate(zip(actual, reference, bounds)):
+            if value.shape != ref.shape or not torch.isfinite(value).all():
+                continue
+            error = (value.double() - ref).abs()
+            limit = bound["atol"] + bound["rtol"] * ref.abs()
+            over = error > limit
+            if over.any():
+                found.append(
+                    f"output {index} has {int(over.sum())}/{error.numel()} elements over the bound, "
+                    f"max |error| {error.max().item():.3g} (baseline {bound.get('baseline_max_abs', float('nan')):.3g}, "
+                    f"atol {bound['atol']:.3g}), worst error/bound {(error / limit).max().item():.3g}"
+                )
+        return f"workload {self.case['id']}, input profile {self._sample}; " + "; ".join(found)
 
     def _check_metadata(self) -> dict[str, Any]:
         if self.numerical is None:

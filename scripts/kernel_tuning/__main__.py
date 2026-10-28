@@ -17,11 +17,25 @@ from .artifacts import (
     atomic_json,
     run_lock,
     runtime_identity,
+    skill_identity,
     warn_unfenced,
 )
 from .contracts import HMZ_REVISION, ContractError, TaskPackage, read_json
 from .discovery.contracts import ModelCapture
 from .runner import evaluate
+
+
+def chaser_agents(agent: str) -> dict[str, str]:
+    """Map a run's agent setting onto the two chasers that take turns.
+
+    ``agent`` is one hmz spec, which both chasers then use, or two comma-separated
+    specs, first chaser first, e.g. ``claude@gw/model:high,codex@gw/model:high``.
+    """
+    specs = [spec.strip() for spec in agent.split(",")]
+    if not 1 <= len(specs) <= 2 or not all(specs):
+        raise ContractError("--agent takes one hmz agent spec, or two separated by a comma")
+    first, second = specs[0], specs[-1]
+    return {"first_chaser": first, "second_chaser": second}
 
 
 def _execute(store: RunStore, *, resume: bool) -> dict:
@@ -44,15 +58,17 @@ def _execute(store: RunStore, *, resume: bool) -> dict:
         store.verify()
         if runtime_identity() != store.manifest["tool_runtime"]:
             raise ContractError("Humanize2/Python tooling environment changed; start a new run")
+        if skill_identity() != store.manifest.get("skills", {}):
+            raise ContractError("The skills linked into the tuning flow changed; start a new run")
         remaining = store.task.settings.search.max_seconds - store.manifest["elapsed_seconds"]
         if remaining <= 0 or store.manifest["status"] == "completed":
             raise ContractError("Run budget already exhausted; start a new run with a new task contract")
         warn_unfenced(store.manifest)
         epic = store.root / "humanize.json"
         running = Hmz(workspace=store.root / "workspace").run(
-            flow=Path(__file__).with_name("flow.py"),
+            flow=Path(__file__).with_name("flow"),
             task=f"Optimize {store.task.definition['name']} under its frozen task contract",
-            agents={"coder": store.manifest["agent"]},
+            agents=chaser_agents(store.manifest["agent"]),
             params={"run_dir": str(store.root)},
             budget={"duration": remaining, "graceful": False},
             # A killed invocation may be newer than humanize.json. The dedicated
@@ -180,6 +196,8 @@ def _tune_all(args: argparse.Namespace) -> int:
     from .generate import parse_overrides
     from .operators import select
 
+    if args.parallel < 1:
+        raise ContractError("--parallel must be at least 1")
     if args.resume:
         if (
             args.operators
@@ -198,8 +216,10 @@ def _tune_all(args: argparse.Namespace) -> int:
         root = args.resume.resolve(strict=True)
     else:
         agent = args.agent or ""
-        if not (args.dry_run or args.preflight_only) and "/" not in agent:
-            raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
+        if not (args.dry_run or args.preflight_only):
+            if "/" not in agent:
+                raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
+            chaser_agents(agent)
         options = {
             "agent": agent,
             "overrides": parse_overrides(args.set),
@@ -239,9 +259,9 @@ def _tune_all(args: argparse.Namespace) -> int:
             )
             else 1
         )
-    record = batch.execute(root)
+    record = batch.execute(root, parallel=args.parallel)
     print((root / "summary.md").read_text(encoding="utf-8"))
-    return 0 if all(item["status"] == "completed" for item in record["items"].values()) else 1
+    return 0 if all(item["status"] in ("completed", "skipped") for item in record["items"].values()) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -258,7 +278,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     run = commands.add_parser("run", help="Start real agent-driven tuning on this machine")
     run.add_argument("task", type=Path)
-    run.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec; overrides tuning.yaml")
+    run.add_argument(
+        "--agent",
+        help="Humanize2 harness/model:effort spec, or two comma-separated (first,second chaser); "
+        "overrides tuning.yaml",
+    )
     run.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning")
     run.add_argument("--unfenced", action="store_true", help=UNFENCED_HELP)
     for name in ("resume", "status"):
@@ -277,10 +301,21 @@ def main(argv: list[str] | None = None) -> int:
     generate.add_argument("--list", action="store_true", help="List captured registry or catalog operators")
     tune_all = commands.add_parser("tune-all", help="Generate, preflight, and tune every selected operator")
     _selection(tune_all)
-    tune_all.add_argument("--agent", help="Explicit Humanize2 harness/model:effort spec for every operator")
+    tune_all.add_argument(
+        "--agent",
+        help="Humanize2 harness/model:effort spec, or two comma-separated (first,second chaser), "
+        "for every operator",
+    )
     tune_all.add_argument("--output", type=Path, default=REPOSITORY / "results/kernel_tuning/batches")
     tune_all.add_argument("--resume", type=Path, metavar="BATCH", help="Continue an existing batch directory")
     tune_all.add_argument("--unfenced", action="store_true", help=UNFENCED_HELP)
+    tune_all.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Tune N operators at once; their evaluator workers still take turns on the device",
+    )
     mode = tune_all.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Only generate and validate the tasks")
     mode.add_argument("--preflight-only", action="store_true", help="Stop after measuring the baselines")
@@ -446,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
             agent = args.agent or task.settings.agent
             if not agent or "/" not in agent:
                 raise ContractError("Choose an explicit Humanize2 agent: --agent harness/model:effort")
+            chaser_agents(agent)
             model_batch = None
             if "replay.json" in task.hashes:
                 from .batch import verify_model_task

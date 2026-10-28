@@ -227,11 +227,10 @@ starting a search. `run` and `resume` execute real agent turns and kernels;
 `check`, `status`, and `export` do not. `check --environment` additionally imports
 the task evaluator and probes dependencies/hardware, without compiling candidates.
 
-The tooling applies a process-local compatibility fix for the pinned Humanize2
-Codex driver: explicit `willRetry: true` reconnect notices do not fail a completed
-turn when Codex sends `idle` before `turn/completed`. Terminal errors and cancelled
-turns still fail. This changes neither the installed CLI configuration nor agent
-permissions; revisit the shim when updating the Humanize2 pin.
+Humanize2 at the pinned revision `58dd43a` waits for `turn/completed` instead of
+ending a Codex turn on `idle`. Successful completion clears earlier reconnect
+notices; failed and interrupted completions still fail. This upstream fix replaces
+the former process-local compatibility shim. Event-replay tests cover this order.
 
 On the target machine, set the task's `evaluator_python` to the absolute Python
 executable of its prepared GPU runtime. Install
@@ -247,55 +246,47 @@ plan before applying it. When inheriting system packages, verify that the instal
 actually reuses them; do not reinstall the GPU stack just to add the evaluator.
 For a custom evaluator, install only its declared dependencies plus PyYAML.
 
-KernelWiki and ncu-report-skill are Git submodules under `skills/`, pinned to
-ZhouBencheng's Thor/Orin adaptations. Initialize them from the repository root
-before running tuning or its CPU tests (or clone with `--recurse-submodules`):
+The tuning flow loads optional KernelWiki and ncu-report-skill directories from
+`scripts/kernel_tuning/flow/skills/`. The pinned Thor/Orin Git submodules under
+the repository's `skills/` can supply them. On the Linux target, initialize and
+link them from the repository root:
 
 ```bash
 git submodule update --init --recursive skills/KernelWiki skills/ncu-report-skill
+mkdir -p scripts/kernel_tuning/flow/skills
+ln -s ../../../../skills/KernelWiki scripts/kernel_tuning/flow/skills/KernelWiki
+ln -s ../../../../skills/ncu-report-skill scripts/kernel_tuning/flow/skills/ncu-report-skill
 ```
 
-This checks out the exact commits recorded by EmbodiInfer. Do not use `--remote`
-unless deliberately updating the skill versions. The source URLs and pinned
-revisions are recorded in [Third-Party Notices](THIRD_PARTY_NOTICES.md).
-Every tuning agent receives their absolute entrypoints and CPU query/analysis
-commands; no global skill installation or per-run knowledge-base copy is needed.
-KernelWiki uses the tooling environment's existing PyYAML dependency. Before
-freezing a task, enable NCU evidence in `tuning.yaml` (or pass the equivalent
+Keep existing links if already configured. The source URLs and pinned revisions
+are recorded in [Third-Party Notices](THIRD_PARTY_NOTICES.md). Skills are optional;
+each run records the carried SKILL.md digests and refuses resume if they change.
+
+Before freezing a task, enable NCU evidence in `tuning.yaml` (or equivalent
 `--set` options to `tune-all`):
 
 ```yaml
 profile: true
-diagnostics:
-  required: false
-  max_reports: 4
-  timeout_seconds: 120
-  ncu: /absolute/nsight-compute/ncu
-  reader_python: /absolute/ncu-reader/python
-  metric_profile: auto
-  workload: ""  # First declared workload; set a UUID to choose another.
+profile_command: [/absolute/nsight-compute/ncu]
+# For a host explicitly configured to require a privilege wrapper:
+# profile_command: [sudo, -n, /absolute/nsight-compute/ncu]
 ```
 
-The collector runs in the prepared GPU runtime; `reader_python` may use a
-separate native `ncu_report` installation compatible with its Python/platform
-and the report. An empty reader path uses the evaluator interpreter. If using
-Nsight's `extras/python`, set `NCU_REPORT_PYTHONPATH` to that absolute directory.
-Follow the skill's [reader guidance](skills/ncu-report-skill/references/10-orin-collector-reader.md)
-for Thor/Orin; the workflow never replaces Torch/CUDA packages to install a reader.
-Missing NCU, reader errors and unavailable counters are recorded for the agent.
-On Jetson, NCU may return exit code zero with only an insufficient-privileges
-warning even for `--list-sections`; the collector preserves that warning in the
-diagnostic error. Arrange profiling access with the host administrator before
-requiring diagnostics. The workflow does not elevate privileges automatically.
-`diagnostics.ncu` can name a prepared executable wrapper for an explicitly
-authorized collector; it is an executable path, not a shell command string.
-Keep the controller, agent and ordinary timing evaluation under the normal user.
-`required: true` stops before the first agent turn if baseline diagnostics fail.
-Each run reserves at most `max_reports` calls, including failures/interruption:
-baseline first, then correctly evaluated candidates in order. Profiling has its
-own timeout within the whole-run budget and never contributes promotion latency.
-The next attempt's `diagnostics.json` points to all archived actions, typed
-metrics, stall coverage and PM samples. See the [diagnostic contract](docs/proposals/0008-kernel-tuning.md#project-skills-and-diagnostic-feedback).
+The evaluator collects one warmed call of the highest-weight workload with
+`--set full`, restricted to the candidate NVTX range. It profiles the baseline
+and each evaluated candidate, keeping `ncu.ncu-rep`, `details.txt` or an
+`error.json` for the next agent. Profiling uses the evaluator timeout within the
+run duration; it never contributes promotion latency. Optional profiling failures
+do not revoke a candidate's promotion. Privilege wrappers are explicit and run
+candidate code with those privileges; keep ordinary evaluation and agent turns
+under the normal user.
+
+The former `diagnostics.*` configuration is no longer accepted. Replace its NCU
+path with `profile_command` and remove the remaining mapping when creating a new
+task. There is no separate diagnostic report limit or native-reader step in the
+flow. Standalone CPU report analysis remains available through
+`benchmarks/kernel_tuning/ncu_analysis.py` and the pinned NCU skill submodule.
+See the [diagnostic contract](docs/proposals/0008-kernel-tuning.md#project-skills-and-diagnostic-feedback).
 
 See the [canonical design and implementation status](docs/proposals/0008-kernel-tuning.md).
 The [workflow guide](docs/proposals/0008-kernel-tuning.md#11-automated-tuning-workflow)

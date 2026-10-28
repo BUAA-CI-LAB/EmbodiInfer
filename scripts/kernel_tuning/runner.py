@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import signal
+import tempfile
+import time
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +35,39 @@ async def _kill_tree(process: asyncio.subprocess.Process) -> None:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
     await process.wait()
+
+
+@contextlib.asynccontextmanager
+async def device_lock(device: str, *, poll: float = 1.0) -> AsyncIterator[None]:
+    """Hold this machine's lock for ``device`` while one evaluator worker runs.
+
+    Runs started concurrently (``tune-all --parallel``) overlap only their agent turns:
+    every compile, check, timing round and profile has the device to itself. The lock
+    is a POSIX ``flock`` in the temporary directory, released when its holder exits.
+    """
+    if os.name == "nt":  # Production runs require POSIX; Windows CPU tests use one worker.
+        yield
+        return
+    import fcntl
+
+    path = Path(tempfile.gettempdir()) / f"kernel-tuning-{re.sub(r'[^A-Za-z0-9]+', '-', device)}.lock"
+    handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                await asyncio.sleep(poll)
+        yield
+    finally:
+        os.close(handle)
+
+
+def _last_line(log: Path, limit: int = 1000) -> str:
+    """The worker's final stderr line (its exception), so feedback names the failure itself."""
+    lines = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    return lines[-1].strip()[-limit:] if lines else "no stderr output"
 
 
 async def evaluate(
@@ -84,34 +121,43 @@ async def evaluate(
         "--output",
         str(response_path),
     ]
-    atomic_json(
-        output / "command.json",
-        {"argv": argv, "timeout_seconds": timeout or cfg.search.evaluation_timeout_seconds},
-    )
     process = None
     try:
-        with (output / "stdout.log").open("wb") as stdout, (output / "stderr.log").open("wb") as stderr:
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=output,
-                env=env,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=os.name != "nt",
+        waited = time.monotonic()
+        async with device_lock(cfg.device):
+            # The timeout starts once the device is ours; waiting is spent on the run budget.
+            atomic_json(
+                output / "command.json",
+                {
+                    "argv": argv,
+                    "timeout_seconds": timeout or cfg.search.evaluation_timeout_seconds,
+                    "device_lock_wait_seconds": round(time.monotonic() - waited, 3),
+                },
             )
-            try:
-                await asyncio.wait_for(
-                    process.wait(), timeout=timeout or cfg.search.evaluation_timeout_seconds
+            with (output / "stdout.log").open("wb") as stdout, (output / "stderr.log").open("wb") as stderr:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    cwd=output,
+                    env=env,
+                    stdout=stdout,
+                    stderr=stderr,
+                    start_new_session=os.name != "nt",
                 )
-            except BaseException:
-                await _kill_tree(process)
-                raise
+                try:
+                    await asyncio.wait_for(
+                        process.wait(), timeout=timeout or cfg.search.evaluation_timeout_seconds
+                    )
+                except BaseException:
+                    await _kill_tree(process)
+                    raise
         if process.returncode != 0:
             detail = ""
             with contextlib.suppress(OSError, ValueError, AttributeError):
                 error = read_json(response_path).get("error")
                 if isinstance(error, str):
                     detail = f": {error[:2000]}"
+            if not detail:
+                detail = ": " + _last_line(output / "stderr.log")
             raise ContractError(
                 f"Evaluator failed (exit {process.returncode}){detail}; see {output / 'stderr.log'}"
             )

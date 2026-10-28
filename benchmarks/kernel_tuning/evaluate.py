@@ -88,8 +88,17 @@ def execute(request: dict[str, Any], output: Path) -> dict[str, Any]:
     return response
 
 
+def profile_once(task_dir: Path, candidate: Path) -> None:
+    """NCU worker started by an adapter's ``profile``: one profiled call, no evidence written."""
+    adapter = load_adapter(TaskPackage.load(task_dir))
+    adapter.profile_once(read_json(candidate))
+
+
 def main() -> int:
     """Emit structured results only after successful measurement; errors exit nonzero."""
+    if len(sys.argv) == 4 and sys.argv[1] == "--profile-once":
+        profile_once(Path(sys.argv[2]), Path(sys.argv[3]))
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
