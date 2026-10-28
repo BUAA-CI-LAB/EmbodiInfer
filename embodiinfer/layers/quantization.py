@@ -93,3 +93,6 @@ projection_backends.register_lazy(
     "torch_matmul", "embodiinfer.backend.torch.projection", "CalibratedMatmulBackend"
 )
 projection_backends.register_lazy("cublaslt", "embodiinfer.backend.cuda.cublaslt", "CublasLtBackend")
+projection_backends.register_lazy(
+    "flashinfer_cublaslt", "embodiinfer.backend.flashinfer.projection", "FlashInferCublasLtBackend"
+)

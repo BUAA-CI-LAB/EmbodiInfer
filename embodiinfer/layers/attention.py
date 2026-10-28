@@ -14,7 +14,7 @@ Contract (``attend``):
                 head count and need not materialize the expansion themselves.
     attn_mask : additive float mask broadcastable to ``[B, 1, seq_q, seq_k]``, or
                 ``None``. Specialized backends document and reject unsupported
-                masks: query-major takes Boolean validity masks, folded Flash
+                masks: query-major/FlashInfer take Boolean validity masks, folded Flash
                 takes ``None`` only.
     scaling   : softmax scale; ``None`` -> ``head_dim ** -0.5`` (SDPA default)
     returns   : ``[B, num_heads, seq_q, head_dim]`` (the caller transposes /
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import difflib
 import importlib
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 import torch
@@ -76,6 +77,23 @@ class SplitKVAttentionBackend(AttentionBackend, Protocol):
         values must fail rather than silently fall back. A changed reduction
         order requires workload-specific numerical validation.
         """
+        ...
+
+
+@runtime_checkable
+class ScopedAttentionBackend(AttentionBackend, Protocol):
+    """Optional lifecycle for backends retaining graph-specific scratch and outputs."""
+
+    def bind_workspace_key(self, workspace_key: Callable[[torch.device], tuple[str, int]]) -> None:
+        """Bind graph/stream ownership before any plans are warmed."""
+        ...
+
+    def release_scope(self, scope: tuple[str, int]) -> None:
+        """Release storage after the scope's graph and CUDA work have completed."""
+        ...
+
+    def clear(self) -> None:
+        """Release all plans after every referencing graph has been destroyed."""
         ...
 
 
@@ -172,6 +190,9 @@ register_lazy_attention(
     "EagerBroadcastAttention",
 )
 register_lazy_attention("sdpa", "embodiinfer.backend.torch.attention", "SDPAAttention")
+register_lazy_attention(
+    "flashinfer_fa2", "embodiinfer.backend.flashinfer.attention", "FlashInferFA2Attention"
+)
 register_lazy_attention("flex", "embodiinfer.backend.torch.attention", "FlexAttention")
 register_lazy_attention(
     "triton_segmented",

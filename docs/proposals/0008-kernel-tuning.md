@@ -295,11 +295,16 @@ then resolves a cached callable. `kernel_profile` supports:
 |---|---|
 | `none` (default) | Preserve existing Torch/Triton preferences |
 | `torch` | Force registered operators to their Torch references |
+| `flashinfer` | Built-in profile selecting the integrated Pi05 FA2 attention, Gemma RMSNorm and BF16 cuBLASLt projection backends; other operators keep their existing implementations |
 | `auto` | Select a profile matching device/capability/Torch/Triton, otherwise use `none` |
 | Explicit name | Select that profile; a missing or incompatible profile raises |
 
-Only operators present in a profile are overridden. Profile loading verifies
-source digests. Backend modules remain pure tensor code with no engine/policy
+Only operators present in a profile are overridden. Tuned profile loading verifies
+source digests. The built-in `flashinfer` profile resolves prepared backend names
+through `KernelSelection.resolve_backend`; it is not an installed tuning artifact
+and is never selected by `auto`. Its contracts are maintained in the
+[fused operator proposal](0008-pi05-fused-operators.md).
+Backend modules remain pure tensor code with no engine/policy
 imports. Registration and profile loading are runtime contracts; search is
 repository tooling.
 

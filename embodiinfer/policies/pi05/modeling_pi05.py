@@ -61,6 +61,7 @@ from .embeddings import (
     time_embedding,
 )
 from .inference import Pi05OptimizationConfig
+from .inference.config import _resolve_kernel_profile
 from .processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
@@ -504,6 +505,17 @@ class Pi05Policy(FlowVLAPolicy):
         tensor_parallel_group=None,
     ):
         super().__init__(config)
+        if not isinstance(kernel_profile, str):
+            raise TypeError(
+                "PI0.5 kernel_profile must be a profile name, 'flashinfer', 'auto', 'torch' or 'none'"
+            )
+        optimizations = _resolve_kernel_profile(kernel_profile, optimizations)
+        if kernel_profile == "flashinfer":
+            native_inference = True
+            native_embeddings = native_embeddings or optimizations.numerics == "openpi_rlinf"
+            # Prepared FA2 owns both Gemma attention stages. Keep the ordinary
+            # SDPA reference available and bypass the separate Triton shortcuts.
+            attention = denoise_attention = prefix_attention = "sdpa"
         if optimizations is not None:
             if not isinstance(optimizations, Pi05OptimizationConfig):
                 raise TypeError("optimizations must be a Pi05OptimizationConfig")
@@ -544,8 +556,6 @@ class Pi05Policy(FlowVLAPolicy):
         self.request_cuda_graph = request_cuda_graph
         self.denoise_attention = denoise_attention
         self.prefix_attention = prefix_attention
-        if not isinstance(kernel_profile, str):
-            raise TypeError("PI0.5 kernel_profile must be a profile name, 'auto', 'torch' or 'none'")
         self.kernel_profile = kernel_profile
         self._kernel_selection: KernelSelection | None = None
         self.attention = attention
@@ -740,6 +750,10 @@ class Pi05Policy(FlowVLAPolicy):
         if config is None:
             return None
         if not self._native_enabled():
+            if getattr(self, "kernel_profile", "none") == "flashinfer":
+                raise RuntimeError(
+                    "kernel_profile='flashinfer' requires CUDA native inference in eval/no-grad mode"
+                )
             if config.numerics == "openpi_rlinf":
                 raise RuntimeError("openpi_rlinf numerics require CUDA native inference in eval/no-grad mode")
             return None
@@ -1413,7 +1427,7 @@ def _build_pi05(
     quantization: str | Mapping[str, Any] | QuantizationConfig | None = None,
     **overrides,
 ) -> VLAPolicy:
-    """Build Pi05, expanding deployment presets into their required policy options."""
+    """Build Pi05 with preset options or one-click ``kernel_profile='flashinfer'``."""
     if checkpoint is None:
         raise ValueError("pi0.5 needs a checkpoint, e.g. make_policy('pi05', checkpoint='lerobot/pi05_base')")
     if preset is not None:
@@ -1434,6 +1448,11 @@ def _build_pi05(
                 if key in overrides and overrides[key] != 10:
                     raise ValueError(f"Optimized Pi05 presets require {key}=10")
                 overrides.setdefault(key, 10)
+    # Resolve after preset scheduling so changing a kernel profile does not
+    # change a preset's horizon or denoise-step contract.
+    optimizations = _resolve_kernel_profile(kernel_profile, optimizations)
+    if kernel_profile == "flashinfer":
+        native_inference = True
     if prefix_cuda_graph is None:
         prefix_cuda_graph = optimizations is not None
     tensor_parallel_size = overrides.pop("tensor_parallel_size", 1)

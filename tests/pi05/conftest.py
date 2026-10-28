@@ -57,7 +57,15 @@ class _TinyTower(torch.nn.Module):
 def make_pi05_policy():
     policies = []
 
-    def build(config=None, *, device="cuda"):
+    def build(
+        config=None,
+        *,
+        device="cuda",
+        kernel_profile="none",
+        native_inference=True,
+        prefix_attention="sdpa",
+        denoise_attention="sdpa",
+    ):
         class TinyPolicy(Pi05Policy):
             def _embed_image(self, image):
                 return image.mean((1, 2, 3))[:, None, None].expand(-1, 3, 64).contiguous().bfloat16()
@@ -79,10 +87,13 @@ def make_pi05_policy():
             TinyPolicy(
                 VLAPolicyConfig(action_horizon=10, action_dim=8),
                 loaded,
-                native_inference=True,
+                native_inference=native_inference,
                 native_embeddings=True,
                 prefix_cuda_graph=True,
                 optimizations=config,
+                kernel_profile=kernel_profile,
+                prefix_attention=prefix_attention,
+                denoise_attention=denoise_attention,
             )
             .eval()
             .to(device)
