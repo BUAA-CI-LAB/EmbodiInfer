@@ -19,6 +19,31 @@ _RESPONSE_PREFIX = "<|im_start|>assistant\n"
 _ACTION_SYMBOLS = ("STOP", "\u2191", "\u2190", "\u2192")
 
 
+def make_streamvln_observation(
+    image: torch.Tensor, instruction: str, *, uint8: bool = False, metadata: dict | None = None
+) -> Observation:
+    """Create a policy-local CHW RGB observation, optionally retaining byte storage.
+
+    Generic Observation retains its existing float contract. This explicit
+    StreamVLN adapter avoids a CPU float conversion before GPU preprocessing.
+    """
+    if image.ndim != 3 or image.shape[0] != 3:
+        raise ValueError("StreamVLN observation helper requires CHW RGB")
+    if uint8 and image.dtype != torch.uint8:
+        raise ValueError("uint8 observations require byte RGB inputs")
+    pixels = torch.empty(0) if uint8 else image.float().div(255) if image.dtype == torch.uint8 else image
+    result = Observation(
+        images=pixels,
+        state=torch.empty(0),
+        instruction_tokens=torch.empty(0, dtype=torch.long),
+        instruction=instruction,
+        metadata=metadata or {},
+    )
+    if uint8:
+        result.images = image.unsqueeze(0)
+    return result
+
+
 @dataclass
 class StreamVLNBatch:
     observations: list[Observation]
@@ -56,6 +81,7 @@ class StreamVLNProcessor:
         window_size: int = 32,
         num_history: int = 8,
         vision_phrase: str = VISION_PHRASE,
+        gpu_preprocess: bool = False,
     ) -> None:
         if window_size <= 0 or num_history <= 0 or window_size < num_history:
             raise ValueError("invalid StreamVLN SlowFast profile")
@@ -64,6 +90,11 @@ class StreamVLNProcessor:
         self.window_size = window_size
         self.num_history = num_history
         self.vision_phrase = vision_phrase
+        self.gpu_image_transform = None
+        if gpu_preprocess:
+            from .image_gpu import StreamVLNImageTransform
+
+            self.gpu_image_transform = StreamVLNImageTransform(image_processor)
         self.response_prefix_ids = tuple(
             int(token_id) for token_id in tokenize_multimodal_prompt(_RESPONSE_PREFIX, tokenizer).tolist()
         )
@@ -103,9 +134,15 @@ class StreamVLNProcessor:
             raise RuntimeError("StreamVLN slow-memory stride must be positive")
         return tuple(range(0, step_id, stride))[: self.num_history]
 
-    def _preprocess(self, frame: torch.Tensor) -> torch.Tensor:
+    def _preprocess(self, frame: torch.Tensor, *, device: torch.device | None = None) -> torch.Tensor:
+        if self.gpu_image_transform is not None:
+            if device is None or device.type != "cuda":
+                raise ValueError("gpu_preprocess requires a CUDA policy")
+            return self.gpu_image_transform(frame, device=device)
         if frame.ndim != 3 or frame.shape[0] != 3:
             raise ValueError(f"StreamVLN expects CHW RGB frames, got {tuple(frame.shape)}")
+        if frame.dtype == torch.uint8:
+            frame = frame.float().div(255)
         frame = frame.detach().float().cpu()
         if not bool(torch.isfinite(frame).all()):
             raise ValueError("StreamVLN frame contains non-finite values")
@@ -115,13 +152,13 @@ class StreamVLNProcessor:
         pixels = values["pixel_values"][0]
         return pixels.pin_memory() if torch.cuda.is_available() else pixels
 
-    def _preprocess_cached(self, frame: torch.Tensor) -> torch.Tensor:
+    def _preprocess_cached(self, frame: torch.Tensor, *, device: torch.device | None = None) -> torch.Tensor:
         key = id(frame)
         cached = self._pixel_cache.get(key)
-        if cached is not None and cached[0]() is frame:
+        if cached is not None and cached[0]() is frame and (device is None or cached[1].device == device):
             return cached[1]
 
-        pixels = self._preprocess(frame)
+        pixels = self._preprocess(frame, device=device)
 
         def discard(_reference, *, cache_key=key) -> None:
             self._pixel_cache.pop(cache_key, None)
@@ -136,11 +173,16 @@ class StreamVLNProcessor:
         *,
         step_id: int,
         frame_bank: tuple[torch.Tensor, ...] | None = None,
+        device: torch.device | None = None,
+        window_start: bool | None = None,
     ) -> StreamVLNInputs:
         if frame_bank is not None and len(frame_bank) != step_id + 1:
             raise ValueError("StreamVLN requires one committed frame per streaming step")
-        slow_indices = self.slow_frame_indices(step_id)
-        window_start = step_id % self.window_size == 0
+        window_start = step_id % self.window_size == 0 if window_start is None else window_start
+        # A variable-length action chunk can cross a reset boundary. Start the
+        # next inference with that boundary's slow-memory selection.
+        boundary = step_id // self.window_size * self.window_size
+        slow_indices = self.slow_frame_indices(boundary) if window_start else ()
         prompt = render_streamvln_prompt(
             instruction,
             window_start=window_start,
@@ -160,13 +202,13 @@ class StreamVLNProcessor:
             raise ValueError("invalid StreamVLN multimodal prompt sentinels")
         image_position = int(image_matches[0])
         memory_position = int(memory_matches[0]) if memory_matches.numel() else None
-        current_pixels = self._preprocess_cached(current).unsqueeze(0)
+        current_pixels = self._preprocess_cached(current, device=device).unsqueeze(0)
         memory_pixels = None
         if slow_indices and frame_bank is not None:
             memory_pixels = torch.stack(
-                [self._preprocess_cached(frame_bank[index]) for index in slow_indices]
+                [self._preprocess_cached(frame_bank[index], device=device) for index in slow_indices]
             )
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and not memory_pixels.is_cuda:
                 memory_pixels = memory_pixels.pin_memory()
         return StreamVLNInputs(
             input_ids=input_ids,

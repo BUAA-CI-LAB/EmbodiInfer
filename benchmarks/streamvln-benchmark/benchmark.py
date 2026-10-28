@@ -28,7 +28,7 @@ from PIL import Image
 
 import embodiinfer
 from embodiinfer.policies import make_policy
-from embodiinfer.types import Observation
+from embodiinfer.policies.streamvln.processing import make_streamvln_observation
 
 ROOT = Path(embodiinfer.__file__).resolve().parent.parent
 
@@ -385,12 +385,26 @@ def main() -> None:
     policy = make_policy(
         "streamvln",
         checkpoint=config["checkpoint"],
+        load_device=config.get("load_device", str(device)),
+        max_context=config.get("max_context", 32768),
         dtype=config["dtype"],
         cuda_graph=config["cuda_graph"],
         max_new_tokens=config["max_new_tokens"],
         decode_block_size=config["decode_block_size"],
         cache_history_features=config["history_feature_cache"],
         fast_action_decode=config["fast_action_decode"],
+        speculative_tokens=config.get("speculative_tokens", 0),
+        gpu_preprocess=config.get("gpu_preprocess", False),
+        gpu_history_features=config.get("gpu_history_features", False),
+        tree_decode=config.get("tree_decode", False),
+        tree_budget=config.get("tree_budget", 31),
+        tree_refresh=config.get("tree_refresh", 64),
+        fused_ops=config.get("fused_ops", False),
+        split_attention=config.get("split_attention", False),
+        attention_kernel=config.get("attention_kernel", "gqa"),
+        decode_linear=config.get("decode_linear", False),
+        tree_fp32_projection=config.get("tree_fp32_projection", False),
+        vision_kernel=config.get("vision_kernel", "hf"),
     )
     policy.to(device).eval()
     load_seconds = time.perf_counter() - started
@@ -402,11 +416,10 @@ def main() -> None:
 
     def infer(rgb: np.ndarray, instruction: str, sample_id: str) -> dict[str, Any]:
         nonlocal memory
-        observation = Observation(
-            images=torch.from_numpy(rgb).permute(2, 0, 1).float().div_(255),
-            state=torch.empty(0),
-            instruction_tokens=torch.empty(0, dtype=torch.long),
-            instruction=instruction,
+        observation = make_streamvln_observation(
+            torch.from_numpy(rgb).permute(2, 0, 1),
+            instruction,
+            uint8=config.get("uint8_observations", False),
         )
         batch = policy.collate([observation], [sample_id])
         prepared = policy.prepare_prefix(batch, memory)

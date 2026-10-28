@@ -26,6 +26,7 @@ if triton is not None:
         scale,
         stride_q_batch,
         stride_q_head,
+        stride_q_token,
         stride_q_dim,
         stride_k_batch,
         stride_k_head,
@@ -37,6 +38,7 @@ if triton is not None:
         stride_v_dim,
         stride_o_batch,
         stride_o_head,
+        stride_o_token,
         stride_o_dim,
         NUM_QUERY_HEADS: tl.constexpr,
         NUM_KV_HEADS: tl.constexpr,
@@ -46,11 +48,16 @@ if triton is not None:
         program = tl.program_id(0)
         batch = program // NUM_QUERY_HEADS
         query_head = program % NUM_QUERY_HEADS
+        query_token = tl.program_id(1)
         kv_head = query_head // (NUM_QUERY_HEADS // NUM_KV_HEADS)
-        context_length = tl.load(position) + 1
+        context_length = tl.load(position) + query_token + 1
         offsets_d = tl.arange(0, HEAD_DIM)
         query = tl.load(
-            queries + batch * stride_q_batch + query_head * stride_q_head + offsets_d * stride_q_dim
+            queries
+            + batch * stride_q_batch
+            + query_head * stride_q_head
+            + query_token * stride_q_token
+            + offsets_d * stride_q_dim
         ).to(tl.float32)
         maximum = -float("inf")
         denominator = 0.0
@@ -90,7 +97,11 @@ if triton is not None:
             maximum = next_maximum
 
         tl.store(
-            output + batch * stride_o_batch + query_head * stride_o_head + offsets_d * stride_o_dim,
+            output
+            + batch * stride_o_batch
+            + query_head * stride_o_head
+            + query_token * stride_o_token
+            + offsets_d * stride_o_dim,
             accumulator / denominator,
         )
 
@@ -105,18 +116,37 @@ def gqa_decode_graph(
     value_cache: torch.Tensor,
     position: torch.Tensor,
 ) -> torch.Tensor:
+    if queries.ndim != 4 or queries.shape[-2] != 1:
+        raise ValueError("decode attention requires one query token")
+    return gqa_verify_graph(queries, key_cache, value_cache, position)
+
+
+def gqa_verify_graph(
+    queries: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    position: torch.Tensor,
+) -> torch.Tensor:
+    """Causal multi-query GQA using the serial decoder's per-row FP32 reduction.
+
+    Query ``i`` sees cache positions through ``position + i``. Each row uses
+    the same 64-key tiles and reduction as single-token graph decoding, without
+    rounding attention probabilities to BF16. Callers supply populated K/V and
+    keep every visible position within cache capacity.
+    """
     if (
         not graph_gqa_available()
         or queries.dtype != torch.bfloat16
         or queries.ndim != 4
-        or queries.shape[-2:] != (1, 128)
+        or queries.shape[-1] != 128
+        or queries.shape[-2] < 1
         or key_cache.shape != value_cache.shape
         or position.numel() != 1
     ):
         raise ValueError("unsupported input for VVLA graph GQA decode")
     output = torch.empty(queries.shape, dtype=queries.dtype, device=queries.device)
     batch_size, num_query_heads, _, head_dim = queries.shape
-    _gqa_decode_graph_kernel[(batch_size * num_query_heads,)](
+    _gqa_decode_graph_kernel[(batch_size * num_query_heads, queries.shape[-2])](
         queries,
         key_cache,
         value_cache,
@@ -125,6 +155,7 @@ def gqa_decode_graph(
         1.0 / math.sqrt(head_dim),
         queries.stride(0),
         queries.stride(1),
+        queries.stride(2),
         queries.stride(3),
         key_cache.stride(0),
         key_cache.stride(1),
@@ -136,6 +167,7 @@ def gqa_decode_graph(
         value_cache.stride(3),
         output.stride(0),
         output.stride(1),
+        output.stride(2),
         output.stride(3),
         NUM_QUERY_HEADS=num_query_heads,
         NUM_KV_HEADS=key_cache.shape[1],
@@ -146,4 +178,4 @@ def gqa_decode_graph(
     return output
 
 
-__all__ = ["gqa_decode_graph", "graph_gqa_available"]
+__all__ = ["gqa_decode_graph", "gqa_verify_graph", "graph_gqa_available"]

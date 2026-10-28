@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch.nn import functional as F
 
+_ACTIVATION_WORKSPACE_BYTES = 16 * 1024**2
+
 
 def quantize_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Return transposed INT8 weights and per-output-channel FP32 scales."""
@@ -17,9 +19,30 @@ def quantize_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 def _quantize_activation_per_row(inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     rows = inputs.reshape(-1, inputs.shape[-1])
-    maximum = rows.float().abs().amax(dim=1, keepdim=True)
+    # Extrema commute with an exact FP16/BF16-to-FP32 cast. Reduce before
+    # widening, so long prefill rows do not materialize two FP32 copies just
+    # to compute absmax. Keep an owned buffer for the in-place quantization;
+    # callers may pass FP32 input or a view of committed/graph-owned storage.
+    high = rows.amax(dim=1, keepdim=True).float()
+    low = rows.amin(dim=1, keepdim=True).float()
+    maximum = torch.maximum(high, -low)
     scale = torch.where(maximum > 0, maximum / 127.0, torch.ones_like(maximum))
-    quantized = (rows / scale).round().clamp(-127, 127).to(torch.int8)
+    working_dtype = torch.promote_types(rows.dtype, torch.float32)
+    row_bytes = rows.shape[1] * (8 if working_dtype == torch.float64 else 4)
+    chunk_rows = max(1, _ACTIVATION_WORKSPACE_BYTES // row_bytes)
+    if rows.shape[0] <= chunk_rows:
+        working = rows.to(dtype=working_dtype, copy=True)
+        quantized = working.div_(scale).round_().clamp_(-127, 127).to(torch.int8)
+    else:
+        # Chunk only the independent elementwise conversion. The final INT8
+        # matrix and GEMM shape are unchanged, including accumulation order.
+        quantized = torch.empty_like(rows, dtype=torch.int8)
+        for start in range(0, rows.shape[0], chunk_rows):
+            end = start + chunk_rows
+            working = rows[start:end].to(dtype=working_dtype, copy=True)
+            working.div_(scale[start:end]).round_().clamp_(-127, 127)
+            quantized[start:end].copy_(working)
+            del working
     return quantized, scale
 
 

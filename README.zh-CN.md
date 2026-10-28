@@ -99,6 +99,11 @@
 更多结果：[导航与世界动作模型](docs/zh/benchmark.md)、[π0.5 量化](benchmarks/pi05-quant-benchmark/README.md)、
 [StreamVLN 量化](benchmarks/streamvln-quant-benchmark/README.md)、[多 GPU](docs/zh/parallelism.md)。
 
+[ActiveVLN 的 EmbodiInfer/vLLM 对比](benchmarks/activevln-benchmark/README.md#feature-matched-embodiinfer-and-vllm-comparison)
+覆盖 R2R/RxR、batch=1/2/4，分别列出 E2E、完整 forward 与均摊耗时。
+闭环导航结果按 [RTX 4090](benchmarks/activevln-benchmark/rtx-4090/README.md) 和
+[Orin NX](benchmarks/activevln-benchmark/orin-nx/README.md) 整理。
+
 ## 支持的模型
 
 ✓ **已实现** · ◐ **实验性** · ○ **计划支持**
