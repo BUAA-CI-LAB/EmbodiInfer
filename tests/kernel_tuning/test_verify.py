@@ -9,6 +9,56 @@ from scripts.kernel_tuning.contracts import ContractError
 from scripts.kernel_tuning.verify import flatten_outputs, gate
 
 
+def test_model_report_binds_inputs_and_installed_profile(tmp_path, monkeypatch):
+    from scripts.kernel_tuning import verify
+    from scripts.kernel_tuning.artifacts import artifact_fingerprint
+    from scripts.kernel_tuning.discovery import drive
+
+    from embodiinfer.backend.triton import tuned
+
+    inputs = tmp_path / "inputs.pt"
+    inputs.write_bytes(b"fixed observations")
+    profiles = tmp_path / "profiles"
+    (profiles / "candidate").mkdir(parents=True)
+    (profiles / "candidate/profile.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(tuned, "PROFILE_ROOT", profiles)
+    monkeypatch.setattr(drive, "load_inputs", lambda _: ("observations", [[object()]]))
+    monkeypatch.setattr(verify, "_run", lambda *args: [_out([1.0, 2.0])])
+    report = verify.run("candidate", tmp_path / "report.json", ["--policy", "pi05", "--inputs", str(inputs)])
+    assert report["passed"]
+    assert report["input_fingerprint"] == artifact_fingerprint(inputs)
+    assert report["profile_fingerprint"] == artifact_fingerprint(profiles / "candidate")
+
+
+@pytest.mark.parametrize("changed", ["inputs", "profile"])
+def test_model_verification_rejects_inputs_or_sources_changed_during_execution(
+    tmp_path, monkeypatch, changed
+):
+    from scripts.kernel_tuning import verify
+    from scripts.kernel_tuning.discovery import drive
+
+    from embodiinfer.backend.triton import tuned
+
+    inputs = tmp_path / "inputs.pt"
+    inputs.write_bytes(b"fixed observations")
+    profiles = tmp_path / "profiles"
+    (profiles / "candidate").mkdir(parents=True)
+    manifest = profiles / "candidate/profile.json"
+    manifest.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(tuned, "PROFILE_ROOT", profiles)
+    monkeypatch.setattr(drive, "load_inputs", lambda _: ("observations", [[object()]]))
+
+    def run(*args):
+        (inputs if changed == "inputs" else manifest).write_bytes(b"changed")
+        return [_out([1.0, 2.0])]
+
+    monkeypatch.setattr(verify, "_run", run)
+    output = tmp_path / "report.json"
+    with pytest.raises(ContractError, match="changed during model execution"):
+        verify.run("candidate", output, ["--policy", "pi05", "--inputs", str(inputs)])
+    assert not output.exists()
+
+
 @dataclass
 class _Action:
     kind: str

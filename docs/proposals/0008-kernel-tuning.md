@@ -28,7 +28,7 @@ has no tuning scheduler or model-name branches.
 | Stage | Current entry point | Current scope |
 |---|---|---|
 | Profile | `profile --output DIR -- DRIVER` | GPU attribution by stage, registry operator, attention backend and module |
-| Select | Read `hotspots.md` and choose operators | Manual; automatic selection and fusion planning are future work |
+| Select | `select HOTSPOTS --output PLAN` | Aggregate registered operators and rank GPU-time opportunity, optionally using measured lower bounds |
 | Register | `register new/run/resume/status/finalize` | Agent-assisted registration of one caller-selected operator; pi0.5 routing convention |
 | Capture | `capture-ops --model MODEL --ops OPS ...` | Real arguments and counts of selected registered operators, in eager mode |
 | Calibrate | `calibrate --captured DIR --output NEW_DIR` | Freeze supported numerical contracts before search |
@@ -37,10 +37,11 @@ has no tuning scheduler or model-name branches.
 | Verify | `verify --profile NAME --output REPORT -- DRIVER_ARGS` | Whole-model FP32-reference/production-Torch/candidate comparison |
 | Benchmark | Existing model benchmark scripts | Production end-to-end latency; separate configurations for each comparison row |
 
-There is **no `optimize`, `select`, or `benchmark` subcommand** in
-`scripts.kernel_tuning` today. The stages are invoked separately. `tune-all`
-resumes search batches, and `register resume` resumes registration; neither
-resumes the entire end-to-end workflow. pi0.5 is the current integrated policy.
+`optimize CONFIG --output DIR` executes explicit stage commands and retains
+frozen-input and output receipts; `optimize --resume DIR` continues intact stages.
+`tune-all` resumes search batches, and `register resume` resumes registration.
+Formal measurement still uses existing benchmark programs; there is no generic
+`benchmark` subcommand. pi0.5 is the current integrated policy.
 Qwen R2R/StreamVLN registry integration and committed hardware profiles remain
 outstanding; their discovery/catalog support does not imply profile support.
 
@@ -60,8 +61,8 @@ the policy on every tuning run.
 
 Current boundaries are visible in `scripts/kernel_tuning/__main__.py` (commands),
 `regions.py` (registry capture), `install.py` (accepted exports), and
-`hotspots.py` (attribution). The remaining gap is automated region selection,
-new fusion integration, shape-range coverage and orchestration across stages.
+`hotspots.py` (attribution). The remaining gap is agent-guided fusion selection,
+new fusion integration, shape-range coverage and empirically calibrated roofline models.
 
 ## 3. Goals and non-goals
 
@@ -380,6 +381,39 @@ whole-model parity each have distinct reference paths and evidence.
 
 ## 7. Implementation status and remaining design
 
+### Diagnostic feedback and workflow completion
+
+The tooling extension keeps the numerical contract and engine unchanged.
+It provides replay-aware, evaluator-owned NCU collection for each workload, copies
+structured diagnostics into the next agent workspace, and retains a compact
+history of all attempts. Optional hardware notes remain frozen task inputs;
+hardware observations must identify their source and must not invent measured
+bandwidth or device-specific winning configurations. Search can require a
+minimum number of attempts before patience stops it, within the existing hard
+time/candidate limits.
+
+Selection consumes a production hotspot report and writes a reviewable plan.
+Registered operators are aggregated across stages; unresolved regions remain
+registration/fusion investigations. Kernel-time shares are explicitly not
+end-to-end savings. Optional user-supplied measured lower bounds can prioritize
+recoverable time without assuming theoretical peak bandwidth is achievable.
+
+A resumable workflow records explicit argv commands and artifact digests for
+the existing profile/capture/calibrate/tune/install/verify/benchmark programs.
+Verification failure blocks benchmarking and completion. Resume checks completed
+evidence and frozen inputs instead of silently rerunning a successful stage.
+Interrupted stages require explicit recovery when they left partial artifacts.
+This is developer tooling, not inference scheduling or deployment orchestration.
+The alternative of permitting agents to run unrestricted GPU experiments was
+rejected: compiler/profiler execution stays in the target runtime, outside the
+agent session, and promotion timing stays separate from profiling.
+
+CPU tests cover replay profiling dispatch, CSV diagnostics, evidence
+tampering, selection accounting, patience, workflow failure/resume and numerical
+gate blocking. GPU/checkpoint measurements on each target are still required;
+these extensions do not establish Jetson speedups or implement automatic
+cross-operator fusion.
+
 Implemented components are the Humanize2 Flow/archive, discovery and registry
 capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
 loader, install, model verification, the CPU registration controller, and an
@@ -390,18 +424,19 @@ it is used only when selected by name or by `auto` on matching hardware.
 
 Remaining work from the merged design:
 
-1. Rank recoverable latency using measured bandwidth/compute/launch floors,
-   rather than GPU time alone; detect adjacent memory-bound fusion candidates.
-2. Add an agent selection flow producing a reviewable `plan.json` (proposed
-   default: at most five regions and a 1% end-to-end contribution threshold).
-   These are design targets, not currently enforced CLI options.
+1. Automatically calibrate bandwidth/compute/launch floors and detect adjacent
+   memory-bound fusion candidates. `select --floors` accepts explicit measured
+   bounds today; without them it reports zero-floor upper bounds.
+2. Add agent-guided fusion planning and dependency analysis. `select` currently
+   defaults to at most five operators and a 1% summed-kernel-time share, not an
+   end-to-end contribution threshold.
 3. Integrate new fused Torch regions through reviewed, bit-exact code changes;
    extend registry use to Qwen R2R and StreamVLN.
 4. Cover declared shape ranges, batches and layouts instead of only captured
    signatures; validate fallback and dispatch coverage.
-5. Add a resumable cross-stage `optimize` orchestrator and bind model verification,
-   evaluation-set identity and benchmark evidence into profile provenance.
-   Today these artifacts must be retained together by the operator.
+5. Extend the explicit-command `optimize` receipts into runtime profile provenance
+   and add model-specific convenience recipes. Workflow receipts already retain
+   verification, declared evaluation inputs and benchmark evidence together.
 
 The proposed roofline bound is `max(bytes / measured bandwidth, FLOPs / measured
 peak)`; recoverable time subtracts the larger of that bound and launch floors.
@@ -631,8 +666,24 @@ steps and a full-loop CUDA Graph. The compile and attention settings in
   --inputs results/kernel_tuning/pi05-inputs.pt
 ```
 
-Read `hotspots.md` and manually select registered operators with room for
-improvement. The commands below use `gated_residual` as an example; this does not
+Generate and inspect a selection plan:
+
+```bash
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning select \
+  results/kernel_tuning/profile-pi05/hotspots.json \
+  --output results/kernel_tuning/plan.json --limit 5 --min-share 0.01
+```
+
+`select` aggregates each registered operator across stages. `--min-share` is a
+share of summed GPU kernel time, not model wall time. Without `--floors` the
+reported recoverable time is an upper bound with a zero floor. Optional floors
+are a JSON mapping such as `{"linear": {"lower_bound_us_per_step": 100,
+"source": "/absolute/measured-bound.json"}}`; each bound must identify its
+measurement source and not exceed observed operator time. Unregistered regions
+remain explicit investigations. `capture-ops --plan .../plan.json` consumes the
+selected operator names; `--plan` and `--ops` are mutually exclusive.
+
+The commands below use `gated_residual` as an example; this does not
 imply that it is a worthwhile tuning target. For an unregistered operator, follow
 the [registration guide](../../scripts/kernel_tuning/registration/README.md),
 complete code review and CPU checks, and verify whole-model bit-exact parity on
@@ -746,6 +797,155 @@ establish end-to-end gains. Installation, committing and enabling a profile by
 default are separate actions. Keep raw experiment data in the results directory
 and formal reports under `benchmarks/`; keep run logs out of `docs/`.
 
+### 11.7 Hardware context, diagnostic search and workflow receipts
+
+Query the target rather than copying B300 settings to a Jetson:
+
+```bash
+/absolute/runtime/python -m scripts.kernel_tuning hardware --output results/kernel_tuning/hardware
+```
+
+The bundle contains `hardware.json` and `HARDWARE.md`. If Torch is absent or
+CPU-only, the command can query the CUDA Driver API; this does not establish
+model-runtime readiness. Device facts and hypotheses are labelled separately.
+Power mode is read with `nvpmodel -q` when available; clocks are not changed.
+Use `--hardware-notes .../hardware/HARDWARE.md` when generating/tuning tasks and
+append measured bandwidth/launch floors and experiment sources before generation.
+The agent also receives evaluator-derived hardware context on every attempt.
+
+For searches that need more exploration, set `search.max_candidates`,
+`search.min_candidates`, `search.patience`, `search.max_seconds` and
+`search.feedback_candidates` before task generation. For example,
+`--set search.max_candidates=40 --set search.min_candidates=10` delays patience
+without increasing the hard time limit. Every attempt remains counted, including
+compilation failures. `history.json` holds all prior decisions while the bounded
+recent-source window defaults to four attempts.
+
+`--set profile=true` enables evaluator-owned NCU diagnostics for every workload
+and comparison role. The worker builds/warms before enabling profiling, then
+profiles one eager call through the actual task adapter, rematerializing input
+storage and resetting declared RNG. Raw reports, full CSV and SASS are retained;
+selected counters and a bounded assembly excerpt reach the next planning turn.
+Unavailable counters remain unavailable. The NCU command uses `--set full` and
+does not change clocks; profiler permissions/support are target prerequisites.
+Profiling perturbs execution and is never promotion timing. Its errors become
+diagnostic feedback, preserving the independent correctness/performance decision.
+See the [NCU CLI reference](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html).
+
+`optimize` executes an explicit JSON stage plan rather than guessing checkpoint
+paths, credentials or benchmark settings. It writes `workflow.json`, per-attempt
+commands/logs, frozen input fingerprints and completed output receipts. Example
+configuration (replace all `/absolute` paths and the agent; benchmark YAMLs must
+write to their declared report paths):
+
+```json
+{
+  "schema": 1,
+  "profile": "my_gpu",
+  "verification_input": "observations",
+  "profile_artifact": "{repo}/embodiinfer/backend/triton/tuned/{profile}",
+  "inputs": {
+    "observations": "/absolute/pi05-inputs.pt",
+    "serving": "/absolute/pi05-serving.json",
+    "eager": "/absolute/pi05-eager.json",
+    "bench_none": "/absolute/bench-none.yaml",
+    "bench_candidate": "/absolute/bench-candidate.yaml",
+    "checkpoint_manifest": "/absolute/checkpoint-manifest.json"
+  },
+  "stages": [
+    {
+      "name": "hardware", "kind": "hardware",
+      "argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "hardware", "--output", "{run}/hardware"],
+      "artifacts": ["hardware"]
+    },
+    {
+      "name": "profile", "kind": "profile",
+      "argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "profile", "--output", "{run}/hotspots", "--", "-m", "scripts.kernel_tuning.discovery.drive", "--policy", "pi05", "--checkpoint", "/absolute/checkpoint", "--adapter-config", "{input_serving}", "--inputs", "{input_observations}", "--dtype", "bfloat16", "--num-steps", "10", "--capture-full-loop"],
+      "artifacts": ["hotspots/hotspots.json"]
+    },
+    {
+      "name": "select", "kind": "select",
+      "argv": ["/absolute/tooling/python", "-m", "scripts.kernel_tuning", "select", "{run}/hotspots/hotspots.json", "--output", "{run}/plan.json"],
+      "artifacts": ["plan.json"]
+    },
+    {
+      "name": "capture", "kind": "capture",
+      "argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "capture-ops", "--model", "pi05", "--plan", "{run}/plan.json", "--output", "{run}/capture", "--fixture-bytes", "8589934592", "--", "-m", "scripts.kernel_tuning.discovery.drive", "--policy", "pi05", "--checkpoint", "/absolute/checkpoint", "--adapter-config", "{input_eager}", "--inputs", "{input_observations}", "--dtype", "bfloat16", "--num-steps", "10", "--no-cuda-graph"],
+      "artifacts": ["capture"]
+    },
+    {
+      "name": "calibrate", "kind": "calibrate",
+      "argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "calibrate", "--captured", "{run}/capture", "--output", "{run}/calibrated"],
+      "artifacts": ["calibrated"]
+    },
+    {
+      "name": "tune", "kind": "tune", "timeout_seconds": 43200,
+      "argv": ["/absolute/tooling/python", "-m", "scripts.kernel_tuning", "tune-all", "--model", "pi05", "--captured", "{run}/calibrated", "--output", "{run}/batches", "--agent", "HARNESS/MODEL:EFFORT", "--hardware-notes", "{run}/hardware/HARDWARE.md", "--set", "evaluator_python=/absolute/runtime/python", "--set", "profile=true"],
+      "resume_bindings": {"batch": "{run}/batches/*"},
+      "resume_argv": ["/absolute/tooling/python", "-m", "scripts.kernel_tuning", "tune-all", "--resume", "{batch}"],
+      "bindings": {"batch": "{run}/batches/*"},
+      "artifacts": ["{batch}/batch.json", "{batch}/summary.json", "{batch}/exports"]
+    },
+    {
+      "name": "install", "kind": "install", "foreach": "{batch}/exports/*",
+      "argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "install", "{item}", "--profile", "{profile}"],
+      "resume_argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "install", "{item}", "--profile", "{profile}", "--replace"],
+      "artifacts": ["{repo}/embodiinfer/backend/triton/tuned/{profile}"]
+    },
+    {
+      "name": "verify", "kind": "verify", "gate": "{run}/verify.json",
+      "argv": ["/absolute/runtime/python", "-m", "scripts.kernel_tuning", "verify", "--profile", "{profile}", "--output", "{run}/verify.json", "--", "--policy", "pi05", "--checkpoint", "/absolute/checkpoint", "--adapter-config", "{input_serving}", "--inputs", "{input_observations}", "--dtype", "bfloat16", "--num-steps", "10", "--capture-full-loop"],
+      "artifacts": ["verify.json"]
+    },
+    {
+      "name": "benchmark_none", "kind": "benchmark",
+      "argv": ["/absolute/runtime/python", "benchmarks/pi05-benchmark/benchmark.py", "--config", "{input_bench_none}"],
+      "artifacts": ["/absolute/reports/none.json"]
+    },
+    {
+      "name": "benchmark_candidate", "kind": "benchmark",
+      "argv": ["/absolute/runtime/python", "benchmarks/pi05-benchmark/benchmark.py", "--config", "{input_bench_candidate}"],
+      "artifacts": ["/absolute/reports/candidate.json"]
+    }
+  ]
+}
+```
+
+Declare every input/configuration and immutable checkpoint/source manifest that
+the commands depend on. Receipts cover declared paths; they cannot discover
+undeclared data or prove an arbitrary benchmark adapter truthful. Forcing
+`TORCHINDUCTOR_DETERMINISTIC=1`, when required by the experiment, must be applied
+to the workflow's environment consistently. The capture's eager configuration
+must disable compilation and graphs as in Section 11.3; production profiling,
+verification and benchmark configurations must retain production semantics.
+
+```bash
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning optimize workflow.json --output results/kernel_tuning/workflow --dry-run
+uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning optimize --resume results/kernel_tuning/workflow
+```
+
+Stage commands are argv arrays, run without a shell from the repository root.
+`{repo}`, `{run}`, `{profile}` and `{input_NAME}` are built in. A stage's `bindings`
+resolves each path/glob to exactly one result for subsequent stages; `foreach`
+runs one command per matching export, with `{item}`. Artifacts may be files,
+directories or globs, and must remain immutable after their producing stage.
+Keep later reports outside an already-receipted shared directory. Double literal
+braces inside argv strings if they are not workflow placeholders.
+
+Resume refuses changed configuration, tooling, frozen inputs or completed output
+receipts. A failed/interrupted stage requires `--resume DIR --retry-stage NAME`;
+when provided, its frozen `resume_argv` and single-match `resume_bindings` are
+used. Otherwise its original command is retried. Existing logs are retained and
+partial outputs are never deleted automatically. Preserve failed reports or
+recover incomplete capture/calibration directories before retrying their commands.
+
+Verification must write a fresh report for the declared profile, with a positive
+input count and fingerprints matching `verification_input` and `profile_artifact`.
+Failure blocks benchmarks and completion. The installed directory is still an
+explicitly selected, unverified artifact until this gate passes; workflow
+completion never changes default dispatch or implies a speedup. Formal reports
+and conditions remain the benchmark program's responsibility.
+
 ## Appendix A. Task-owned benchmark interface
 
 `benchmark.py` is trusted task code, hashed and snapshotted before search. It
@@ -823,8 +1023,15 @@ source, baseline Solution, every scratch attempt, candidate Solutions/source tre
 worker requests/commands/stdout/stderr/results, decisions, and environment data.
 `best.json` appears only after promotion. Winning evidence is hashed and checked
 before export; source export writes the exact UTF-8 bytes embedded in the measured
-Solution. Optional NCU profiling runs separately on the first workload; profile
-failure never changes promotion.
+Solution. Optional NCU profiling runs separately on every workload for baseline,
+incumbent and candidate. A fresh worker builds and warms before profiling one
+eager call; these counters describe kernels, not production CUDA Graph latency.
+Raw reports, CSV metrics and SASS remain in `profile/`; structured diagnostics
+and bounded log tails are hashed in `diagnostics.json` and copied into the next
+attempt's feedback. Profile failure is recorded and never changes promotion.
+`history.json` retains every prior decision; `search.feedback_candidates` controls
+the recent-source window (default four). `search.min_candidates` delays patience
+until that many attempts, without extending hard candidate/time limits.
 
 Humanize2 owns resumable FlowState and the agent/session trace. The manifest is an
 atomically written mirror. The latest framework journal in the dedicated workspace
@@ -971,8 +1178,8 @@ Replay preserves shared storage, strides and offsets. It checks output values,
 layouts, input/output and output/output aliases, declared mutations and unchanged
 input storage. Timing resets backing storage before every sample, outside timed
 events, in both eager and graph modes. The default is eager; `timing.mode=cuda_graph`
-also requires successful changed-input A/B/A replay. NCU profiling currently
-requires a dedicated replay-aware adapter. Numerical overrides cannot change
+also requires successful changed-input A/B/A replay. Optional NCU profiling uses
+the same replay adapter and rematerializes input storage after warmup. Numerical overrides cannot change
 the selected exact contract or the frozen calibrated tolerance contract.
 
 Default-generator `aten.randn.default` and `aten.randn.generator` with
