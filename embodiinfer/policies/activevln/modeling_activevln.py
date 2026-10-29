@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -27,8 +27,10 @@ from .prompt_activevln import (
 )
 
 if TYPE_CHECKING:
+    from ...engine.core import EngineCore
     from .batching_activevln import ActiveVLNBatchedRuntime
     from .cuda_graph import ActiveVLNGraphRuntime
+    from .serving import ActiveVLNServingAdapter
 
 
 ACTIVEVLN_REPO = "https://github.com/arvillion/ActiveVLN"
@@ -796,6 +798,18 @@ class ActiveVLNPolicy(VLAPolicy):
     def collate(self, observations: list[Observation], request_ids: list[str]) -> ActiveVLNBatch:
         return self._processor.collate(observations, request_ids)
 
+    def build_serving_adapter(
+        self,
+        *,
+        core: EngineCore,
+        checkpoint: str | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> ActiveVLNServingAdapter:
+        """Expose eager recurrent inference through the shared serving CLI."""
+        from .serving import ActiveVLNServingAdapter
+
+        return ActiveVLNServingAdapter(core=core, checkpoint=checkpoint, config=config)
+
     def pad(self, batch: ActiveVLNBatch, target_batch_size: int) -> ActiveVLNBatch:
         if target_batch_size != 1:
             raise UnsupportedRecurrentModeError("ActiveVLN does not support padded batching")
@@ -1103,6 +1117,7 @@ def _build_activevln(
     repetition_penalty: float = 1.05,
     do_sample: bool = True,
     action_space: str = "r2r",
+    load_device: str | None = None,
     **overrides,
 ) -> VLAPolicy:
     if checkpoint is None:
@@ -1121,14 +1136,23 @@ def _build_activevln(
 
     from transformers import Qwen2_5_VLForConditionalGeneration
 
+    loading = {}
+    if load_device is not None:
+        # CPU safetensors mappings remain reclaimable while Module.to transfers
+        # each parameter. Avoid Transformers' model-sized CUDA allocator warmup
+        # on devices where CPU and GPU share the same physical memory.
+        loading.update(low_cpu_mem_usage=True, device_map={"": "cpu"})
     qwen = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         checkpoint,
         revision=revision,
         trust_remote_code=False,
         local_files_only=not allow_download,
         torch_dtype="auto",
+        **loading,
     )
     _validate_qwen(qwen)
+    if load_device is not None:
+        qwen.to(torch.device(load_device))
     processor = ActiveVLNProcessor(
         checkpoint, revision, allow_download=allow_download, action_space=action_space
     )

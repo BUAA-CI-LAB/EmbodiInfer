@@ -757,3 +757,57 @@ remains faster in all five completed paired conditions. Neither engine achieves
 40 ms E2E; near-40 ms R2R B=4 numbers describe amortized forward only. No native
 vLLM closed-loop SR/SPL claim follows. The canonical benchmark README retains
 the exact conditions, comparative tables, validation limits and evidence paths.
+
+## 21. Opt-in asynchronous execution prefix
+
+For onboard R2R deployment, EmbodiRun may observe during the preceding chunk
+and overlap the next inference with its immutable remaining actions. The B=1
+HTTP adapter advertises `execution_prefix: activevln.execution_prefix.v1` only
+when its loaded processor supports the extension. Request metadata carries
+`activevln_execution = {schema, previous_step_id, remaining_actions}`; rows use
+R2R action IDs and remaining cm/degrees, including fractional progress. At most
+three forward/left/right rows are allowed; an empty tail means already finished.
+The previous step must be exactly `step_id - 1` with committed session memory.
+Unsupported profiles, malformed tails and missing history fail before execution.
+
+The owning processor inserts continuation context in the user turn, shared by
+CPU and GPU image preprocessing. It asks for actions AFTER the committed tail.
+The response echoes `execution_prefix_sha256`, SHA-256 of canonical JSON
+(sorted keys, compact separators, float magnitudes), so clients reject silently
+ignored context. No generic engine scheduling or flow-RTC capability is added.
+EmbodiRun owns observation timing, partial-action estimates, heartbeat renewal,
+STOP/cancellation and draining outstanding requests before session close.
+
+Without metadata, serialized prompts remain byte-identical to the synchronous
+reference; model math, dtype, attention and sampling are unchanged. With metadata,
+this is experimental AR prompt conditioning, not a numerical-parity optimization
+or hard flow-matching prefix guidance. Existing synchronous benchmark accuracy
+must not be attributed to this mode. CPU tests validate prompts, protocol failures,
+context forwarding and acknowledgement; Go2/NX closed-loop accuracy, timing and
+physical calibration remain unverified. No GPU/checkpoint validation is claimed.
+
+## 22. Eager HTTP serving for constrained CUDA environments
+
+The standard serving CLI now obtains an ActiveVLN adapter from the policy.
+It delegates recurrent checkout, commit and rollback to EngineCore, preserving
+explicit HTTP SessionKeys. The adapter validates one RGB image, consecutive
+steps, an unchanged instruction and execution-prefix references before model
+execution. It returns the existing R2R discrete-chunk contract, including parser
+validity and an acknowledgement of any consumed continuation prefix. Reset
+clears engine state and adapter metadata. It owns no robot execution.
+
+This path uses eager B=1 execution with `--no-cuda-graph`; it does not depend on
+Triton, frozen benchmark datasets or benchmark startup capture. Model math,
+sampling, image processing and token/context budgets remain policy settings.
+The HTTP factory's load_device option uses Accelerate-assisted CPU safetensors
+mappings followed by parameter transfers, preserving checkpoint dtype and
+avoiding Transformers' model-sized CUDA allocator warmup. BF16 snapshots must
+be prepared explicitly; this adapter does not silently quantize weights.
+
+CPU tests cover RGB/action/session mapping, invalid images, instruction changes,
+failed calls, resets and execution-prefix acknowledgements. They do not certify
+GPU compatibility, constrained-memory loading, real-camera inference latency or
+physical navigation. A separate JetPack 5.1.1 / CUDA 11.4 target check has now
+completed one stationary camera-to-model HTTP turn using BF16 weights and
+prebuilt PyTorch 2.2.0 / torchvision 0.17.2. This does not certify sustained
+latency, long histories or closed-loop navigation.

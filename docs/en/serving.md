@@ -194,3 +194,21 @@ and refit API for model construction and weight updates. The integrations cover
 π0.5, GR00T, and OpenVLA-OFT on LIBERO, and LingBot-VLA on RoboTwin.
 
 See [refit integration patterns](api.md#zero-copy-refit) for the weight-update lifecycle.
+
+## ActiveVLN eager serving
+
+With the ActiveVLN dependency group installed and a local checkpoint:
+
+```bash
+embodiinfer-http-serve --policy activevln --checkpoint /models/activevln-bf16 \
+  --device cuda:0 --dtype auto --no-cuda-graph --max-batch 1 \
+  --host 127.0.0.1 --port 8000
+```
+
+Send one JPEG/PNG named `observation.images.rgb`, an instruction and empty state.
+Keep one session per episode and increment step IDs from zero; reset before
+changing the instruction. Responses contain `discrete_chunk` rows and
+`parsed_valid`; consumers must reject invalid parsed output. This eager path
+uses the policy's original decoding defaults. Optional `policy_kwargs` in an
+adapter JSON can select decoding parameters explicitly. It does not enable the
+benchmark graph/Triton profile or execute robot actions.

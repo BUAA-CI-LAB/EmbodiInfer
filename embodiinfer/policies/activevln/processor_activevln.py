@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from ...types import Observation
+from .execution_activevln import EXECUTION_PREFIX_SCHEMA, ExecutionPrefix
 from .prompt_activevln import SYSTEM_PROMPTS, render_turn_text
 
 
@@ -49,6 +50,16 @@ class ProcessedTurn:
 
 
 class ActiveVLNProcessor:
+    @staticmethod
+    def parse_execution_prefix(value: object, *, step_id: int | None = None) -> ExecutionPrefix:
+        """Validate a deployment continuation before running model execution."""
+        return ExecutionPrefix.parse(value, step_id=step_id)
+
+    @property
+    def execution_prefix_schema(self) -> str | None:
+        """Advertise continuation context only for the implemented R2R profile."""
+        return EXECUTION_PREFIX_SCHEMA if self.action_space == "r2r" else None
+
     def __init__(
         self,
         checkpoint: str,
@@ -115,9 +126,13 @@ class ActiveVLNProcessor:
     def turn_text(self, observation: Observation, *, initial: bool) -> str:
         if not observation.instruction:
             raise ValueError("ActiveVLN requires Observation.instruction")
-        return render_turn_text(
-            self._processor, observation.instruction, initial=initial, action_space=self.action_space
-        )
+        instruction = observation.instruction
+        context = observation.metadata.get("activevln_execution")
+        if context is not None:
+            if initial or self.action_space != "r2r":
+                raise ValueError("execution prefix requires a subsequent R2R turn")
+            instruction += self.parse_execution_prefix(context).prompt_context()
+        return render_turn_text(self._processor, instruction, initial=initial, action_space=self.action_space)
 
     def process_turn(self, observation: Observation, *, initial: bool) -> ProcessedTurn:
         text = self.turn_text(observation, initial=initial)
