@@ -61,6 +61,7 @@ def test_progressive_edges_change_one_switch_and_have_isolated_controls():
         ("kv_only", "kv_workspace"),
         ("prefix_only", "prefix_kv_only"),
         ("context_only", "reuse_action_context"),
+        ("gelu_only", "prefix_gelu_fusion"),
     ):
         fields = ablation.stage_fields(stages[name])
         assert fields[switch]

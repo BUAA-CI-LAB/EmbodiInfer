@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 from ....layers import (
     OperatorRequest,
+    gated_gelu_backends,
     gelu_mul_backends,
     get_attention_backend,
     norm_quant_backends,
@@ -22,7 +23,7 @@ from ....layers import (
     quantization_backends,
     rotary_backends,
 )
-from ....layers.activation import GeluMulBackend, PairedGeluBackend
+from ....layers.activation import GatedGeluBackend, GatedGeluPlan, GeluMulBackend, PairedGeluBackend
 from ....layers.attention_preparation import rotary_attention_backends
 from ....layers.integer import integer_projection_backends
 from ....layers.normalization import NormalizationBackend, NormalizationPlan, NormQuantBackend, NormQuantPlan
@@ -115,6 +116,20 @@ class Pi05OperatorPlans:
         self.norm_quant: NormQuantBackend | None = None
         self.projection: ProjectionBackend | None = None
         self.paired: dict[bool, PairedGeluBackend] = {}
+        self.prefix_gelu: GatedGeluBackend | None = (
+            gated_gelu_backends.get(
+                selected.gated_gelu,
+                OperatorRequest(device, torch.bfloat16, bits=16, cuda_graph=True),
+                approximate=self.approximate,
+            )
+            if config.prefix_gelu_fusion
+            else None
+        )
+        if (
+            self.prefix_gelu is not None
+            and self.prefix_gelu.capabilities.arithmetic != "torch_gelu_product_bf16_rounding"
+        ):
+            raise ValueError("Prefix GELU fusion requires the Torch BF16 rounding contract")
         if self.norm is not None and self.norm.capabilities.arithmetic != "torch_rmsnorm_bf16_rounding":
             raise ValueError("Pi05 requires the strict Torch RMSNorm rounding contract")
         if config.mlp_weights is not None:
@@ -178,6 +193,7 @@ class Pi05OperatorPlans:
         self.norm_plans: dict[tuple, NormalizationPlan] = {}
         self.quant_plans: dict[tuple, NormQuantPlan] = {}
         self.mlp_plans: dict[int, Any] = {}
+        self.gelu_plans: dict[tuple, GatedGeluPlan] = {}
         self.kv_buffers: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
         self.active_kv: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
         self.active_sources: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -295,7 +311,7 @@ class Pi05OperatorPlans:
     def release_scope(self, owner: object) -> None:
         """Release an execution's storage after its graph and CUDA work are completed."""
         scope = ("graph", id(owner))
-        for plans in (self.norm_plans, self.quant_plans, self.kv_buffers):
+        for plans in (self.norm_plans, self.quant_plans, self.kv_buffers, self.gelu_plans):
             for key in tuple(plans):
                 if key[-1] == scope:
                     del plans[key]
@@ -406,6 +422,31 @@ class Pi05OperatorPlans:
     def mlp(self, module: Any, inputs: torch.Tensor, *, expert: bool) -> torch.Tensor:
         """Run paired BF16 GEMMs or calibrated projections with the selected GELU."""
         return self._mlp_plan(module, expert=expert)(inputs)
+
+    def _prefix_gelu_mlp(self, module: Any, inputs: torch.Tensor) -> torch.Tensor:
+        """Keep original projection shapes and scope the pointwise output to its graph."""
+        from ..modeling_pi05 import _fused_linear_pair
+
+        if self.policy.attention == "eager":
+            gate, up = module.gate_proj(inputs), module.up_proj(inputs)
+        else:
+            gate, up = _fused_linear_pair(inputs, module.gate_proj, module.up_proj)
+        gate, up = (value.reshape(-1, value.shape[-1]) for value in (gate, up))
+        key = (
+            id(module),
+            tuple(gate.shape),
+            gate.stride(),
+            up.stride(),
+            gate.dtype,
+            gate.device,
+            self.workspace_key(inputs.device),
+        )
+        if key not in self.gelu_plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Warm prefix GELU layout before CUDA Graph capture")
+            self.gelu_plans[key] = self.prefix_gelu.plan(gate, up)
+        hidden = self.gelu_plans[key].run(gate, up)
+        return module.down_proj(hidden.reshape(*inputs.shape[:-1], hidden.shape[-1]))
 
     def quantized_residual_mlp(
         self,
@@ -522,6 +563,8 @@ class Pi05OperatorPlans:
                 )
                 if self.config.fused_mlp or precision.gate_up != "bf16" or precision.down != "bf16":
                     update = self.mlp(layer.mlp, normalized, expert=expert)
+                elif self.prefix_gelu is not None and not expert:
+                    update = self._prefix_gelu_mlp(layer.mlp, normalized)
                 else:
                     update = _mlp(
                         layer.mlp,
@@ -649,6 +692,7 @@ class Pi05OperatorPlans:
         self.dense_plans.clear()
         self.quant_plans.clear()
         self.mlp_plans.clear()
+        self.gelu_plans.clear()
         self.kv_buffers.clear()
         self.active_kv = None
         self.active_attention_prefix = None

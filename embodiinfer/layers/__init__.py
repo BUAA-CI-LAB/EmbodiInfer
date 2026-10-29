@@ -1,6 +1,13 @@
 """Operator contracts and backend-routing registries."""
 
-from .activation import GeluMulBackend, PairedGeluBackend, gelu_mul_backends, paired_gelu_backends
+from .activation import (
+    GatedGeluBackend,
+    GeluMulBackend,
+    PairedGeluBackend,
+    gated_gelu_backends,
+    gelu_mul_backends,
+    paired_gelu_backends,
+)
 from .attention import (
     AttentionBackend,
     SplitKVAttentionBackend,
@@ -43,6 +50,7 @@ __all__ = [
     "NormalizationBackend",
     "NormQuantBackend",
     "GeluMulBackend",
+    "GatedGeluBackend",
     "PairedGeluBackend",
     "ActivationQuantizer",
     "EncodedActivation",
@@ -50,6 +58,7 @@ __all__ = [
     "normalization_backends",
     "norm_quant_backends",
     "gelu_mul_backends",
+    "gated_gelu_backends",
     "paired_gelu_backends",
     "quantization_backends",
     "projection_backends",

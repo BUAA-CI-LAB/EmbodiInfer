@@ -46,6 +46,28 @@ class PairedGeluBackend(Protocol):
         ...
 
 
+class GatedGeluPlan(Protocol):
+    """Fixed-layout BF16 pointwise plan with caller-scoped ephemeral output."""
+
+    def run(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+        """Read current views and retain separate GELU/product rounding points."""
+        ...
+
+
+class GatedGeluBackend(Protocol):
+    """Fuse only pointwise GELU/product; projections and encoding stay outside."""
+
+    capabilities: OperatorCapabilities
+
+    def plan(self, gate: torch.Tensor, up: torch.Tensor) -> GatedGeluPlan:
+        """Prepare matching row-strided matrices before CUDA Graph capture."""
+        ...
+
+
+gated_gelu_backends = BackendRegistry[GatedGeluBackend]("BF16 gated GELU")
+gated_gelu_backends.register_lazy("cuda_packed", "embodiinfer.backend.cuda.packed_gelu", "PackedGeluMul")
+
+
 gelu_mul_backends = BackendRegistry[GeluMulBackend]("GELU/product/encoding")
 gelu_mul_backends.register_lazy("cuda", "embodiinfer.backend.cuda.activation", "GeluMulFusion")
 gelu_mul_backends.register_lazy("torch", "embodiinfer.backend.torch.activation", "TorchGeluMul")

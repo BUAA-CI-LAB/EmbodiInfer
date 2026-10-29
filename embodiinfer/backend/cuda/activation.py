@@ -24,7 +24,7 @@ class GeluMulFusion:
     )
 
     def __init__(
-        self, backend: ActivationQuantizer, *, approximate: Literal["none", "tanh"] = "none"
+        self, backend: ActivationQuantizer | None, *, approximate: Literal["none", "tanh"] = "none"
     ) -> None:
         """Load the cached library for the current CUDA device."""
         if approximate not in ("none", "tanh"):
@@ -92,6 +92,8 @@ class FusionPlan:
             self.output = torch.empty_like(gate)
             self.scale = self.scales = self.blocked = None
         else:
+            if backend.backend is None:
+                raise ValueError("Low precision GELU output requires an activation quantizer")
             if scale is None:
                 raise ValueError("A single-pass fused quantizer requires a calibrated global scale")
             self.quantized = backend.backend.plan(gate, bits, scale)
