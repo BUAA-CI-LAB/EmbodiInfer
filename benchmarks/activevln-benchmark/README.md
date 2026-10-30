@@ -10,6 +10,9 @@ Both datasets use `Arvil/Qwen2.5-VL-3B_rl_r2r_4000` at revision
 
 ## Closed-loop navigation
 
+See [Jetson AGX Thor](thor/README.md) for the R2R/RxR first-frame BF16/INT8
+results at batch sizes 1/2/4/8, followed by the retained historical closed-loop results.
+
 See [RTX 4090](rtx-4090/README.md) and [Orin NX](orin-nx/README.md) for
 batch-one BF16 / calibrated INT8 navigation profiles and the same first 128
 episodes of the fixed 256-episode selection. These runs use EmbodiRun's Habitat runner; they

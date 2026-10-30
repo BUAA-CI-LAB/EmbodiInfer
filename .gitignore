@@ -33,3 +33,7 @@ site-zh/
 
 # Task-local engineering artifacts and validation logs.
 devlocal/
+
+# Thor benchmark configurations and measurements stay in the local experiment workspace.
+benchmarks/activevln-benchmark/thor/**/*.json
+benchmarks/streamvln-benchmark/thor/**/*.json
