@@ -68,6 +68,7 @@ class ActiveVLNProcessor:
             checkpoint,
             revision=revision,
             trust_remote_code=False,
+            use_fast=False,
             local_files_only=not allow_download,
         )
         self.action_space = action_space

@@ -270,18 +270,34 @@ class ActiveVLNGraphRuntime:
                 self.counters["vision_fallbacks"] += 1
                 return None
             visual = self.policy._visual
-            rotary = visual.rot_pos_emb(grid)
-            window_index, cu_window = visual.get_window_index(grid)
-            window_index = window_index.to(self.device)
-            reverse = torch.argsort(window_index)
             unit = visual.spatial_merge_unit
             size = turn.pixel_values.shape[0]
-            rotary = rotary.reshape(size // unit, unit, -1)[window_index].reshape(size, -1)
-            rotary = torch.cat((rotary, rotary), dim=-1)
-            cos, sin = rotary.cos(), rotary.sin()
+            if hasattr(visual, "rot_pos_emb"):
+                rotary = visual.rot_pos_emb(grid)
+                window_index, cu_window = visual.get_window_index(grid)
+                window_index = window_index.to(self.device)
+                rotary = rotary.reshape(size // unit, unit, -1)[window_index].reshape(size, -1)
+                rotary = torch.cat((rotary, rotary), dim=-1)
+                cos, sin = rotary.cos(), rotary.sin()
+            else:
+                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                    get_vision_position_ids,
+                    get_vision_window_index,
+                )
+
+                positions = get_vision_position_ids(grid, visual.spatial_merge_size).to(self.device)
+                window_index, cu_window = get_vision_window_index(
+                    grid, visual.spatial_merge_size, visual.window_size, visual.patch_size
+                )
+                window_index = window_index.to(self.device)
+                cos, sin = (
+                    table.reshape(size // unit, unit, -1)[window_index].reshape(size, -1)
+                    for table in visual.rotary_pos_emb(turn.pixel_values, positions)
+                )
+            reverse = torch.argsort(window_index)
             # CPU scalar slice boundaries avoid device synchronization in the
             # pinned 4.51.3 block's construction of its dense attention mask.
-            cu_window = torch.unique_consecutive(torch.tensor(cu_window, dtype=torch.int32))
+            cu_window = torch.unique_consecutive(torch.as_tensor(cu_window, dtype=torch.int32))
             cu_full = (grid[:, 1] * grid[:, 2]).repeat_interleave(grid[:, 0]).cumsum(0, dtype=torch.int32)
             cu_full = torch.nn.functional.pad(cu_full, (1, 0))
             pixels = turn.pixel_values.clone()
@@ -382,13 +398,13 @@ class ActiveVLNGraphRuntime:
         """``packed`` = (blocks, starts, extent, slots) marks ``hidden`` as one row of
         back-to-back turns for pooled GQA attention: the first three are the
         kernel's packed query layout and ``slots`` each token's pooled KV index."""
-        from .modeling_activevln import _mlp, _rmsnorm, apply_mrope, mrope_cos_sin
+        from .modeling_activevln import _mlp, _mrope_config, _rmsnorm, apply_mrope, mrope_cos_sin
 
         policy = self.policy
         text = policy._text
         head_dim = text.layers[0].self_attn.head_dim
-        sections = tuple(policy._text_config.rope_scaling["mrope_section"])
-        cos, sin = mrope_cos_sin(positions, head_dim, float(policy._text_config.rope_theta), hidden.dtype)
+        sections, theta = _mrope_config(policy._text_config)
+        cos, sin = mrope_cos_sin(positions, head_dim, theta, hidden.dtype)
         norm = _rmsnorm
         mlp = _mlp
         rotary = partial(apply_mrope, cos=cos, sin=sin, sections=sections)

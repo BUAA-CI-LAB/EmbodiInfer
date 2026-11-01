@@ -620,8 +620,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         graph, output = self._capture(forward, self.device, self.pool)
         return _TextGraph(graph, hidden, positions, buffers.offsets, output)
 
-    def _capture_packed_contexts(self, longest: int, context_buckets: Sequence[int]) -> None:
-        """Packed prefill graphs for every bucketed token count up to B turns of ``longest``.
+    def _capture_packed_contexts(
+        self, longest: int, context_buckets: Sequence[int], *, tokens: int | None = None
+    ) -> None:
+        """Capture packed buckets, or just ``tokens`` with stable full-context buffers.
 
         Graphs with the same KV partition count share the largest key bound:
         a sufficient bound never enters a packed launch's partitions.
@@ -630,29 +632,33 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
 
         bucket = self.packed_prefill_bucket
         most = -(-self.batch_size * longest // bucket) * bucket
-        if self._packed_buffers is None or self._packed_buffers.hidden.shape[1] < most:
+        capacity = (
+            most if tokens is None else -(-self.batch_size * self.policy.max_context // bucket) * bucket
+        )
+        if self._packed_buffers is None or self._packed_buffers.hidden.shape[1] < capacity:
             self.packed_graphs.clear()
             hidden = next(self.policy.parameters()).new_zeros(
-                1, most, self.policy._text.embed_tokens.weight.shape[1]
+                1, capacity, self.policy._text.embed_tokens.weight.shape[1]
             )
             rows = torch.zeros(self.batch_size, device=self.device, dtype=torch.long)
             self._packed_buffers = _PackedGraphBuffers(
                 hidden,
-                torch.zeros(3, 1, most, device=self.device, dtype=torch.long),
+                torch.zeros(3, 1, capacity, device=self.device, dtype=torch.long),
                 rows,
                 torch.zeros_like(rows),
                 torch.zeros(1, device=self.device, dtype=torch.long),
-                torch.zeros(most, device=self.device, dtype=torch.long),
-                torch.full((self._packed_programs(most),), -1, device=self.device, dtype=torch.long),
+                torch.zeros(capacity, device=self.device, dtype=torch.long),
+                torch.full((self._packed_programs(capacity),), -1, device=self.device, dtype=torch.long),
                 torch.empty_like(hidden),
             )
         for key in context_buckets:
             splits = gqa_launch_config(PACKED_MIN_ROWS, key)[4]
             self._packed_keys[splits] = max(key, self._packed_keys.get(splits, 0))
         for key in self._packed_keys.values():
-            for tokens in range(bucket, most + 1, bucket):
-                if (tokens, key) not in self.packed_graphs:
-                    self.packed_graphs[(tokens, key)] = self._capture_packed(tokens, key)
+            counts = range(bucket, most + 1, bucket) if tokens is None else [-(-tokens // bucket) * bucket]
+            for count in counts:
+                if (count, key) not in self.packed_graphs:
+                    self.packed_graphs[(count, key)] = self._capture_packed(count, key)
 
     def _packed_graph(self, sizes: Sequence[int], query: int, past: Sequence[int]) -> _TextGraph | None:
         if not self._packs(query):
@@ -744,10 +750,13 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             )
             self.capture_enabled = True
             try:
-                self.vision(combined)
+                grid = combined.image_grid_thw.detach().cpu()
+                vision_key = (tuple(grid.reshape(-1).tolist()), tuple(combined.pixel_values.shape))
+                if vision_key not in self.vision_graphs:
+                    self.vision(combined)
                 self._capture_contexts(1, buckets)
                 if self._packs(query):
-                    self._capture_packed_contexts(query, buckets)
+                    self._capture_packed_contexts(query, buckets, tokens=sum(sizes))
                 else:
                     self._capture_contexts(query, buckets)
                 for width in tree_queries:
