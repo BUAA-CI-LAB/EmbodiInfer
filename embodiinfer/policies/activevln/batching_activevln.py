@@ -707,6 +707,56 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         self.counters["prefill_padding_tokens"] += tokens - total
         return entry.output[0].index_select(0, ends)
 
+    def prewarm_prepared(self, prepared: PreparedActiveVLNBatch) -> None:
+        """Capture fresh full-history inputs and their decode shapes before prefill.
+
+        Repeated calls reuse captured shapes. Capacity growth invalidates and
+        recaptures graphs before any prefix is published. This does not consume
+        sampling RNG state or retain generated answers.
+        """
+        self._validate()
+        if not self.use_cuda_graph:
+            return
+        with self.lock:
+            if self._pending_generation is not None:
+                raise RuntimeError("cannot prewarm during a pending generation")
+            rows = prepared.turns
+            if not 1 <= len(rows) <= self.batch_size:
+                raise ValueError("prepared batch does not fit this runtime")
+            if self.resident_kv or any(row.memory is not None for row in rows):
+                raise ValueError("prepared prewarming requires fresh, non-resident full histories")
+            sizes = [row.turn.input_ids.shape[1] for row in rows]
+            query = self._query_bucket(max(sizes))
+            self._plan_rows([0] * self.batch_size, query, len(rows))
+            tree_queries = self._tree_query_sizes()
+            extent = min(
+                self.policy.max_context,
+                max(sizes) + self.policy.max_new_tokens + max(tree_queries, default=0),
+            )
+            buckets = sorted({self._key_bucket(n) for n in range(query, max(query, extent) + 1)})
+            combined = ProcessedTurn(
+                rows[0].turn.input_ids,
+                rows[0].turn.attention_mask,
+                torch.cat([row.turn.pixel_values for row in rows]),
+                torch.cat([row.turn.image_grid_thw for row in rows]),
+                "",
+                "",
+            )
+            self.capture_enabled = True
+            try:
+                self.vision(combined)
+                self._capture_contexts(1, buckets)
+                if self._packs(query):
+                    self._capture_packed_contexts(query, buckets)
+                else:
+                    self._capture_contexts(query, buckets)
+                for width in tree_queries:
+                    self._capture_contexts(width, buckets, tree=True)
+            finally:
+                self.capture_enabled = False
+                self.storage.zero_()
+                self._resident_rows = [None] * self.batch_size
+
     def prewarm(self, observations: Sequence[Observation], *, context_buckets: Sequence[int]) -> None:
         """Capture supplied input shapes before measurement, without retaining answers."""
         self._validate()
