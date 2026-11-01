@@ -10,6 +10,7 @@ from embodiinfer.layers import (
     BackendRegistry,
     OperatorCapabilities,
     OperatorRequest,
+    gated_gelu_backends,
     gelu_mul_backends,
     normalization_backends,
     paired_gelu_backends,
@@ -88,6 +89,15 @@ def test_fp4_support_is_checked_before_native_construction(monkeypatch):
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (8, 9))
     with pytest.raises(ValueError, match="4-bit encoding requires SM"):
         quantization_backends.get("cuda", OperatorRequest("cuda:0", torch.bfloat16, bits=4))
+
+
+@pytest.mark.parametrize(
+    "operator_request",
+    [OperatorRequest("cpu", torch.bfloat16), OperatorRequest("cuda:0", torch.float32)],
+)
+def test_packed_gelu_rejects_unsupported_dtype_or_device_before_compilation(operator_request):
+    with pytest.raises(ValueError, match="does not support"):
+        gated_gelu_backends.get("cuda_packed", operator_request)
 
 
 @pytest.mark.parametrize("adaptive", [False, True])

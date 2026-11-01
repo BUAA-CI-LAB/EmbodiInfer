@@ -15,6 +15,7 @@ class OperatorBackends:
     normalization: str = "cuda_strict"
     quantization: str = "cuda"
     gelu_mul: str = "cuda"
+    gated_gelu: str = "cuda_packed"
     norm_quant: str | None = "cuda_strict"
     paired_gelu: str = "triton_lookup"
     projection: str = "torch"

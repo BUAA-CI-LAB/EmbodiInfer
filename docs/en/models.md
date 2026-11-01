@@ -250,6 +250,17 @@ normalization and encoding. Torch references support FP8; separate NVFP4
 comparisons retain the CUDA encoder/native GEMM. `from_json`/`to_json` import
 and export resolved configurations for reproducible experiments.
 
+`Pi05OptimizationConfig(prefix_gelu_fusion=True)` opts into BF16 prefix
+GELU/product fusion over the original projection views. It keeps both GEMM shapes
+and BF16 rounding points, constructs no quantizer and leaves the action expert
+unchanged. The reusable `OperatorBackends.gated_gelu` backend defaults to
+`cuda_packed` (SM80+, warmed CUDA Graph support). Plans follow the policy's
+graph/stream lifetime and refit invalidation. The switch defaults to false and
+requires non-quantized `lerobot` numerics with original GEMMs; presets, checkpoint
+dtype, action horizon and solver steps stay as selected by the caller. See the
+[Pi05 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md)
+for the measured scope and comparisons with unchanged main.
+
 Policy-specific configuration, presets, plans and graph runtime live together
 under `policies/pi05/inference/`; reusable operators remain under `layers/` and
 `backend/`. Preset resolution imports no optional kernels and does not probe CUDA.
