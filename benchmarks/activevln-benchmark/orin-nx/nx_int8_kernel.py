@@ -87,11 +87,11 @@ def int8_capability(
     weight: torch.Tensor,
     weight_scale: torch.Tensor,
 ) -> tuple[bool, str | None]:
-    """Require an Ampere/Ada/Hopper CUDA device and supported W8A8 operand layouts."""
+    """Require a supported Ampere/Ada/Hopper/Thor device and W8A8 operand layouts."""
     if triton is None or not inputs.is_cuda:
         return False, "Triton INT8 requires Triton and CUDA"
     capability = torch.cuda.get_device_capability(inputs.device)
-    if capability not in ((8, 0), (8, 6), (8, 7), (8, 9), (9, 0)):
+    if capability not in ((8, 0), (8, 6), (8, 7), (8, 9), (9, 0), (11, 0)):
         return False, f"Triton INT8 is not enabled for SM{capability[0]}{capability[1]}"
     if (
         inputs.ndim < 1

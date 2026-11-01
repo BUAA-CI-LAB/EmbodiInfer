@@ -115,6 +115,12 @@ reports R2R/RxR batch sizes 1/2/4 with separate E2E, complete-forward and amorti
 timings. Closed-loop navigation summaries are organized by
 [RTX 4090](benchmarks/activevln-benchmark/rtx-4090/README.md) and
 [Orin NX](benchmarks/activevln-benchmark/orin-nx/README.md).
+First-frame results for ActiveVLN ([RTX 4090](benchmarks/activevln-benchmark/rtx-4090/README.md),
+[Thor](benchmarks/activevln-benchmark/thor/README.md)) and StreamVLN
+([RTX 4090](benchmarks/streamvln-benchmark/rtx-4090/README.md),
+[Thor](benchmarks/streamvln-benchmark/thor/README.md)) cover the same 128 R2R/RxR
+first frames, BF16/INT8 and batch sizes 1/2/4/8. Historical closed-loop results
+follow the first-frame tables.
 
 ## Supported models
 

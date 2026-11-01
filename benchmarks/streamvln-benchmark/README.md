@@ -1,5 +1,8 @@
 # StreamVLN Benchmark
 
+[RTX 4090](rtx-4090/README.md) 与 [Jetson AGX Thor](thor/README.md) 汇总相同 128 集首帧的
+R2R/RxR、BF16/INT8、batch=1/2/4/8 性能，原有闭环导航数据保留在各页后半部分。
+
 闭环 R2R 导航的配置与前 128 集结果见 [RTX 4090](rtx-4090/README.md)
 和 [Orin NX](orin-nx/README.md)。它们使用固定 256 集清单的相同前缀，
 由 EmbodiRun 的 Habitat runner 计算 SR/SPL，与下方 48 段录制轨迹回放分别统计。
