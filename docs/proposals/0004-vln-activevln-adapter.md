@@ -634,6 +634,23 @@ invalidated by the next prefill or generation attempt. Cancellation/OOM does
 not commit replacement memory. Reusing complete B=1 calls in a Python loop was
 rejected because it does not provide tensor batching.
 
+Callers that already hold complete processed histories can call
+`runtime.prewarm_prepared(PreparedActiveVLNBatch(turns))` before `prefill`.
+It captures the combined image shape, padded or packed prefill, and scalar or
+grammar-tree decoding bounds for those histories. Repeated calls reuse graphs;
+storage growth recaptures them before publishing a prefix. Inputs must have no
+previous memory and use non-resident KV. Prewarming rejects a pending generation
+and preserves the sampling generator state. Weight refits require rebuilding the
+runtime and capturing against the new parameter buffers.
+
+For stochastic rollout, use `do_sample=True` with `grammar_tree_budget>0` and
+`tree_decode=False`. Grammar continuations propose work; verification still draws
+from the complete model distribution with temperature, top-p and repetition
+penalty. Only accepted tokens and their conditional log-probabilities enter the
+returned linear history. Sampling consumes random draws for speculative nodes,
+so the same seed need not produce the serial decoder's exact response. CUDA
+Graph replay preserves the corresponding eager tree path's draws and scores.
+
 The implementation generalizes rounded RoPE and split-KV attention to per-row
 positions, and carries all selected single-row optimizations into batching:
 vision/text CUDA graphs, rounded RMSNorm/RoPE/SwiGLU fusion, split-KV attention,

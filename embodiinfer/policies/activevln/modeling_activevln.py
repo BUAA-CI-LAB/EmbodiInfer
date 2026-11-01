@@ -37,6 +37,14 @@ ACTIVEVLN_CHECKPOINT = "Arvil/Qwen2.5-VL-3B_rl_r2r_4000"
 ACTIVEVLN_REVISION = "160987313e3e869705f42400d1b8f28177044518"
 
 
+def _mrope_config(config) -> tuple[tuple[int, ...], float]:
+    """Read the Qwen rotary configuration across Transformers layouts."""
+    parameters = getattr(config, "rope_parameters", None)
+    if parameters is not None:
+        return tuple(parameters["mrope_section"]), float(parameters["rope_theta"])
+    return tuple(config.rope_scaling["mrope_section"]), float(config.rope_theta)
+
+
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     half = x.shape[-1] // 2
     return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
@@ -822,11 +830,11 @@ class ActiveVLNPolicy(VLAPolicy):
     ) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
         text = self._text
         head_dim = text.layers[0].self_attn.head_dim
-        sections = tuple(self._text_config.rope_scaling["mrope_section"])
+        sections, theta = _mrope_config(self._text_config)
         cos, sin = mrope_cos_sin(
             position_ids,
             head_dim,
-            float(self._text_config.rope_theta),
+            theta,
             hidden.dtype,
         )
         prefix_len = 0 if prefix_kv is None else prefix_kv[0][0].shape[2]
@@ -1076,8 +1084,8 @@ def _validate_qwen(qwen) -> None:
     architectures = getattr(cfg, "architectures", [])
     if "Qwen2_5_VLForConditionalGeneration" not in architectures:
         raise ValueError(f"unexpected ActiveVLN architecture: {architectures}")
-    sections = list(text.rope_scaling["mrope_section"])
-    if sections != [16, 24, 24]:
+    sections, _ = _mrope_config(text)
+    if sections != (16, 24, 24):
         raise ValueError(f"unexpected ActiveVLN mRoPE sections: {sections}")
 
 

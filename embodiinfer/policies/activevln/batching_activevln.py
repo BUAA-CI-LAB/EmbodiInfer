@@ -620,8 +620,10 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         graph, output = self._capture(forward, self.device, self.pool)
         return _TextGraph(graph, hidden, positions, buffers.offsets, output)
 
-    def _capture_packed_contexts(self, longest: int, context_buckets: Sequence[int]) -> None:
-        """Packed prefill graphs for every bucketed token count up to B turns of ``longest``.
+    def _capture_packed_contexts(
+        self, longest: int, context_buckets: Sequence[int], *, tokens: int | None = None
+    ) -> None:
+        """Capture packed buckets, or just ``tokens`` with stable full-context buffers.
 
         Graphs with the same KV partition count share the largest key bound:
         a sufficient bound never enters a packed launch's partitions.
@@ -630,29 +632,33 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
 
         bucket = self.packed_prefill_bucket
         most = -(-self.batch_size * longest // bucket) * bucket
-        if self._packed_buffers is None or self._packed_buffers.hidden.shape[1] < most:
+        capacity = (
+            most if tokens is None else -(-self.batch_size * self.policy.max_context // bucket) * bucket
+        )
+        if self._packed_buffers is None or self._packed_buffers.hidden.shape[1] < capacity:
             self.packed_graphs.clear()
             hidden = next(self.policy.parameters()).new_zeros(
-                1, most, self.policy._text.embed_tokens.weight.shape[1]
+                1, capacity, self.policy._text.embed_tokens.weight.shape[1]
             )
             rows = torch.zeros(self.batch_size, device=self.device, dtype=torch.long)
             self._packed_buffers = _PackedGraphBuffers(
                 hidden,
-                torch.zeros(3, 1, most, device=self.device, dtype=torch.long),
+                torch.zeros(3, 1, capacity, device=self.device, dtype=torch.long),
                 rows,
                 torch.zeros_like(rows),
                 torch.zeros(1, device=self.device, dtype=torch.long),
-                torch.zeros(most, device=self.device, dtype=torch.long),
-                torch.full((self._packed_programs(most),), -1, device=self.device, dtype=torch.long),
+                torch.zeros(capacity, device=self.device, dtype=torch.long),
+                torch.full((self._packed_programs(capacity),), -1, device=self.device, dtype=torch.long),
                 torch.empty_like(hidden),
             )
         for key in context_buckets:
             splits = gqa_launch_config(PACKED_MIN_ROWS, key)[4]
             self._packed_keys[splits] = max(key, self._packed_keys.get(splits, 0))
         for key in self._packed_keys.values():
-            for tokens in range(bucket, most + 1, bucket):
-                if (tokens, key) not in self.packed_graphs:
-                    self.packed_graphs[(tokens, key)] = self._capture_packed(tokens, key)
+            counts = range(bucket, most + 1, bucket) if tokens is None else [-(-tokens // bucket) * bucket]
+            for count in counts:
+                if (count, key) not in self.packed_graphs:
+                    self.packed_graphs[(count, key)] = self._capture_packed(count, key)
 
     def _packed_graph(self, sizes: Sequence[int], query: int, past: Sequence[int]) -> _TextGraph | None:
         if not self._packs(query):
@@ -706,6 +712,59 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         self.counters["prefill_packed"] += 1
         self.counters["prefill_padding_tokens"] += tokens - total
         return entry.output[0].index_select(0, ends)
+
+    def prewarm_prepared(self, prepared: PreparedActiveVLNBatch) -> None:
+        """Capture fresh full-history inputs and their decode shapes before prefill.
+
+        Repeated calls reuse captured shapes. Capacity growth invalidates and
+        recaptures graphs before any prefix is published. This does not consume
+        sampling RNG state or retain generated answers.
+        """
+        self._validate()
+        if not self.use_cuda_graph:
+            return
+        with self.lock:
+            if self._pending_generation is not None:
+                raise RuntimeError("cannot prewarm during a pending generation")
+            rows = prepared.turns
+            if not 1 <= len(rows) <= self.batch_size:
+                raise ValueError("prepared batch does not fit this runtime")
+            if self.resident_kv or any(row.memory is not None for row in rows):
+                raise ValueError("prepared prewarming requires fresh, non-resident full histories")
+            sizes = [row.turn.input_ids.shape[1] for row in rows]
+            query = self._query_bucket(max(sizes))
+            self._plan_rows([0] * self.batch_size, query, len(rows))
+            tree_queries = self._tree_query_sizes()
+            extent = min(
+                self.policy.max_context,
+                max(sizes) + self.policy.max_new_tokens + max(tree_queries, default=0),
+            )
+            buckets = sorted({self._key_bucket(n) for n in range(query, max(query, extent) + 1)})
+            combined = ProcessedTurn(
+                rows[0].turn.input_ids,
+                rows[0].turn.attention_mask,
+                torch.cat([row.turn.pixel_values for row in rows]),
+                torch.cat([row.turn.image_grid_thw for row in rows]),
+                "",
+                "",
+            )
+            self.capture_enabled = True
+            try:
+                grid = combined.image_grid_thw.detach().cpu()
+                vision_key = (tuple(grid.reshape(-1).tolist()), tuple(combined.pixel_values.shape))
+                if vision_key not in self.vision_graphs:
+                    self.vision(combined)
+                self._capture_contexts(1, buckets)
+                if self._packs(query):
+                    self._capture_packed_contexts(query, buckets, tokens=sum(sizes))
+                else:
+                    self._capture_contexts(query, buckets)
+                for width in tree_queries:
+                    self._capture_contexts(width, buckets, tree=True)
+            finally:
+                self.capture_enabled = False
+                self.storage.zero_()
+                self._resident_rows = [None] * self.batch_size
 
     def prewarm(self, observations: Sequence[Observation], *, context_buckets: Sequence[int]) -> None:
         """Capture supplied input shapes before measurement, without retaining answers."""
