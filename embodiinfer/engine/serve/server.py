@@ -3,7 +3,7 @@
 Protocol (msgpack): the client sends {"images", "state", "instruction_tokens",
 "num_steps"} and receives {"actions": [H, A]}. Deliberately close to openpi's
 websocket client shape so an existing openpi robot client can be pointed at a
-vvla server with a thin shim. The async engine batches concurrent connections.
+embodiinfer server with a thin shim. The async engine batches concurrent connections.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ async def _serve(engine: AsyncEngine, host: str, port: int):
             await ws.send(msgpack.packb(reply, use_bin_type=True))
 
     async with websockets.serve(handler, host, port, max_size=None):
-        print(f"[vvla] serving on ws://{host}:{port}")
+        print(f"[embodiinfer] serving on ws://{host}:{port}")
         await asyncio.Future()  # run forever
 
 

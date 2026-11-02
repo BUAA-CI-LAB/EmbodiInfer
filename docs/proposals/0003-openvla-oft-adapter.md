@@ -128,7 +128,7 @@ DM0.5 只实现这些接口及模型前向，不另建 decoder 或 rollout 循�
 
 - **Stage 0（flow 保真）**：`FlowDecoder` = 现有代码平移，构造上 bit-exact。判据：pi0.5 / GR00T 现有 parity 测试 + rollout logprob（`flow_sample_with_logprob`/`flow_logprob_recompute`）逐位不变（CPU 全套 + box 复验 `max|Δ|=0`）。
 - **Stage 1（OFT ground-truth）**：对照 RLinf `openvla_oft` 生成器（同权重、同 obs、同 temperature/top_k、`do_sample=True` 固定 RNG）——action token idxs 逐位一致、token-level logprob `[B,56]` 达 bit/1e-6 级、token→action 反归一逐位一致。因 RLinf env（tf4.53 + openpi 栈）与 EmbodiInfer env 冲突，采跨环境 reference（同 GR00T 方法学）。
-- **Stage 2（RL 消费量）**：ratio-at-θ0——EmbodiInfer rollout 的 tokens/prev_logprobs 喂 actor `default_forward` 重算，`exp(Δ)` 分位数对照 native 噪声底（PPO 实际消费的量），照 `rlinf-vvla-integration` 的五层精度方法学。
+- **Stage 2（RL 消费量）**：ratio-at-θ0——EmbodiInfer rollout 的 tokens/prev_logprobs 喂 actor `default_forward` 重算，`exp(Δ)` 分位数对照 native 噪声底（PPO 实际消费的量），照 `rlinf-embodiinfer-integration` 的五层精度方法学。
 
 ## 7. 实现计划（分三阶段，file-by-file）
 
@@ -149,13 +149,13 @@ DM0.5 只实现这些接口及模型前向，不另建 decoder 或 rollout 循�
 - 验证：CPU `test_openvla_oft_registered`；box ground-truth parity（§6 Stage 1）。
 
 **Stage 2 — RL logprob seam + RLinf E2E**
-- RLinf fork：`rlinf/models/embodiment/vvla/vvla_openvla_oft_action_model.py`（adapter，格式胶水 + weight-sync 键映射）；`SupportedModel` 注册 + `libero_*_grpo_vvla_openvlaoft.yaml`。
+- RLinf fork：`rlinf/models/embodiment/embodiinfer/embodiinfer_openvla_oft_action_model.py`（adapter，格式胶水 + weight-sync 键映射）；`SupportedModel` 注册 + `libero_*_grpo_embodiinfer_openvlaoft.yaml`。
 - 验证：ratio-at-θ0（§6 Stage 2）+ E2E rollout→update PPO 健康 + 计时对照 native。
 
 ## 8. 测试计划
 
 - **CI（CPU）**：`test_decoder_refactor`（FlowDecoder 数值 == 重构前，mock）；`test_openvla_oft_registered`（注册 + 缺 checkpoint 抛 `ValueError`，不依赖权重）；现有 39+ CPU 测试全绿（回归）。
-- **box（mark）**：pi0.5/GR00T parity 回归（Stage 0）；`test_openvla_oft_parity`（Stage 1，门控 `VVLA_OPENVLA_OFT_CKPT` + `VVLA_OPENVLA_OFT_REF`）；RLinf E2E（Stage 2）。
+- **box（mark）**：pi0.5/GR00T parity 回归（Stage 0）；`test_openvla_oft_parity`（Stage 1，门控 `EMBODIINFER_OPENVLA_OFT_CKPT` + `EMBODIINFER_OPENVLA_OFT_REF`）；RLinf E2E（Stage 2）。
 - **跨环境 reference**：RLinf `openvla_oft` 生成器（其 env）预跑一次存 reference（tokens/logprob/actions + 固定 RNG）；EmbodiInfer env 侧读取比对（同 GR00T reference 方法学）。
 
 ## 9. 风险与局限

@@ -39,7 +39,7 @@ def collate(prepared: list[dict], indices: list[int], size: int) -> tuple[Any, t
     return batch, torch.cat(noises)
 
 
-class Vvla(compare.Vvla):
+class EmbodiInfer(compare.EmbodiInfer):
     """Reuse the benchmark's optimized policy with the selected engine batch bucket."""
 
     def __init__(self, config: dict, processor: compare.Processor, profiles: list):

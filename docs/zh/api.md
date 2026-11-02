@@ -67,7 +67,7 @@
 ::: embodiinfer
     options:
       members:
-        - VvlaError
+        - EmbodiInferError
         - ReplicaExecutionError
         - PolicyNotFoundError
         - ObservationError
@@ -126,7 +126,7 @@ engine.policy.commit_refit(version=learner_step)
 
 ```python
 # 基于拷贝的集成可以映射源名称，而无需让 embodiinfer 了解该框架。
-engine.policy.refit(actor_weights, name_map=actor_to_vvla_name, version=learner_step)
+engine.policy.refit(actor_weights, name_map=actor_to_embodiinfer_name, version=learner_step)
 ```
 
 复制前会检查参数名、形状、目标版本，以及完全相同的共享存储视图。
@@ -143,10 +143,10 @@ engine.policy.refit(actor_weights, name_map=actor_to_vvla_name, version=learner_
 ActiveVLN 通过后端逐个执行会话，调用方需显式传入会话标识：
 
 ```python
-from embodiinfer import EngineConfig, Vvla
+from embodiinfer import EngineConfig, EmbodiInfer
 from embodiinfer.types import SessionKey
 
-engine = Vvla(
+engine = EmbodiInfer(
     "activevln",
     checkpoint="/models/activevln",
     engine_config=EngineConfig(

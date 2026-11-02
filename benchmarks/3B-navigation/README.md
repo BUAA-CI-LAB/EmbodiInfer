@@ -357,16 +357,16 @@ candidate 数量和 batch 均保持 exact；视觉 cohort 不 padding、不跨 s
 路径保持原有无 bucket 契约。
 
 持久缓存使用 qwen25_vl_inductor_execution_cache_v3。每个 execution shape
-在 vvla-execution-entries/<fingerprint>.json 拥有独立 manifest，artifact 按
-SHA256 存放在 vvla-content-blobs/<sha256>.bin。损坏或身份不一致的内容进入
-vvla-quarantine/ 后 cold compile。cold compile 必须发布 artifact；已加载且
+在 embodiinfer-execution-entries/<fingerprint>.json 拥有独立 manifest，artifact 按
+SHA256 存放在 embodiinfer-content-blobs/<sha256>.bin。损坏或身份不一致的内容进入
+embodiinfer-quarantine/ 后 cold compile。cold compile 必须发布 artifact；已加载且
 FX/AOT hit admission 成功的 consumer 可以记录 artifact_publish_skipped=true。
 
 cache 目录必须在进程启动前存在，使用当前用户拥有的绝对 canonical 路径、
 0700 权限且不能经过 symlink。以下 bootstrap token 与四项环境必须在任何
 Torch import 之前设置：
 
-    export VVLA_COMPILE_CACHE_BOOTSTRAP_ASSERTION=qwen25_vl_compile_cache_preimport_v1
+    export EMBODIINFER_COMPILE_CACHE_BOOTSTRAP_ASSERTION=qwen25_vl_compile_cache_preimport_v1
     export TORCHINDUCTOR_CACHE_DIR=/absolute/trusted/cache
     export TORCHINDUCTOR_FX_GRAPH_CACHE=1
     export TORCHINDUCTOR_AUTOGRAD_CACHE=1

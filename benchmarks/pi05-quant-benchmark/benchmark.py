@@ -508,7 +508,7 @@ def validate_tokenizer(checkpoint: str) -> dict[str, Any]:
 def build(
     config: dict[str, Any], device: torch.device
 ) -> tuple[LiberoInference, dict[str, Any], RuntimeStats]:
-    """Use the checkpoint's LeRobot preprocessing and VVLA execution path."""
+    """Use the checkpoint's LeRobot preprocessing and EmbodiInfer execution path."""
     from embodiinfer.engine.config import EngineConfig
     from embodiinfer.engine.core import EngineCore
     from embodiinfer.policies import make_policy

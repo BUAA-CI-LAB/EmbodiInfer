@@ -70,7 +70,7 @@ class Gr00tBatch:
 
         ``collated`` is the dict the official processor + collator produce (the
         same ``self.model.get_action(**collated)`` is fed). This slices out the
-        backbone keys + ``state`` + ``embodiment_id`` so the vvla adapter drives
+        backbone keys + ``state`` + ``embodiment_id`` so the embodiinfer adapter drives
         its own two-stage forward over byte-identical inputs.
         """
         backbone_inputs = {k: collated[k] for k in _BACKBONE_KEYS if k in collated}

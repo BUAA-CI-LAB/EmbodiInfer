@@ -73,7 +73,7 @@ def main() -> None:
     prefixes = ("torch", "functorch", "triton", "nvidia", "cuda", "_cuda_")
     candidates = [path for path in source.iterdir() if path.name.startswith(prefixes)]
     for path in candidates if new_environment else ():
-        if "vvla" in path.name or "embodiinfer" in path.name or path.name == "__pycache__":
+        if "embodiinfer" in path.name or path.name == "__pycache__":
             continue
         destination = site / path.name
         if path.is_dir():

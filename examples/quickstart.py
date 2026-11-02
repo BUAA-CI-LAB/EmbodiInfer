@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import torch
 
-from embodiinfer import EngineConfig, Observation, Vvla, preset_config
+from embodiinfer import EngineConfig, Observation, EmbodiInfer, preset_config
 
 
 def make_obs(cfg, env_id: int = 0) -> Observation:
