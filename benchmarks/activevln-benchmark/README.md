@@ -14,6 +14,10 @@ See [RTX 4090](rtx-4090/README.md) and [Jetson AGX Thor](thor/README.md) for
 the same 128 R2R/RxR first frames, BF16/INT8 and batch sizes 1/2/4/8, followed
 by the retained historical closed-loop results.
 
+The [RTX 4090 engine comparison](rtx-4090/README.md)
+also compares EmbodiInfer with native SGLang and vLLM on the same 128 R2R first
+frames in BF16, reporting the first measured batch and later-batch FPS separately.
+
 See [RTX 4090](rtx-4090/README.md) and [Orin NX](orin-nx/README.md) for
 batch-one BF16 / calibrated INT8 navigation profiles and the same first 128
 episodes of the fixed 256-episode selection. These runs use EmbodiRun's Habitat runner; they
