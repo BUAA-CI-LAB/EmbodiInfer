@@ -19,11 +19,15 @@ def plan_prompt(task: TaskPackage) -> str:
         replay += "Read task/numerics.json. It freezes per-workload/profile/output bounds against FP64, not byte equality with the production baseline. All elements and all profiles must pass; tuning.yaml thresholds are reporting maxima only.\n"
     return f"""Optimize the operator in task/ for this target machine.
 Read task/README.md, task/definition.json, task/workloads.jsonl, task/baseline.py,
-task/tuning.yaml, environment.json, incumbent.json, and feedback.json before choosing one change.
+task/tuning.yaml, environment.json, incumbent.json, feedback.json, history.json and HARDWARE.md before choosing one change.
 Read task/HARDWARE.md when present for target-specific observations and prior experiments.
 Feedback includes complete source for recent evaluated candidates, including rejected ones.
 Compare their implementations with their measured failures before selecting a materially
 different configuration or algorithm; do not repeat a rejected implementation by guessing its source.
+Diagnostics include correctness checks, paired timings, bounded compiler errors and,
+when collected, per-workload/per-role NCU metrics. Compare baseline, incumbent and
+candidate counters. Distinguish measured evidence from a bottleneck hypothesis.
+The complete decision history includes older attempts outside the source window.
 {replay}\
 Write PLAN.md with: the current bottleneck; one falsifiable optimization hypothesis;
 the source/launch configuration changes; correctness hazards; and validation steps.
@@ -35,7 +39,7 @@ Finish this turn when PLAN.md contains that executable plan. The next turn imple
 The mathematical reference and baseline have different roles: preserve the former's
 outputs and beat the latter's latency over every declared workload.
 Frozen conditions: {json.dumps(asdict(task.settings), ensure_ascii=False)}
-Use only this attempt directory for edits. Task files, environment.json, incumbent.json, feedback.json,
+Use only this attempt directory for edits. Task files, environment.json, incumbent.json, feedback.json, history.json, HARDWARE.md,
 the evaluator, run archives, and precision/timing settings are fixed inputs.
 Create candidate source beside PLAN.md; do not add files inside task/.
 Do not commit, install dependencies, alter global settings, or start another search.

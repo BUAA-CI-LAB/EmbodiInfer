@@ -25,6 +25,22 @@ UNFENCED_HELP = (
 )
 
 
+def artifact_fingerprint(path: Path) -> dict[str, Any]:
+    """Identify a file or nonempty directory without accepting symlinked evidence."""
+    if path.is_symlink() or not path.exists():
+        raise ContractError(f"Missing or symlinked workflow artifact: {path}")
+    if path.is_dir():
+        files = tree_hashes(path)
+        if not files:
+            raise ContractError(f"Empty workflow artifact directory: {path}")
+        return {"kind": "directory", "files": files}
+    value = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            value.update(block)
+    return {"kind": "file", "sha256": value.hexdigest()}
+
+
 def warn_unfenced(manifest: dict[str, Any]) -> None:
     """Say on stderr, before any agent starts, that the run relies on outside isolation."""
     if manifest.get("unfenced"):
@@ -260,17 +276,24 @@ class RunStore:
         scratch.mkdir(parents=True, exist_ok=False)
         shutil.copytree(self.task.root, scratch / "task")
         shutil.copyfile(self.solution_path(self.manifest["best"]), scratch / "incumbent.json")
+        from .feedback import history, verified_diagnostics
+        from .hardware import render_notes
+
         feedback = []
-        for previous in self.manifest["attempts"][-5:]:
+        previous_attempts = self.manifest["attempts"][:-1]
+        for previous in previous_attempts[-self.task.settings.search.feedback_candidates :]:
             record = dict(previous)
             if previous.get("solution_digest"):
                 # A rejected kernel is not the incumbent. Give the next agent
                 # its verified source as well as its timings, so it can learn
                 # from failed launch configurations instead of guessing them.
                 record["solution"] = read_json(self.solution_path(previous["id"]))
+            record["diagnostics"] = verified_diagnostics(self.root / "candidates" / previous["id"], previous)
             feedback.append(record)
         atomic_json(scratch / "feedback.json", feedback)
+        atomic_json(scratch / "history.json", history(previous_attempts))
         atomic_json(scratch / "environment.json", self.manifest["environment"])
+        (scratch / "HARDWARE.md").write_text(render_notes(self.manifest["environment"]), encoding="utf-8")
         return candidate, archive, scratch
 
     def finish_attempt(

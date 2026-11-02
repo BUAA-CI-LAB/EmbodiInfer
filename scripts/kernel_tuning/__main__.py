@@ -251,6 +251,33 @@ def main(argv: list[str] | None = None) -> int:
     from .registration.cli import add_parser
 
     add_parser(commands)
+    hardware = commands.add_parser(
+        "hardware", help="Write observed target properties and hardware guidance (model runtime)"
+    )
+    hardware.add_argument("--output", type=Path, required=True)
+    hardware.add_argument("--device", default="cuda:0")
+    selection = commands.add_parser(
+        "select", help="Write a reviewable registered-operator plan from hotspots.json"
+    )
+    selection.add_argument("report", type=Path)
+    selection.add_argument("--output", type=Path, required=True)
+    selection.add_argument("--limit", type=int, default=5)
+    selection.add_argument(
+        "--min-share", type=float, default=0.01, help="Minimum summed GPU-kernel-time share, not E2E savings"
+    )
+    selection.add_argument(
+        "--floors", type=Path, help="Measured per-operator lower bounds with evidence sources (JSON)"
+    )
+    optimize = commands.add_parser(
+        "optimize", help="Run/resume an evidence-bound workflow of explicit stage commands"
+    )
+    optimize.add_argument("config", type=Path, nargs="?", help="Workflow JSON (omit with --resume)")
+    optimize.add_argument("--output", type=Path, help="New workflow directory")
+    optimize.add_argument("--resume", type=Path, help="Existing workflow directory")
+    optimize.add_argument("--dry-run", action="store_true", help="Freeze/validate the plan; execute no stage")
+    optimize.add_argument(
+        "--retry-stage", help="Explicitly retry a failed stage after recovering partial outputs"
+    )
     check = commands.add_parser("check", help="Validate a task without executing its code")
     check.add_argument("task", type=Path)
     check.add_argument(
@@ -300,7 +327,11 @@ def main(argv: list[str] | None = None) -> int:
         "capture-ops", help="Record operator-registry calls as a tunable model capture (model runtime)"
     )
     capture_ops.add_argument("--model", required=True, help="Canonical policy name built by the driver")
-    capture_ops.add_argument("--ops", help="Comma-separated registry operators (default: every one called)")
+    capture_selection = capture_ops.add_mutually_exclusive_group()
+    capture_selection.add_argument(
+        "--ops", help="Comma-separated registry operators (default: every one called)"
+    )
+    capture_selection.add_argument("--plan", type=Path, help="Selection plan written by select")
     capture_ops.add_argument("--warmup", type=int, default=2, help="Inference steps skipped before recording")
     capture_ops.add_argument("--steps", type=int, default=8, help="Inference steps recorded")
     capture_ops.add_argument(
@@ -356,7 +387,42 @@ def main(argv: list[str] | None = None) -> int:
             from .registration.cli import dispatch
 
             return dispatch(args)
-        if args.command == "capture":
+        if args.command == "hardware":
+            from .hardware import write
+
+            print(json.dumps(write(args.output, args.device), indent=2))
+        elif args.command == "select":
+            from .selection import write
+
+            print(
+                json.dumps(
+                    write(
+                        args.report,
+                        args.output,
+                        limit=args.limit,
+                        min_share=args.min_share,
+                        floors=args.floors,
+                    ),
+                    indent=2,
+                )
+            )
+        elif args.command == "optimize":
+            from .workflow import create, execute, inspect
+
+            if args.resume:
+                if args.config or args.output:
+                    raise ContractError("--resume reuses the frozen workflow; omit config and --output")
+                root = args.resume
+            else:
+                if not args.config or not args.output or args.retry_stage:
+                    raise ContractError(
+                        "New optimize requires CONFIG --output DIR; --retry-stage requires --resume"
+                    )
+                create(args.config, args.output)
+                root = args.output
+            result = inspect(root) if args.dry_run else execute(root, retry_stage=args.retry_stage)
+            print(json.dumps(result, indent=2))
+        elif args.command == "capture":
             if args.catalog:
                 from .capture import run as run_capture
                 from .operators import select
@@ -386,6 +452,10 @@ def main(argv: list[str] | None = None) -> int:
             from .regions import run as run_op_capture
 
             ops = {name.strip() for name in args.ops.split(",") if name.strip()} if args.ops else None
+            if args.plan:
+                from .selection import selected_ops
+
+                ops = selected_ops(read_json(args.plan))
             result = run_op_capture(
                 command or args.script,
                 args.output,

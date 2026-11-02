@@ -41,8 +41,6 @@ class ReplayAdapter(FlashInferAdapter):
                 raise ContractError(
                     "Calibration and evaluator environments differ; recalibrate on the target"
                 )
-        if self.cfg.profile:
-            raise ContractError("Discovered tasks need a replay-aware NCU adapter before profile=true")
         if self.replay.get("rng") and self.cfg.timing.mode != "eager":
             raise ContractError("RNG replay currently requires eager timing")
 

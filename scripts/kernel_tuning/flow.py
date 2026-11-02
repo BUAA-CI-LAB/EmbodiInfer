@@ -34,6 +34,7 @@ from scripts.kernel_tuning.contracts import (
     validate_measurement,
     validate_solution,
 )
+from scripts.kernel_tuning.feedback import diagnostics
 from scripts.kernel_tuning.permissions import Coder, session_agent
 from scripts.kernel_tuning.prompts import implementation_prompt, plan_prompt
 from scripts.kernel_tuning.runner import evaluate
@@ -123,7 +124,10 @@ async def kernel_tuning(
             reason = None
             if len(store.manifest["attempts"]) >= cfg.search.max_candidates:
                 reason = "max_candidates"
-            elif store.manifest["streak"] >= cfg.search.patience:
+            elif (
+                len(store.manifest["attempts"]) >= cfg.search.min_candidates
+                and store.manifest["streak"] >= cfg.search.patience
+            ):
                 reason = "patience"
             elif remaining() <= 0:
                 reason = "max_seconds"
@@ -175,21 +179,31 @@ async def kernel_tuning(
                 report = await measure(archive / "evaluation", candidate=archive / "solution.json")
                 decision = promotion(store.task, report["measurement"])
                 status = "promoted" if decision["promoted"] else "rejected"
-                store.finish_attempt(candidate, status=status, decision=decision, solution=solution)
-                checkpoint()
+                profile = None
                 if cfg.profile:
                     # Profiling is evidence only, outside promotion and performance timing.
                     try:
-                        await measure(
+                        profile_report = await measure(
                             archive / "profile", operation="profile", candidate=archive / "solution.json"
                         )
+                        profile = profile_report["profile"]
                     except Exception as exc:
-                        atomic_json(archive / "profile/error.json", {"error": str(exc)})
+                        profile = {"error": f"{type(exc).__name__}: {exc}"}
+                        atomic_json(archive / "profile/error.json", profile)
+                atomic_json(
+                    archive / "diagnostics.json",
+                    diagnostics(archive, measurement=report["measurement"], profile=profile),
+                )
+                store.finish_attempt(candidate, status=status, decision=decision, solution=solution)
+                checkpoint()
             except (asyncio.CancelledError, KeyboardInterrupt):
                 raise
             except Exception as exc:
                 # Per-turn budget exhaustion is an attempt failure. The whole-run
                 # duration is checked separately, so resume cannot reset budgets.
+                atomic_json(
+                    archive / "diagnostics.json", diagnostics(archive, error=f"{type(exc).__name__}: {exc}")
+                )
                 store.finish_attempt(
                     candidate,
                     status="failed",

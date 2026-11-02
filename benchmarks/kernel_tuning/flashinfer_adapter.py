@@ -181,6 +181,20 @@ class FlashInferAdapter:
                 "device": self.device,
                 "capability": list(torch.cuda.get_device_capability(self.device)),
                 "total_memory": properties.total_memory,
+                "device_properties": {
+                    key: getattr(properties, key)
+                    for key in (
+                        "multi_processor_count",
+                        "warp_size",
+                        "max_threads_per_multi_processor",
+                        "regs_per_multiprocessor",
+                        "shared_memory_per_block",
+                        "shared_memory_per_multiprocessor",
+                        "L2_cache_size",
+                    )
+                    if hasattr(properties, key)
+                },
+                "power_mode": self._command(["nvpmodel", "-q"]),
                 "gpu_uuid": str(getattr(properties, "uuid", "unavailable")),
                 "hostname": platform.node(),
                 "platform": platform.platform(),
@@ -486,41 +500,10 @@ class FlashInferAdapter:
         return registry.build_reference(self.definition)
 
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
-        """Capture optional NCU evidence in a separate worker, never promotion timing."""
-        from scripts.kernel_tuning.artifacts import atomic_json
+        """Capture counters and assembly for every workload outside promotion timing."""
+        from benchmarks.kernel_tuning.profiling import collect
 
-        if not shutil.which("ncu"):
-            raise ContractError("profile: true requires ncu on PATH")
-        candidate = output / "candidate.json"
-        atomic_json(candidate, solutions["candidate"])
-        command = [
-            "ncu",
-            "--target-processes",
-            "all",
-            "--set",
-            "basic",
-            "--force-overwrite",
-            "--export",
-            str(output / "ncu"),
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--profile-once",
-            str(self.task.root),
-            str(candidate),
-        ]
-        with (output / "ncu.log").open("w", encoding="utf-8") as log:
-            subprocess.run(
-                command,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                check=True,
-                timeout=self.cfg.search.evaluation_timeout_seconds,
-            )
-        return {
-            "command": command,
-            "report": str(output / "ncu.ncu-rep"),
-            "workload": self.traces[0].workload.uuid,
-        }
+        return collect(self.task, solutions, output)
 
 
 if __name__ == "__main__":

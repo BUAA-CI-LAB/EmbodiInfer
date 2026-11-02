@@ -136,6 +136,71 @@ def test_rejected_source_is_available_to_the_next_planning_turn(store, candidate
     assert result["best"] == "0002"
 
 
+def test_diagnostic_failures_and_full_history_reach_the_next_agent(store, candidate):
+    run_fake(store, fake_coder(store, candidate, ["crash", 8, 9]))
+    saved = RunStore(store.root)
+    first = read_json(saved.root / "candidates/0001/diagnostics.json")
+    assert "simulated compilation failure" in first["logs"]["evaluation/stderr.log"]
+    feedback = read_json(saved.root / "workspace/0002/feedback.json")
+    assert feedback[0]["diagnostics"] == first
+    history = read_json(saved.root / "workspace/0003/history.json")
+    assert [row["id"] for row in history["attempts"]] == ["0001", "0002"]
+    assert "no performance calibration" in (saved.root / "workspace/0003/HARDWARE.md").read_text()
+
+
+def test_profile_log_feedback_keeps_the_latest_failure_with_a_bound(tmp_path):
+    from scripts.kernel_tuning.feedback import diagnostics
+
+    for index in range(6):
+        path = tmp_path / "profile/candidate" / str(index) / "worker.log"
+        path.parent.mkdir(parents=True)
+        path.write_text(str(index) * 8000, encoding="utf-8")
+        os.utime(path, ns=(index * 1_000_000_000, index * 1_000_000_000))
+    logs = diagnostics(tmp_path)["logs"]
+    assert "profile/candidate/5/worker.log" in logs
+    assert "profile/candidate/0/worker.log" not in logs
+    assert len(logs) == 4 and all(len(value) <= 4000 for value in logs.values())
+
+
+def test_modified_nonwinning_diagnostics_are_refused_before_reuse(store, candidate):
+    from scripts.kernel_tuning.feedback import verified_diagnostics
+
+    run_fake(store, fake_coder(store, candidate, [12, 8, 9]))
+    saved = RunStore(store.root)
+    archive = saved.root / "candidates/0001"
+    atomic_json(archive / "diagnostics.json", {"forged": True})
+    with pytest.raises(ContractError, match="diagnostic evidence changed"):
+        verified_diagnostics(archive, saved.manifest["attempts"][0])
+
+
+def test_minimum_exploration_attempts_delay_patience(task_dir, candidate, tmp_path):
+    import yaml
+    from scripts.kernel_tuning.contracts import TaskPackage
+
+    config = yaml.safe_load((task_dir / "tuning.yaml").read_text())
+    config["search"].update(max_candidates=6, min_candidates=4, patience=2)
+    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    search = RunStore.create(TaskPackage.load(task_dir), tmp_path / "exploration", "claude/fake:low")
+    result = run_fake(search, fake_coder(search, candidate, [12, 12, 12, 12]))
+    assert len(result["attempts"]) == 4
+    assert result["stop_reason"] == "patience"
+
+
+def test_profile_error_is_feedback_and_does_not_change_promotion(task_dir, candidate, tmp_path):
+    import yaml
+    from scripts.kernel_tuning.contracts import TaskPackage
+
+    config = yaml.safe_load((task_dir / "tuning.yaml").read_text())
+    config["profile"] = True  # The fake benchmark deliberately has no profiler.
+    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    search = RunStore.create(TaskPackage.load(task_dir), tmp_path / "profile-run", "claude/fake:low")
+    result = run_fake(search, fake_coder(search, candidate, [8, 9, 9]))
+    assert result["best"] == "0001"
+    feedback = read_json(search.root / "workspace/0002/feedback.json")[0]
+    assert "profile" in feedback["diagnostics"]["profile"]["error"]
+    assert feedback["diagnostics"]["measurement"]["rounds"]
+
+
 def test_resume_counts_interrupted_attempt_and_keeps_elapsed_budget(store, candidate) -> None:
     coder = fake_coder(store, candidate, [8, asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):
