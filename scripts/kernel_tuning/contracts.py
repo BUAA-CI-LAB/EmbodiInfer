@@ -143,10 +143,16 @@ class Search:
     patience: int = 5
     agent_timeout_seconds: float = 600
     evaluation_timeout_seconds: float = 300
+    min_candidates: int = 0
+    feedback_candidates: int = 4
 
     def __post_init__(self) -> None:
         for key in ("max_candidates", "patience"):
             _positive(getattr(self, key), f"search.{key}", integer=True)
+        _positive(self.min_candidates, "search.min_candidates", integer=True, zero=True)
+        _positive(self.feedback_candidates, "search.feedback_candidates", integer=True)
+        if self.min_candidates > self.max_candidates:
+            raise ContractError("search.min_candidates cannot exceed max_candidates")
         for key in ("max_seconds", "agent_timeout_seconds", "evaluation_timeout_seconds"):
             _positive(getattr(self, key), f"search.{key}")
 
