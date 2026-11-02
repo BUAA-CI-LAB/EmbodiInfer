@@ -1,4 +1,4 @@
-"""FlashInfer 0.1.2 building/input generation with strict KDA measurement gates.
+"""FlashInfer 0.1.2 building/input generation with EmbodiInfer's measurement gates.
 
 The upstream default evaluator permits numerical tolerances and only eager
 timing. We reuse its builders, generators, and eager timer and implement the
@@ -499,27 +499,44 @@ class FlashInferAdapter:
     def _build_reference(self, registry: Any) -> Any:
         return registry.build_reference(self.definition)
 
+    def profiled_workload(self) -> Any:
+        """The workload NCU evidence describes: the heaviest-weighted one, else the first."""
+        weights = self.cfg.weights
+        return max(self.traces, key=lambda trace: weights.get(trace.workload.uuid, 1.0)).workload
+
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
         """Capture counters and assembly for every workload outside promotion timing."""
         from benchmarks.kernel_tuning.profiling import collect
 
         return collect(self.task, solutions, output)
 
+    def profile_once(self, solution: dict[str, Any]) -> None:
+        """NCU worker body: compile and warm the candidate, then call it once under NVTX."""
+        import torch
+        from flashinfer_bench.compile import BuilderRegistry
+        from flashinfer_bench.data import Solution
 
-if __name__ == "__main__":
-    # NCU child: one representative workload, excluded from optimization metrics.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from flashinfer_bench.compile import BuilderRegistry
-    from flashinfer_bench.data import Solution
-    from scripts.kernel_tuning.contracts import read_json
+        runnable = BuilderRegistry.get_instance().build(self.definition, Solution.model_validate(solution))
+        workload = self.profiled_workload()
+        self._call(runnable, self._inputs(workload, self.cfg.seeds[0]))
+        torch.cuda.synchronize(self.device)
+        inputs = self._inputs(workload, self.cfg.seeds[0])
+        torch.cuda.synchronize(self.device)
+        with torch.cuda.nvtx.range("candidate"):
+            self._call(runnable, inputs)
+            torch.cuda.synchronize(self.device)
 
-    if len(sys.argv) != 4 or sys.argv[1] != "--profile-once":
-        raise SystemExit("Internal NCU worker; use tuning.yaml profile: true")
-    adapter = FlashInferAdapter(TaskPackage.load(Path(sys.argv[2])))
-    runnable = BuilderRegistry.get_instance().build(
-        adapter.definition, Solution.model_validate(read_json(Path(sys.argv[3])))
-    )
-    adapter._call(runnable, adapter._inputs(adapter.traces[0].workload, adapter.cfg.seeds[0]))
-    import torch
 
-    torch.cuda.synchronize(adapter.device)
+#: Variables the NCU worker needs from the evaluator; ``TRITON_*``, ``FIB_*``, ``CUDA_*`` too.
+_PROFILE_ENVIRONMENT = frozenset(
+    {
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "CPATH",
+        "LIBRARY_PATH",
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "HF_HUB_OFFLINE",
+        "TORCH_EXTENSIONS_DIR",
+    }
+)

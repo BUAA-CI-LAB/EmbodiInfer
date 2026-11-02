@@ -8,8 +8,46 @@ from dataclasses import asdict
 from .contracts import TaskPackage
 
 
-def plan_prompt(task: TaskPackage) -> str:
-    """Ask for a reviewable hypothesis and executable plan before source generation."""
+def _deadline(task: TaskPackage, deliverable: str) -> str:
+    """Say how long a turn may run, so its deliverable exists before the controller stops it."""
+    minutes = task.settings.search.agent_timeout_seconds / 60
+    return (
+        f"This turn is stopped after {minutes:g} minutes, and a turn stopped before {deliverable}\n"
+        f"exists fails the attempt: write a complete {deliverable} within the first few minutes,\n"
+        "then refine it only while time remains.\n"
+    )
+
+
+def plan_prompt(
+    task: TaskPackage, *, role: str = "", skills: tuple[str, ...] = (), profiles: bool = False
+) -> str:
+    """Ask for a reviewable hypothesis and executable plan before source generation.
+
+    ``role`` names the chaser taking this turn, ``skills`` the tuning skills its session
+    carries, and ``profiles`` whether the controller collects Nsight Compute evidence.
+    """
+    turns = (
+        f"You are the {role} of two coding agents taking turns on this operator, one candidate\n"
+        "per turn. feedback.json records which chaser produced each earlier attempt. Build on the\n"
+        "incumbent whoever wrote it: a structural rewrite and a careful refinement are both valid moves.\n"
+        if role
+        else ""
+    )
+    evidence = (
+        "profiles/incumbent/ and profiles/previous/ (when present) hold Nsight Compute evidence the\n"
+        "controller collected for the incumbent and the previous attempt: read details.txt first;\n"
+        "ncu.ncu-rep is the full report. Diagnose the bottleneck from it before choosing a hypothesis.\n"
+        if profiles
+        else ""
+    )
+    if skills:
+        evidence += (
+            f"Your session carries the skills {', '.join(skills)}. Where a skill routes guidance by\n"
+            "device, select the target matching the compute capability in environment.json and do\n"
+            "not apply instructions or metric names written for another architecture. Apply their\n"
+            "analysis method to the evidence provided here; do not collect profiles yourself.\n"
+            "task/HARDWARE.md records what has been measured on this GPU.\n"
+        )
     replay = (
         "Read task/replay.json for the frozen model, tensor layouts, aliases and mutations. Optimize this one observed call; no neighboring-operator fusion or quantization.\n"
         if "replay.json" in task.hashes
@@ -21,6 +59,7 @@ def plan_prompt(task: TaskPackage) -> str:
 Read task/README.md, task/definition.json, task/workloads.jsonl, task/baseline.py,
 task/tuning.yaml, environment.json, incumbent.json, feedback.json, history.json and HARDWARE.md before choosing one change.
 Read task/HARDWARE.md when present for target-specific observations and prior experiments.
+{turns}{evidence}\
 Feedback includes complete source for recent evaluated candidates, including rejected ones.
 Compare their implementations with their measured failures before selecting a materially
 different configuration or algorithm; do not repeat a rejected implementation by guessing its source.
@@ -29,10 +68,13 @@ when collected, per-workload/per-role NCU metrics. Compare baseline, incumbent a
 candidate counters. Distinguish measured evidence from a bottleneck hypothesis.
 The complete decision history includes older attempts outside the source window.
 {replay}\
+{_deadline(task, "PLAN.md")}\
+Reason from the task files, the incumbent, feedback and any profiles; do not write
+numerical simulators, test harnesses or scratch programs in this turn.
 Write PLAN.md with: the current bottleneck; one falsifiable optimization hypothesis;
 the source/launch configuration changes; correctness hazards; and validation steps.
 Describe the validation criteria for the controller; do not compile, run GPU code,
-benchmark, or inspect generated assembly during either agent turn. The agent's
+benchmark, or generate assembly during either agent turn. The agent's
 command environment may restrict GPU access and compiler cache operations even
 when environment.json confirms that the separate evaluator has a working GPU.
 Finish this turn when PLAN.md contains that executable plan. The next turn implements it.
@@ -67,12 +109,14 @@ def implementation_prompt(task: TaskPackage) -> str:
         ],
     }
     replay = (
-        "This discovered task requires destination_passing_style=false. Preserve replay.json input/output layouts, aliases and mutations, returning mutated buffers in definition order. No new operator fusion or quantization.\n"
+        "This captured registry task requires destination_passing_style=false. Preserve replay.json input/output layouts, aliases and mutations, returning mutated buffers in definition order. No new operator fusion or quantization.\n"
         if "replay.json" in task.hashes
         else ""
     )
     return f"""Implement PLAN.md and write solution.json using the official FlashInfer
-Solution structure below. Include every source/helper in sources; relative POSIX
+Solution structure below.
+{_deadline(task, "solution.json")}\
+Include every source/helper in sources; relative POSIX
 paths and multiple files are supported. Include actual source text, not placeholders.
 You may write source files here and serialize them into solution.json.
 {json.dumps(schema, indent=2)}
@@ -89,7 +133,7 @@ Launch on the caller's current stream; any helper-stream work must join it befor
 returning. The caller's device, stream, and numerical settings stay unchanged.
 Keep evaluation logic, expected answers, precision, workloads, and metrics untouched.
 The controller will compile, check all seeds, measure, and promote from structured
-evidence after this turn returns. Do not compile, run GPU code, benchmark, inspect
+evidence after this turn returns. Do not compile, run GPU code, benchmark, generate
 assembly, or work around agent-environment permissions/cache failures. Static
 source and JSON checks are sufficient for this handoff. A failed controller check
 will be recorded as feedback for the next candidate.

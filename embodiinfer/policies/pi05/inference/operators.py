@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 from ....layers import (
     OperatorRequest,
+    ScopedAttentionBackend,
     gated_gelu_backends,
     gelu_mul_backends,
     get_attention_backend,
@@ -130,8 +131,11 @@ class Pi05OperatorPlans:
             and self.prefix_gelu.capabilities.arithmetic != "torch_gelu_product_bf16_rounding"
         ):
             raise ValueError("Prefix GELU fusion requires the Torch BF16 rounding contract")
-        if self.norm is not None and self.norm.capabilities.arithmetic != "torch_rmsnorm_bf16_rounding":
-            raise ValueError("Pi05 requires the strict Torch RMSNorm rounding contract")
+        if self.norm is not None and self.norm.capabilities.arithmetic not in (
+            "torch_rmsnorm_bf16_rounding",
+            "gemma_rmsnorm_fp32_reduction",
+        ):
+            raise ValueError("Pi05 requires Torch rounding or explicit Gemma FP32-reduction RMSNorm")
         if config.mlp_weights is not None:
             from .weights import MlpWeightArchive
 
@@ -145,7 +149,9 @@ class Pi05OperatorPlans:
                 self.integer_projection = integer_projection_backends.get(
                     selected.integer_projection, request
                 )
-        if (config.fused_mlp and config.mlp_weights is None) or config.has_quantized_mlp:
+        if (
+            config.mlp_weights is None and (config.fused_mlp or selected.projection != "torch")
+        ) or config.has_quantized_mlp:
             self.projection = projection_backends.get(selected.projection, request)
         if config.has_quantized_mlp:
             bits = 4 if any("nvfp4" in (layer.gate_up, layer.down) for layer in precision_layers) else 8
@@ -189,7 +195,10 @@ class Pi05OperatorPlans:
             name = config.attention
             if name == "query_major" and config.hardware == "spark":
                 name = "query_major_cuda"
-            self.attention = get_attention_backend(name)
+            with torch.cuda.device(device):
+                self.attention = get_attention_backend(name)
+            if isinstance(self.attention, ScopedAttentionBackend):
+                self.attention.bind_workspace_key(self.workspace_key)
         self.norm_plans: dict[tuple, NormalizationPlan] = {}
         self.quant_plans: dict[tuple, NormQuantPlan] = {}
         self.mlp_plans: dict[int, Any] = {}
@@ -322,6 +331,8 @@ class Pi05OperatorPlans:
                 del self.attention_plans[key]
         for projection in self.dense_plans.values():
             projection.release_scope(scope)
+        if isinstance(self.attention, ScopedAttentionBackend):
+            self.attention.release_scope(scope)
 
     def validate_request(self, batch_size: int, steps: int | None = None) -> None:
         """Reject shapes outside measured profiles before graph creation."""
@@ -355,7 +366,10 @@ class Pi05OperatorPlans:
         fusion matches the Torch mean contract, so it must not replace that
         native adaptive path merely because both accumulate in FP32.
         """
-        if self.norm is None or (self._native_norm_reference(native) and modulation is not None):
+        if self.norm is None or (
+            modulation is not None
+            and (self._native_norm_reference(native) or not getattr(self.norm, "supports_adaptive", True))
+        ):
             from ..modeling_pi05 import _rmsnorm
 
             return _rmsnorm(norm, inputs, None, False, modulation, native)
@@ -374,8 +388,10 @@ class Pi05OperatorPlans:
         native: bool = False,
     ) -> tuple:
         """Fuse Torch-reference residual norms; retain native adaptive arithmetic."""
-        if self.norm is None or (
-            self._native_norm_reference(native) and (modulation is not None or gate is not None)
+        if (
+            self.norm is None
+            or (self._native_norm_reference(native) and (modulation is not None or gate is not None))
+            or (modulation is not None and not getattr(self.norm, "supports_adaptive", True))
         ):
             from ..modeling_pi05 import _gated_residual
 
@@ -419,9 +435,12 @@ class Pi05OperatorPlans:
             self.mlp_plans[id(module)] = MlpPlan(self, module, layer, prefix=not expert)
         return self.mlp_plans[id(module)]
 
-    def mlp(self, module: Any, inputs: torch.Tensor, *, expert: bool) -> torch.Tensor:
+    def mlp(self, module: Any, inputs: torch.Tensor, *, expert: bool, native: bool = False) -> torch.Tensor:
         """Run paired BF16 GEMMs or calibrated projections with the selected GELU."""
-        return self._mlp_plan(module, expert=expert)(inputs)
+        plan = self._mlp_plan(module, expert=expert)
+        if not self.config.fused_mlp and not self.config.has_quantized_mlp:
+            return plan(inputs, native=native)
+        return plan(inputs)
 
     def _prefix_gelu_mlp(self, module: Any, inputs: torch.Tensor) -> torch.Tensor:
         """Keep original projection shapes and scope the pointwise output to its graph."""
@@ -561,8 +580,13 @@ class Pi05OperatorPlans:
                 hidden, normalized, gate = self.residual_normalize(
                     layer.post_attention_layernorm, hidden, attended, gate, modulation, native=fused
                 )
-                if self.config.fused_mlp or precision.gate_up != "bf16" or precision.down != "bf16":
-                    update = self.mlp(layer.mlp, normalized, expert=expert)
+                if (
+                    self.config.fused_mlp
+                    or self.config.operators.projection != "torch"
+                    or precision.gate_up != "bf16"
+                    or precision.down != "bf16"
+                ):
+                    update = self.mlp(layer.mlp, normalized, expert=expert, native=fused)
                 elif self.prefix_gelu is not None and not expert:
                     update = self._prefix_gelu_mlp(layer.mlp, normalized)
                 else:
@@ -682,6 +706,8 @@ class Pi05OperatorPlans:
 
     def clear(self) -> None:
         """Release transient storage after all policy graphs have been discarded."""
+        if isinstance(self.attention, ScopedAttentionBackend):
+            self.attention.clear()
         self.norm_plans.clear()
         self.attention_plans.clear()
         for projection in self.dense_plans.values():
@@ -692,6 +718,10 @@ class Pi05OperatorPlans:
         self.dense_plans.clear()
         self.quant_plans.clear()
         self.mlp_plans.clear()
+        for backend in (self.projection, self.attention_projection):
+            clear = getattr(backend, "clear", None)
+            if clear is not None:
+                clear()
         self.gelu_plans.clear()
         self.kv_buffers.clear()
         self.active_kv = None

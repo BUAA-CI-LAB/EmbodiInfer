@@ -43,7 +43,7 @@ frozen-input and output receipts; `optimize --resume DIR` continues intact stage
 Formal measurement still uses existing benchmark programs; there is no generic
 `benchmark` subcommand. pi0.5 is the current integrated policy.
 Qwen R2R/StreamVLN registry integration and committed hardware profiles remain
-outstanding; their discovery/catalog support does not imply profile support.
+outstanding; their benchmark-input/catalog support does not imply profile support.
 
 ## 2. Motivation and current gap
 
@@ -52,12 +52,11 @@ may be small, it may already be near launch overhead, or its tuned layout may
 never be selected in production. Profiling and a final model benchmark connect
 search effort to the actual inference path.
 
-The earlier discovery/catalog workflow optimizes each observed ATen call or
-existing backend kernel against its production implementation. It remains useful
-for operator investigations, but its exports do not directly install into a
-hardware profile. The registry workflow uses an explicit Torch reference and
-stable model call sites so verified kernels can reach inference without editing
-the policy on every tuning run.
+The registry workflow uses an explicit Torch reference and stable model call
+sites so verified kernels can reach inference without editing the policy on every
+tuning run. The independent catalog supports investigations of hand-maintained
+kernels, but its exports require separate runtime integration. Full-model ATen
+discovery has been removed; it did not produce installable registry call sites.
 
 Current boundaries are visible in `scripts/kernel_tuning/__main__.py` (commands),
 `regions.py` (registry capture), `install.py` (accepted exports), and
@@ -72,7 +71,7 @@ new fusion integration, shape-range coverage and empirically calibrated roofline
   search; retain all attempts and export exact verified source with evidence.
 - Select installed kernels through optional hardware profiles with layout checks
   and fallback; evaluate the complete profile at model level.
-- Keep the existing discovery/catalog and custom-task workflows usable, with
+- Keep the existing catalog and custom-task workflows usable, with
   their original contracts and artifact formats.
 
 Robot/simulator communication, task success metrics, deployment orchestration,
@@ -167,10 +166,43 @@ the installed kernel falls back even if its isolated benchmark improves.
 
 ### 4.4 Search, evaluate and promote
 
+#### Project skills and diagnostic feedback
+
+The flow loads optional KernelWiki and ncu-report-skill directories from
+`scripts/kernel_tuning/flow/skills/`, using Humanize2's skill mechanism.
+The pinned Thor/Orin submodules under the repository's `skills/` can supply those
+directories through local links. Each run records the carried SKILL.md digests
+and rejects resume after they change. Missing optional skills do not block tuning.
+Repository instructions and the frozen numerical contract take precedence over
+generic skill recipes. Registration snapshots preserve submodule gitlink commits.
+
+With `profile: true`, the evaluator collects the baseline before planning and
+every evaluated candidate after the promotion decision. The remote-style
+`profile_command` selects NCU and any explicit privilege wrapper; reports and
+details are handed to the next chaser under `profiles/`, as described below.
+Collection failures remain evidence and do not revoke promotion. Collection uses
+the evaluator timeout and whole-run budget, without a separate report-count cap.
+
+Migration: `diagnostics.*` settings and the old budgeted collector are retired.
+Replace `diagnostics.ncu` with `profile_command: [/absolute/path/to/ncu]` and
+remove the remaining `diagnostics` mapping before freezing a new task. Older runs
+retain their snapshotted tools; they cannot resume under changed controller code.
+The standalone `benchmarks/kernel_tuning/ncu_analysis.py` remains available for
+CPU analysis of archived reports or detached native captures, using the pinned
+NCU skill submodule. It is not an automatic step in the tuning flow.
+
 A task contains `README.md`, `definition.json`, `workloads.jsonl`, `baseline.py`,
 `tuning.yaml`, and optionally trusted `benchmark.py`; replay tasks also include
-layout/fixture contracts. Task and solution schemas reuse NVlabs KDA/FlashInfer
-formats. Humanize2 is pinned in the isolated tooling environment.
+layout/fixture contracts. Definitions, workloads and solutions use FlashInfer
+schemas; EmbodiInfer owns the tuning settings and evaluation contracts.
+Humanize2 is pinned in the isolated tooling environment. Workflow references are
+acknowledged in [Third-Party Notices](../../THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references).
+
+Humanize2 revision `58dd43a` fixes the Codex event-order issue upstream: an `idle`
+notification does not end the turn, and successful `turn/completed` clears earlier
+reconnect errors. Failed or interrupted completion still fails. The former local
+event-filter shim is removed; bounded event-replay tests exercise success, failure,
+interruption and waiting for completion through the pinned driver.
 
 The agent reads the task and recent candidate source/evidence, writes a hypothesis
 and executable plan, and produces a candidate. A separate evaluator compiles it,
@@ -178,10 +210,49 @@ checks every workload and times baseline, incumbent and candidate. Feedback driv
 the next attempt, including rejected attempts. Agent turns do source/JSON checks;
 the evaluator owns GPU compilation and validation.
 
+The flow (`scripts/kernel_tuning/flow/`) drives two chasers in turn, in the manner
+of Humanize2's `flame_chase`: attempt *n* is planned and implemented by
+`first_chaser` when *n* is odd and `second_chaser` otherwise, each in a fresh
+session that starts from the incumbent and every earlier attempt's evidence.
+`--agent` takes one hmz spec for both chasers or two comma-separated specs, e.g.
+a Claude Code and a Codex harness, whose different habits (rewrites against
+refinements) the alternation exploits. The optional `KernelWiki` and
+`ncu-report-skill` skills travel with the flow when linked into its untracked `skills/`
+directory; each run records the digest of every carried skill and refuses to
+resume after they change. The pinned Thor/Orin adaptations under the repository's
+`skills/` provide device-specific guidance; the plan prompt asks agents to select
+the target matching `environment.json`. Their upstream origins, revisions and
+license notices are preserved in Third-Party Notices.
+
+A turn is stopped after `agent_timeout_seconds`. A stopped turn whose deliverable
+(`PLAN.md`, then `solution.json`) already exists still counts, and the attempt
+continues in a fresh session; without it the attempt fails. An evaluator failure
+reaches the next agent with the worker's final exception line, and a calibrated
+tolerance failure names the workload, input profile and how far the output
+exceeded its bound.
+
+With `profile: true` the evaluator collects Nsight Compute evidence (`--set full`,
+restricted by NVTX to one warmed call of the heaviest workload) for the baseline
+and for every evaluated candidate. Each attempt receives copies for the incumbent
+and the previous attempt under `profiles/` (`ncu.ncu-rep`, `details.txt`); agents
+never run the profiler. `profile_command` names NCU and an optional privilege
+wrapper (`[sudo, -n, /path/to/ncu]` where counters need root). The worker is then
+started through `env` with an allow-list of build variables and its own caches and
+home, never secrets, because its command line is visible to other users. A
+privileged NCU runs candidate code with those privileges; use it only where
+counters cannot be opened otherwise, and only with agents that cannot invoke it.
+
 `tune-all` generates tasks and preflights all baselines before opening any model
 batch agent. Missing fixtures, unsupported contracts or a failed baseline block
 the batch. A later individual search failure is recorded and other tasks may
-continue. Each task runs serially in its own `run`/`resume` process.
+continue. Each task runs in its own `run`/`resume` process, one at a time unless
+`--parallel N` (also accepted with `--resume`) starts N at once. Agent turns then
+overlap, but every evaluator worker (probe, check, timing, profile) holds a
+per-device `flock` in the temporary directory, so measurements never share the
+GPU; the evaluation timeout starts once the lock is held, and `command.json`
+records the wait. Agents spend most of a run's wall time, so on one device this
+multiplies throughput without changing what is measured. A preflighted item may
+be set to `skipped` in `batch.json` to leave it out of the batch.
 
 Promotion requires at least 3% weighted latency improvement and at most 5%
 regression on every workload, against both the initial baseline and incumbent,
@@ -204,9 +275,14 @@ archives and reproduction.
 
 `install` accepts an exported registry task from `capture-ops`, with a
 Python/Triton solution and an operator already registered in the current tree.
-ATen-discovery/catalog exports and CUDA C++ solutions are not installable through
-this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/` and
-`profile.json`; overwriting an installed operator requires `--replace`.
+Catalog exports and CUDA C++ solutions are not installable through
+this command. It writes `embodiinfer/backend/triton/tuned/<profile>/<op>/<variant>/`
+and `profile.json`. An operator's layouts are often split across tasks (FP32 vision
+and BF16 language GEMMs, prefix and decode rotations), so each installed task becomes
+one variant and the generated `<op>/__init__.py` sends a call to the variant that
+verified its exact layout. A variant whose layouts overlap an installed one, a
+reinstall of the same task, or rebuilding an older single-kernel package requires
+`--replace`, which drops the overlapping variants.
 
 The manifest records device name, compute capability, Torch/Triton match keys,
 source digest, verified layout count and kernel-search provenance. CUDA version
@@ -223,11 +299,16 @@ then resolves a cached callable. `kernel_profile` supports:
 |---|---|
 | `none` (default) | Preserve existing Torch/Triton preferences |
 | `torch` | Force registered operators to their Torch references |
+| `flashinfer` | Built-in profile selecting the integrated Pi05 FA2 attention, Gemma RMSNorm and BF16 cuBLASLt projection backends; other operators keep their existing implementations |
 | `auto` | Select a profile matching device/capability/Torch/Triton, otherwise use `none` |
 | Explicit name | Select that profile; a missing or incompatible profile raises |
 
-Only operators present in a profile are overridden. Profile loading verifies
-source digests. Backend modules remain pure tensor code with no engine/policy
+Only operators present in a profile are overridden. Tuned profile loading verifies
+source digests. The built-in `flashinfer` profile resolves prepared backend names
+through `KernelSelection.resolve_backend`; it is not an installed tuning artifact
+and is never selected by `auto`. Its contracts are maintained in the
+[fused operator proposal](0008-pi05-fused-operators.md).
+Backend modules remain pure tensor code with no engine/policy
 imports. Registration and profile loading are runtime contracts; search is
 repository tooling.
 
@@ -255,9 +336,9 @@ Profiler timings and weighted kernel gains cannot substitute for this run.
 
 - A separate agent controller would duplicate Humanize2's sessions, budgets and
   journals; reuse its Flow instead.
-- Full ATen discovery preserves executed operator coverage but cannot itself
-  establish a new fused region or an installable registry call site. Keep it as
-  a distinct workflow ([Appendix C](#model-scoped-operator-discovery)).
+- Full ATen discovery did not establish installable registry call sites and has
+  been removed. Capture selected registered operators with `capture-ops`; shared
+  replay contracts and the inference driver remain available (Appendix C).
 - Existing Triton is a useful starting point/comparison row; the registry task's
   baseline remains its frozen Torch reference. Inductor production performance
   is measured at model level, not assumed from kernel timing.
@@ -290,12 +371,10 @@ candidate fails.
 
 ### Operator gate
 
-Model discovery records execution settings separately from acceptance rules.
-Pure copies, indexing, exact elementwise operations, RNG transitions, and unknown
-semantics retain bit-exact validation. An explicit registry selects floating
-matrix multiplication, linear, reductions, softmax, and supported attention/norm
-calls for tolerance validation; dtype alone never relaxes an unknown operator.
-Existing hand-written/catalog contracts and archived runs keep their contracts.
+Registry capture records execution settings separately from acceptance rules.
+Floating registry calls use their declared Torch reference for FP64 calibration.
+Mutation, non-floating outputs, FP64 and unsupported dtypes retain bit-exact
+validation. Existing hand-written/catalog contracts retain their own rules.
 
 Before task generation, `calibrate --captured CAPTURE --output CALIBRATED` runs
 in the matching model environment, using only the captured production operator
@@ -313,7 +392,7 @@ Every candidate element must satisfy abs(C-R) <= atol+rtol*abs(R). The one-epsil
 scale floor allows rounding near zero; the factor of two budgets measured
 baseline error. These are explicit engineering policy constants, not a proof of
 an error bound for unseen inputs. Non-floating outputs, layout, aliases, mutation
-and RNG constraints remain exact. Nonfinite reference/baseline/output values
+constraints remain exact. Nonfinite reference/baseline/output values
 fail calibration/validation. FP64 outputs retain exact validation: there is no
 higher-precision oracle in this implementation.
 
@@ -328,7 +407,7 @@ threshold in response to a candidate failure.
 
 Implementation belongs to `scripts/kernel_tuning/discovery/numerics.py` (static
 policy/contract), `benchmarks/kernel_tuning/calibration.py` (trusted reference and
-measurement), discovery recorder/task generation, and the replay evaluator.
+measurement), registry capture/task generation, and the replay evaluator.
 Calibration itself changes no runtime API or model-level action gate. CPU tests
 exercise selection, calibration, per-workload bounds, attention
 semantics, precision restoration, real/random/boundary coverage, and tampering;
@@ -414,13 +493,15 @@ gate blocking. GPU/checkpoint measurements on each target are still required;
 these extensions do not establish Jetson speedups or implement automatic
 cross-operator fusion.
 
-Implemented components are the Humanize2 Flow/archive, discovery and registry
+Implemented components are the Humanize2 Flow/archive, registry
 capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
 loader, install, model verification, the CPU registration controller, and an
 opt-in `--unfenced` agent mode for hosts without Landlock (Section 11.1). The
-pi0.5 call sites are integrated. One hardware profile is committed: `orin_pi05`
-for Jetson AGX Orin (Section 9.1); `kernel_profile` still defaults to `none`, so
-it is used only when selected by name or by `auto` on matching hardware.
+pi0.5 call sites are integrated. Two hardware profiles are committed for Jetson
+AGX Orin: `orin_pi05` (Section 9.1) and `orin_pi05_r2` (Sections 9.2 and 9.3).
+`kernel_profile` still defaults to `none`, so a profile is used only when
+selected by name or by `auto` on matching hardware; `auto` takes the first
+matching profile in name order, which on Orin is `orin_pi05`.
 
 Remaining work from the merged design:
 
@@ -447,7 +528,7 @@ must be checked by model benchmarks before becoming performance claims.
 
 CPU tests under `tests/kernel_tuning/` cover task validation, Humanize2 fake-agent
 execution, failed/interrupted attempts, budgets/resume, evidence tampering,
-preflight barriers, replay layouts/mutations/RNG, calibration, hotspot attribution,
+preflight barriers, replay layouts/aliases/input integrity, calibration, hotspot attribution,
 installation, model-gate arithmetic and registration repair. Fake-agent sessions
 also check that runs keep Humanize2's default permission unless `unfenced` is
 recorded, and that batches and registration freeze that choice. Registry tests
@@ -535,6 +616,191 @@ accepts it. The decode export was tuned after capture recorded the production
 output layout (a contiguous query). Replacing the existing Triton decode
 rotation with it changed end-to-end latency by less than 1 ms and left actions
 bit-identical.
+
+### 9.2 `orin_pi05_r2` on Jetson AGX Orin
+
+`orin_pi05_r2` holds eight kernels from a second Orin round, tuned with the
+two-chaser flow (Section 4.4). The chasers were a Claude Code and a Codex harness,
+both on DeepSeek-V4.1-Flash. They carried the device-routed `KernelWiki` and
+`ncu-report-skill` forks and Nsight Compute evidence collected through `sudo -n`,
+and ran `--unfenced`. Every prefix-side task covers both prompt buckets that
+occur with this checkpoint (prefix length 672 or 712), and the attention task
+also covers the denoise shapes of both, so one kernel serves either bucket.
+
+The round ran two batches over the same capture:
+
+- The first batch ran the ten operators one at a time and reached eight of them
+  before it was stopped: 110 minutes, 16 candidates, patience 6, 15-minute turns
+  and 10-minute evaluations per task.
+- The second batch took the five tasks the first left without a kernel. These
+  were the three `linear` tasks and two it had not reached. They ran at once
+  (`--parallel 5`) with 5 hours, no candidate or patience limit, and 30-minute
+  limits. A host reboot stopped it after 286 of its 300 minutes, and its best
+  attempts were exported from the run archives.
+
+Together the two batches took about 18 hours on the device.
+
+Measured 2026-10-27 under the conditions of Section 9.1, with the following
+differences:
+
+- The source tree was `fb9a575` plus this profile.
+- The GPU clock was not locked: a reboot had cleared the lock, leaving
+  `nvhost_podgov` at 306–930.75 MHz.
+- Rows ran in the order `none`, `orin_pi05_r2`, `orin_pi05`, `orin_pi05_r2`,
+  `none`, each with ten warmup calls and 600 timed calls. The mean is over the
+  runs of each profile.
+
+`none` and `orin_pi05` reproduced their Section 9.1 means within 1.0 ms.
+
+| `kernel_profile` | Runs | Mean (ms) | P50 (ms) | P95 (ms) | vs `none` |
+|---|---|---|---|---|---|
+| `none` (existing Triton) | 2 | 610.8 | 609.8 / 609.8 | 611.1 / 612.9 | — |
+| `orin_pi05` | 1 | 537.6 | 537.4 | 538.9 | −12.0% |
+| `orin_pi05_r2` | 2 | 515.0 | 514.3 / 514.6 | 516.2 / 516.9 | −15.7% (−4.2% vs `orin_pi05`) |
+
+**Numerical gate.** The Section 6 gate (`scripts.kernel_tuning.verify.gate`)
+passed over the 200 inputs with shared noise, worst ratio 0.854. The reference
+was `kernel_profile: torch` in the same mixed precision, because an FP32
+reference does not fit in the 32 GB unified memory. For the action chunk:
+
+| Measure | `orin_pi05_r2` | Limit | `none` |
+|---|---|---|---|
+| Mean max-abs error | 0.00513 | 0.00605 | 0.00484 |
+| Mean RMSE | 0.00167 | 0.00196 | 0.00156 |
+| Worst max-abs error | 0.0254 | 0.0391 | 0.0195 |
+
+**Dispatch.** The check used six inputs covering both buckets and the first 20
+recorded inputs; the 20 recorded inputs all fall in the 672 bucket. Every call
+of the six tuned operators dispatched to a tuned kernel. `linear` falls back only
+for the layouts without a promoted kernel:
+
+- the FP32 vision projections,
+- the fused 2048→32768 gate/up projections,
+- the expert 1024→8192 gate/up.
+
+Operators, from the promoted attempt's paired evaluator rounds against the
+task's Torch baseline (calls per inference in parentheses; the chaser that wrote
+the kernel in brackets):
+
+| Operator (run) | Workload | Torch (ms) | Tuned (ms) |
+|---|---|---|---|
+| `split_kv_attention` (`20261026T192726Z-44b77e65fd`) [Claude Code] | prefix, 672 / 712 keys (18) | 3.61 / 3.81 | 0.690 / 0.859 |
+| | denoise, 672 / 712 + 50 keys (180) | 0.905 / 0.934 | 0.092 / 0.100 |
+| `linear` (`20261027T083101Z-f3a3fe58e8`) [Codex] | prefix `down_proj`, 672 / 712×16384→2048 (18) | 6.43 / 6.61 | 3.06 / 3.09 |
+| | expert `down_proj`, 50×4096→1024 (180) | 0.0765 | 0.0765 |
+| `rotate_qk` prefix (`20261027T041343Z-ef7e804e63`) [Claude Code] | 672 / 712 tokens (18) | 0.432 / 0.461 | 0.050 / 0.052 |
+| `rotate_qk` decode (`20261027T022339Z-cc147a0ad6`) [Claude Code] | 50 tokens (180) | 0.071 | 0.0125 |
+| `gated_gelu` prefix (`20261027T003333Z-273b3ff7e2`) [Claude Code] | 672 / 712×16384 (18) | 1.27 / 1.35 | 0.354 / 0.375 |
+| `gated_gelu` expert (`20261027T055939Z-b94ceefecd`) [Codex] | 50×4096 (180) | 0.0387 | 0.0163 |
+| `gated_residual` (`20261027T083103Z-13ee35774e`) [Claude Code] | 50×1024 (360) | 0.0164 | 0.0093 |
+| `gelu_tanh` (`20261027T083104Z-63d432d46f`) [Claude Code] | SigLIP 256×4304, FP32 (54) | 0.0586 | 0.0546 |
+
+No candidate was promoted for the two remaining `linear` tasks:
+
+- BF16 gate/up: 8 evaluated attempts, all slower than cuBLAS, which already
+  reaches about 79% of the 26.7 TFLOP/s BF16 tensor peak at 930.75 MHz.
+- FP32 vision projections: 6 attempts in the first batch and 7 in the second.
+  They either exceeded the calibrated bounds, produced non-finite output, or
+  were slower than cuBLAS.
+
+**In-model attribution.** These per-operator gains overstate the end-to-end
+saving. Weighted by calls, they predict about 300 ms per inference, against 96 ms
+measured. One inference was profiled with Nsight Compute using an
+experiment-local driver. NCU fixes the clock at its base, so durations were
+converted from cycles to 930.75 MHz. The kernel sums are 589.6 ms (`none`) and
+498.3 ms (`orin_pi05_r2`), against 610.8 and 515.0 ms end to end; the rest is
+mostly launch gaps in the CUDA Graph. By stage:
+
+| Stage | `none` (ms) | `orin_pi05_r2` (ms) |
+|---|---|---|
+| SigLIP vision tower and projector, FP32 | 248.5 | 248.6 |
+| Gemma prefix | 257.2 | 181.0 |
+| Action expert (ten steps) and input/output | 83.8 | 68.7 |
+
+The prefix gain is mostly `down_proj` (−61 ms) and `gated_gelu` (−12 ms).
+`split_kv_attention` accounts for most of the overestimate. Its task baseline is
+the registry's Torch reference: 3.6 ms per prefix call and 0.9 ms per denoise
+call. `none`, however, already runs the existing Triton split-KV kernels, at
+0.49 ms per prefix call and 0.155 ms per denoise call in the model. Against that
+path the tuned kernel saves 14.7 ms in the denoise loop and costs 3.3 ms in the
+prefix, at 0.67 ms against 0.49 ms per call. A task should therefore be measured
+against the implementation its production configuration actually runs.
+
+### 9.3 `orin_pi05_r2` in uniform BF16
+
+Sections 9.1 and 9.2 keep the SigLIP tower and projector in FP32, which costs about
+200 ms per inference on this device, and compare rows without Inductor. Neither
+is the fastest hand-written path, so this section measures the kernels against
+that path. Measured 2026-11-02 at `cb6e8b8` under the conditions of Section 9.2,
+with the following differences:
+
+- The whole policy was cast to BF16 on the CPU before the engine moved it.
+- Rows with Inductor warmed up on all 200 inputs, so both prompt buckets compiled
+  before timing. Other rows took ten warmup calls.
+- The `Pi05OptimizationConfig` rows kept the Gemma norms and the action/time
+  projections in FP32, as fused operators require, and used `hardware="orin"`.
+
+Other rows use `native_inference` and Triton prefix and denoise attention. All
+rows capture the full denoise loop in one CUDA Graph.
+
+| `kernel_profile` | Path | `native_embeddings` | Runs | Mean (ms) | P50 (ms) | P95 (ms) |
+|---|---|---|---:|---:|---:|---:|
+| `none` | eager prefix | on | 1 | 412.3 | 411.9 | 415.0 |
+| `none` | prefix graph | on | 1 | 402.2 | 401.8 | 404.8 |
+| `none` | prefix graph | off | 1 | **396.6** | 396.4 | 398.0 |
+| `none` | Inductor, prefix graph | on | 1 | 368.3 | 367.9 | 371.0 |
+| `none` | Inductor, prefix graph | off | 3 | 353.4 | 352.9–353.2 | 355.7–356.2 |
+| `none` | `Pi05OptimizationConfig`, `folded_flash` | off | 1 | 380.7 | 368.8 | 372.0 |
+| `none` | `Pi05OptimizationConfig`, `query_major` | off | 1 | 388.4 | 388.2 | 390.3 |
+| `none` | `Pi05OptimizationConfig`, `reference` (`strict`) | off | 1 | 570.4 | 570.1 | 572.8 |
+| `orin_pi05_r2` | eager prefix | on | 1 | 333.8 | 333.3 | 337.0 |
+| `orin_pi05_r2` | prefix graph | on | 3 | 307.3 | 306.6–307.4 | 309.7–310.3 |
+| `orin_pi05_r2` | prefix graph | off | 3 | **302.0** | 301.4–301.9 | 303.4–304.7 |
+
+The `folded_flash` mean includes one 2,670 ms call in the timed window.
+
+The fastest hand-written row is the configuration of the published
+[Orin BF16 benchmark](../../benchmarks/pi05-quant-benchmark/agx-orin/bf16/README.md);
+one of its three runs omitted `TORCHINDUCTOR_DETERMINISTIC=1` and differed by less
+than 0.2 ms. That report's 313.34 ms uses another checkpoint
+(`pi05_libero_finetuned_v044_gitcode`), 1,600 frames and Torch 2.9.1, so it is not
+comparable with these rows. Inductor cannot compile the tuned kernels' layout gates
+(Section 9.1), so the fastest tuned row differs from it by replacing Inductor with
+the kernels. That row is 23.8% below the same path with `none` and 14.5% below the
+fastest hand-written row.
+
+**Numerical gate.** The Section 6 gate passed over the 200 inputs with shared noise
+for both tuned CUDA Graph rows: worst ratio 0.864 without native embeddings and
+0.867 with them. As in Section 9.2, the reference was `kernel_profile: torch` in
+the same precision and path. For the fastest tuned row:
+
+| Measure | `orin_pi05_r2` | Limit | `none` |
+|---|---|---|---|
+| Mean max-abs error | 0.00518 | 0.00605 | 0.00484 |
+| Mean RMSE | 0.00171 | 0.00198 | 0.00159 |
+| Worst max-abs error | 0.0146 | 0.0313 | 0.0156 |
+
+This gate compares within uniform BF16, and BF16 vision itself moves the actions.
+Against the mixed-precision `torch` row of Section 9.2, the mean and worst max-abs
+errors are:
+
+| Row | Mean max-abs error | Worst max-abs error |
+|---|---:|---:|
+| `orin_pi05_r2`, uniform BF16 | 0.00589 | 0.0234 |
+| `none`, Inductor, uniform BF16 | 0.00537 | 0.0352 |
+| `none`, mixed precision | 0.00484 | 0.0195 |
+
+**Dispatch.** The check used the six inputs of Section 9.2 that cover both buckets.
+Every call of `rotate_qk`, `split_kv_attention`, `gated_gelu` and `gated_residual`
+dispatched to a tuned kernel. `linear` falls back only for the gate/up projections.
+Without native embeddings, SigLIP calls neither `gelu_tanh` nor `linear` through
+the registry, so seven of the eight kernels run. The kernels were captured and
+tuned on the mixed-precision path of Section 9.2, so no task targeted BF16 vision.
+
+**Mixed precision at this commit.** `none` measured 610.8 ms and `orin_pi05_r2`
+515.3 ms, and all 200 recorded action outputs were bit-identical to the Section 9.2
+runs, so that section's gate still applies. The prefix GELU fusion merged into
+`cb6e8b8` is off by default and is not enabled in any row.
 
 ## 10. Risks and limitations
 
@@ -724,7 +990,8 @@ ATen operation in the model.
 ```bash
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
   --model pi05 --captured results/kernel_tuning/captures/pi05-ops-calibrated \
-  --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
+  --agent 'HARNESS/MODEL:EFFORT[,HARNESS/MODEL:EFFORT]' \
+  --set evaluator_python=/absolute/runtime/python
 
 # Resume with the printed Batch path; omit agent, selection options and --set.
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all \
@@ -1059,175 +1326,63 @@ are not established by CPU/fake-agent tests.
 
 ## Appendix C. Other task sources
 
-### Model-scoped operator discovery
+### Registry capture artifacts and shared tooling
 
-The model workflow selects exactly one canonical policy ID before preparation.
-During the existing preparation execution, a scoped ATen observer and wrappers
-around existing backend entrypoints collect complete input/output metadata.
-Existing compound kernels remain single operators; this change introduces no
-new fusion, quantization, runtime registration, or engine API.
+`capture-ops` selects one canonical policy and observes registry calls during its
+measured inference window. `--ops` chooses the operator scope; subsequent
+generation, calibration and tuning cover every recorded workload of that scope.
+It records no arbitrary ATen operations. Run the driver eagerly with compilation
+and CUDA Graphs disabled so registry calls reach Python. Capture does not certify
+unvisited paths, other shapes or checkpoint-level action parity.
 
-The observed scope is end-to-end inference, not a list of policy methods. It
-opens at the model-agnostic entries every deployment path uses: `EngineCore`
-construction and execution, the `GenerationBackend` rollout calls, the policy's
-`collate`, and its serving adapter's construction and `infer`/`infer_batch`.
-Everything below an entry is recorded, including decoder-specific recurrent
-decoding, RL sampling, request preprocessing and action postprocessing. Scope is
-tracked per thread and the observer is installed on whichever thread enters, so
-the async engine's executor and batched-serving workers are covered. Model
-weights read by arithmetic outside every entry (a driver calling policy
-internals directly) and a run without any entry are capture errors, so a
-bypassed path cannot silently produce a smaller operator set.
+`scripts.kernel_tuning.discovery.drive` remains the shared driver for `profile`,
+`capture-ops` and `verify`. It constructs the policy and engine using serving
+arguments and replays recorded requests or observations, retaining recurrent
+episode sessions. `benchmarks.kernel_tuning.discovery_inputs` exports these
+inputs using the pi05, Qwen navigation and StreamVLN benchmark loaders. Those
+historical module paths are retained; they do not enable full-model discovery.
 
-The capture freezes the model type, supplied checkpoint/configuration descriptors, Torch version,
-numerical settings, operator overloads, tensor shapes/strides, argument trees,
-aliasing and mutation contracts, and every observed workload (no top-eight
-truncation or estimated-shape fallback). Quantized calls and their internal
-floating-point operations are excluded by invocation scope, including dynamically
-created quantized projections and first-forward packing. Metadata-only operations
-and host-side work are reported separately from device computation. Discovery
-covers the executed preparation paths, not unvisited branches.
+The capture contains:
 
-Uncompiled preparation is required; compilation is rejected rather than silently
-changing the model's attention or execution path. CUDA Graph metadata is collected
-during warmup/capture and calls are counted on replay. Bounded fixtures may be saved
-outside graph capture; cases requiring unavailable fixtures are coverage gaps.
-Unknown external operators, unrepresentable arguments/state, and unsupported
-contracts also remain explicit gaps. Every eligible workload must have a task and
-all production baselines must pass preflight before any model batch starts an
-agent. No partial-model or skip-preflight escape hatch is provided.
+- `manifest.json`: `capture: registry`, policy identity/configuration, revision,
+  Torch version, numerical settings, capture window, completeness and file hashes.
+- `operators.json`: registry/Torch-reference/starting-implementation identities,
+  argument trees, observed shapes/strides/dtypes, aliases and call counts.
+- `coverage.json`: operator statuses and explicit capture errors.
+- `fixtures/`: real input storage, bounded by `--fixture-bytes` (default 1 GiB).
 
-ATen tasks replay the exact captured overload as their frozen bit-exact reference
-and production baseline. Backend tasks snapshot their existing implementation.
-The existing Humanize2 search, evaluator, paired promotion rules, archive and
-export remain in use. Layout/state-aware task adapters extend evaluation without
-weakening the default pure-operator checks. Inputs, current stream, numerical
-settings, changed-input graph replay, and declared mutations are validated.
+Calibration writes a new capture with `calibration.json`; generated tasks carry
+the per-operator bounds in `numerics.json`. Inputs, seeds, masks and numerical
+settings follow Section 6. First-observed real fixtures represent each structural
+case; random and boundary profiles provide finite additional validation.
 
-This is repository tooling under scripts/kernel_tuning and measurement under
-benchmarks/kernel_tuning. A static operator whitelist was rejected because it
-cannot discover model calls; full-model graph compilation was rejected because
-it changes operator boundaries and is outside the no-new-fusion scope. Existing
-catalog tasks remain available explicitly as a legacy workflow. Legacy captures
-cannot establish model coverage and must be recaptured for model tuning.
+Tasks use the frozen Torch reference as their baseline and include
+`replay.json` for storage/layout/alias contracts. Production output layouts are
+preserved, including the reference relayout described in Section 4.3. Replay
+checks every output and rejects input mutation, resets storage outside timed
+events, and validates changed-input graph replay. Registry tasks default to
+CUDA Graph timing; eager timing remains available. NCU profiling uses the same
+replay adapter to materialize fresh inputs before one eager call under NVTX.
+This diagnostic call does not reproduce CUDA Graph replay latency, even when
+paired promotion measurements use graph timing.
 
-CPU regression coverage must exercise uncatalogued operators, model identity,
-all shapes/layouts, quantized scopes (including dynamic modules), unsupported
-cases, immutable capture artifacts, and the all-baselines preflight barrier.
-GPU/checkpoint validation remains explicit in the matching model environment;
-CPU/fake-agent passes do not establish GPU correctness or performance.
+The shared `discovery.contracts`, `tasks`, `tensors` and `numerics` modules remain
+in place for registry capture, calibration, task generation, batch preflight and
+evaluation. The `embodiinfer-replay-v1` float64 definition extension also remains;
+it preserves double precision without changing the ordinary FlashInfer schema.
 
-#### Commands and artifacts
+The full-model `capture --model` entry, ATen/backend observer, discovery-only
+task/oracle branches, RNG-transition replay and greedy-workspace recipes have
+been removed. New model captures and replay tasks must identify registry
+operators. Old discovery artifacts are rejected with `capture-ops` migration
+guidance; recapture through registered call sites. `capture --catalog` remains
+an independent, explicit JSONL workflow.
 
-Run preparation in the selected model's own runtime. The bundled driver
-`scripts.kernel_tuning.discovery.drive` constructs the policy and engine with the
-serving transports' arguments and replays recorded inputs: serving requests go
-through the policy's adapter as HTTP requests would, engine observations through
-`collate` and `EngineCore.execute`, with one session per recurrent episode.
-`benchmarks/kernel_tuning/discovery_inputs.py` exports such inputs from the pi05,
-Qwen navigation and StreamVLN benchmark data; any script that drives one of the
-entries above may be used instead. Compilation must be disabled explicitly (for
-example `--no-cuda-graph` for StreamVLN, whose graph mode compiles its prefill).
-The capture does not launch an extra forward or change the attention backend.
-Canonical policy IDs are those accepted by the factory, for example `pi05`,
-`streamvln`, or `qwen2.5-vl-3b-r2r-low-level`; catalog group names are not model IDs.
-
-```bash
-/absolute/runtime/python -m benchmarks.kernel_tuning.discovery_inputs pi05 --config PI05_BENCHMARK.yaml --output pi05-inputs.pt --serving-config pi05-serving.json
-/absolute/runtime/python -m scripts.kernel_tuning capture --model pi05 --fixture-bytes 8589934592 --output results/kernel_tuning/captures/pi05 -- -m scripts.kernel_tuning.discovery.drive --policy pi05 --checkpoint CHECKPOINT --adapter-config pi05-serving.json --inputs pi05-inputs.pt
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate --model pi05 --captured results/kernel_tuning/captures/pi05 --list
-/absolute/runtime/python -m scripts.kernel_tuning calibrate --captured results/kernel_tuning/captures/pi05 --output results/kernel_tuning/captures/pi05-calibrated
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --model pi05 --captured results/kernel_tuning/captures/pi05-calibrated --agent 'HARNESS/MODEL:EFFORT' --set evaluator_python=/absolute/runtime/python
-uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning tune-all --resume results/kernel_tuning/batches/BATCH_ID
-```
-
-`--dry-run` builds and validates all tasks without evaluation. `--preflight-only`
-evaluates all baselines without agents; if that batch is later resumed, supply
-its agent at creation time. Model preflight failures prevent every agent from
-starting. After all baselines pass, an individual search failure is recorded and
-other prepared tasks may continue. Resume rechecks capture/task/tool identities
-and reruns model preflight. The single-task `run`/`resume` paths also check the
-parent model batch. There is no model-mode `--force`, `--estimated`, operator
-filter, multiple-model selection, or `--skip-preflight` option.
-
-Capture artifacts are `manifest.json` (actual policy type, builder configuration,
-revision, Torch version, numerical settings, completeness and hashes),
-`operators.json` (overload/backend identity, signature, every workload and counts),
-`coverage.json` (ready/excluded_quantized/metadata_only/host_only/blocked counts),
-and bounded `fixtures/`. A model batch snapshots this directory under `capture/`,
-creates a task per call signature under `tasks/<operator-id>/`, and retains
-`batch.json`, preflight records, run archives, exports and summaries. Each task
-includes `replay.json` with storage/layout/mutation contracts and model identity;
-its baseline calls the exact ATen overload or snapshotted backend implementation.
-Different shapes and strides remain workloads of the same signature; overload,
-scalar/static arguments, tensor rank/dtype and output structure distinguish tasks.
-
-The default 64 MiB fixture budget is explicit (`--fixture-bytes`); the example
-raises the maximum to 8 GiB. Integer/index storage and all inputs of supported
-numerically calibrated operators require real fixtures, even for large weights.
-For other exact tasks, floating storage up to 1 MiB is captured when budget
-permits and other floating storage uses seeded generation. First observed
-fixtures represent each structural case; calibration tests those real values,
-fresh random values, zeros and cancellation inputs with masks/indices preserved.
-This is finite validation, not proof for every input. Required fixture exhaustion
-is a coverage gap. `calibrate` adds `calibration.json` to a new capture; generated
-tasks carry each operator's frozen bounds as `numerics.json`. See the numerical
-policy in Section 6 for the formula, environment binding and limitations.
-
-Replay preserves shared storage, strides and offsets. It checks output values,
-layouts, input/output and output/output aliases, declared mutations and unchanged
-input storage. Timing resets backing storage before every sample, outside timed
-events, in both eager and graph modes. The default is eager; `timing.mode=cuda_graph`
-also requires successful changed-input A/B/A replay. Optional NCU profiling uses
-the same replay adapter and rematerializes input storage after warmup. Numerical overrides cannot change
-the selected exact contract or the frozen calibrated tolerance contract.
-
-Default-generator `aten.randn.default` and `aten.randn.generator` with
-`generator=None` have an eager replay contract. Capture stores the opaque CPU
-and target CUDA generator states immediately before and after the existing call,
-within the same required-fixture budget. Seed 0 replays the actual captured
-position; other validation seeds use independent default-generator states.
-Validation compares output bytes and the complete post-call generator states,
-rejecting extra draws or rewinds even when output values match. State resets
-happen before each warmup/sample, outside timing events, and evaluation restores
-the caller's Torch RNG states on success or failure. Explicit generator objects,
-other random overloads, and RNG tasks using CUDA Graph timing remain gaps.
-
-SDPA's dispatcher RNG tag is conditional: `dropout_p=0` (including its schema
-default) does not require an RNG replay contract. Discovery resolves positional,
-keyword and omitted dropout arguments without changing the invocation, backend,
-mask, scale or attention semantics. Nonzero dropout remains a coverage gap until
-its own state contract is implemented; other nondeterministic tags still apply.
-The same rule covers the backend overloads (flash, efficient, cuDNN, CPU) that
-model code reaches under `no_grad`. Without dropout their `philox_seed` and
-`philox_offset` outputs are left uninitialized, so replay records them as
-`undefined_outputs` and checks every other output exactly; no other operator may
-declare undefined outputs.
-
-Replay tasks declare `definition_schema=embodiinfer-replay-v1`. Their local
-`ReplayDefinition` extends the pinned FlashInfer tensor schema with `float64`,
-retains upstream structural validation, and uses the same builders with native
-double-precision tensors. Captured fixtures, input materialization and output
-checks preserve float64 without a cast or relaxed tolerance. Ordinary FlashInfer
-definitions and their accepted dtype set are unchanged.
-
-Existing RoPE cache writes and greedy-sampling workspace mutations have explicit
-contracts; graph GQA and prefill entries remain individual existing operators.
-`GreedyWorkspace` has a typed tensor-state recipe; arbitrary Python objects still
-require an adapter. Dtypes unsupported by the replay schema remain task
-construction gaps rather than silently converted inputs.
-
-Known quantization scopes are `QuantizedLinear` (FP8/INT8/NVFP4), conversion and
-packing helpers, their backend functions, and explicit native quantization
-dispatcher operators. Normal integer indices are not a quantization signal.
-Unknown dispatcher extensions and raw Triton launches are reported as gaps;
-random operators outside the default-generator randn contract, opaque Python
-arguments, and calls without tensor outputs also require an adapter. Custom
-C++/CUDA calls that bypass both the dispatcher and
-these entrypoints need explicit instrumentation before claiming coverage.
-Capture is a single-process preparation facility; it does not certify unvisited
-branches, other worker processes, or checkpoint-level action parity. Existing
-fused kernels count as one call; no new fused operators are proposed or generated.
+Calibration binds the numerical-policy/oracle source digest. This cleanup changes
+that digest without changing registry reference arithmetic or threshold formulas:
+existing raw registry captures can be recalibrated into a new directory before
+generating new tasks/batches. Do not edit old hashes or widen thresholds to reuse
+old evidence. Archived runs retain their snapshotted tooling for reproduction.
 
 ### Generated catalog tasks and batch tuning
 
@@ -1243,7 +1398,7 @@ The catalog covers pi0.5 norm/activation/RoPE/split-KV kernels, Qwen2.5-VL visio
 RoPE/segmented attention, and StreamVLN norm/activation kernels. `--estimated`
 explicitly opts into estimated shapes. Existing fixed tolerances remain defined
 by the catalog and must pass baseline preflight on the target runtime; they are
-not silently replaced by calibrated discovery contracts.
+not silently replaced by calibrated registry contracts.
 
 ```bash
 uv run --project scripts/kernel_tuning python -m scripts.kernel_tuning generate \

@@ -82,41 +82,18 @@ def captured_settings(precision: dict[str, Any], flags: dict[str, Any]) -> Itera
 def production(identity: dict[str, Any], inputs: list[torch.Tensor]) -> list[torch.Tensor]:
     """Execute only the captured production implementation, never a candidate."""
     args, kwargs = restore(identity["arguments"], inputs)
-    if identity["kind"] == "aten":
-        _, name, overload = identity["name"].split(".")
-        fn = getattr(getattr(torch.ops.aten, name), overload)
-    else:
-        fn = getattr(importlib.import_module(identity["module"]), identity["entry"])
+    if identity["kind"] != "registry":
+        raise ContractError("Only registry operators can be calibrated; recapture with capture-ops")
+    fn = getattr(importlib.import_module(identity["module"]), identity["entry"])
     return tensor_outputs(fn(*args, **kwargs))
 
 
 def _arguments(identity: dict[str, Any], inputs: list[torch.Tensor]) -> dict[str, Any]:
-    args, kwargs = restore(identity["arguments"], inputs)
-    if identity["kind"] == "aten":
-        _, name, overload = identity["name"].split(".")
-        schema = getattr(getattr(torch.ops.aten, name), overload)._schema
-        return {
-            arg.name: args[i] if i < len(args) else kwargs.get(arg.name, arg.default_value)
-            for i, arg in enumerate(schema.arguments)
-        }
-    if identity["kind"] == "registry":
-        import inspect
+    import inspect
 
-        function = getattr(importlib.import_module(identity["module"]), identity["entry"])
-        return {**dict(zip(inspect.signature(function).parameters, args)), **kwargs}
-    names = {
-        "split_kv_attention": (
-            "query",
-            "prefix_key",
-            "prefix_value",
-            "suffix_key",
-            "suffix_value",
-            "mask",
-            "scaling",
-        ),
-        "segmented_attention": ("q", "k", "v", "q_segment_offsets", "kv_segment_offsets"),
-    }[policy(identity)]
-    return {**dict(zip(names, args)), **kwargs}
+    args, kwargs = restore(identity["arguments"], inputs)
+    function = getattr(importlib.import_module(identity["module"]), identity["entry"])
+    return {**dict(zip(inspect.signature(function).parameters, args)), **kwargs}
 
 
 def validation_inputs(
@@ -160,103 +137,12 @@ def validation_inputs(
     return inputs
 
 
-def _attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    *,
-    mask: Any = None,
-    scale: float | None = None,
-    causal: bool = False,
-    gqa: bool = False,
-) -> torch.Tensor:
-    if gqa and q.shape[-3] != k.shape[-3]:
-        k = k.repeat_interleave(q.shape[-3] // k.shape[-3], dim=-3)
-        v = v.repeat_interleave(q.shape[-3] // v.shape[-3], dim=-3)
-    scale = q.shape[-1] ** -0.5 if scale is None else scale
-    rows = []
-    # Bound oracle scratch memory without changing each row's reduction semantics.
-    for start in range(0, q.shape[-2], 128):
-        stop = min(start + 128, q.shape[-2])
-        scores = (q[..., start:stop, :] @ k.transpose(-1, -2)) * scale
-        if causal:
-            visible = (
-                torch.arange(k.shape[-2], device=q.device)
-                <= torch.arange(start, stop, device=q.device)[:, None]
-            )
-            scores = scores.masked_fill(~visible, float("-inf"))
-        if mask is not None:
-            local = mask[..., start:stop, :] if mask.ndim >= 2 and mask.shape[-2] != 1 else mask
-            scores = (
-                scores.masked_fill(~local, float("-inf")) if local.dtype == torch.bool else scores + local
-            )
-        probs = torch.softmax(scores, dim=-1)
-        probs = torch.where(torch.isneginf(scores).all(dim=-1, keepdim=True), 0.0, probs)
-        rows.append(probs @ v)
-    return torch.cat(rows, dim=-2) if rows else q.new_empty((*q.shape[:-1], v.shape[-1]))
-
-
 def high_precision(identity: dict[str, Any], inputs: list[torch.Tensor]) -> list[torch.Tensor]:
-    """Evaluate the declared mathematical operation in FP64 with unchanged attention semantics."""
-    kind = policy(identity)
-    if kind is None:
+    """Evaluate the registry's Torch reference with floating inputs promoted to FP64."""
+    if policy(identity) != "registry":
         raise ContractError("No trusted high-precision adapter for this operator")
     promoted = [x.to(torch.float64) if x.is_floating_point() else x for x in inputs]
-    args = _arguments(identity, promoted)
-    if kind == "registry":
-        # The Torch reference is dtype-generic: FP64 inputs give an FP64 oracle.
-        return production(identity, promoted)
-    if kind == "aten":
-        _, name, overload = identity["name"].split(".")
-        if name == "scaled_dot_product_attention":
-            if args["dropout_p"] != 0:
-                raise ContractError("Attention calibration requires dropout_p=0")
-            return [
-                _attention(
-                    args["query"],
-                    args["key"],
-                    args["value"],
-                    mask=args["attn_mask"],
-                    scale=args["scale"],
-                    causal=args["is_causal"],
-                    gqa=args.get("enable_gqa", False),
-                )
-            ]
-        if "dtype" in args:
-            args["dtype"] = torch.float64
-        if "half_to_float" in args:
-            args["half_to_float"] = False
-        if name == "rms_norm" and args.get("eps") is None:
-            # The default epsilon belongs to the captured input dtype, not the oracle dtype.
-            args["eps"] = torch.finfo(inputs[0].dtype).eps
-        fn = getattr(getattr(torch.ops.aten, name), overload)
-        return tensor_outputs(fn(**args))
-    if kind == "split_kv_attention":
-        mask = args.get("mask")
-        return [
-            _attention(
-                args["query"],
-                torch.cat((args["prefix_key"], args["suffix_key"]), dim=2),
-                torch.cat((args["prefix_value"], args["suffix_value"]), dim=2),
-                mask=mask == 0 if mask is not None else None,
-                scale=args["scaling"],
-                gqa=True,
-            )
-        ]
-    q, k, v = args["q"], args["k"], args["v"]
-    qb = args["q_segment_offsets"].tolist()
-    kb = args.get("kv_segment_offsets")
-    kb = qb if kb is None else kb.tolist()
-    output = torch.empty_like(q)
-    for qs, qe, ks, ke in zip(qb[:-1], qb[1:], kb[:-1], kb[1:]):
-        output[qs:qe] = _attention(
-            q[qs:qe].transpose(0, 1),
-            k[ks:ke].transpose(0, 1),
-            v[ks:ke].transpose(0, 1),
-            scale=args.get("scaling"),
-            gqa=True,
-        ).transpose(0, 1)
-    return [output]
+    return production(identity, promoted)
 
 
 def derive_bound(baseline: torch.Tensor, reference: torch.Tensor) -> dict[str, Any]:

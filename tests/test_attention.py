@@ -27,6 +27,7 @@ def test_registry_lists_and_resolves():
     assert available_attention_backends() == [
         "eager",
         "eager_bc",
+        "flashinfer_fa2",
         "flex",
         "folded_flash",
         "query_major",

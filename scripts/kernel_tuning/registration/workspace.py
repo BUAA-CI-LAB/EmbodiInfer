@@ -58,15 +58,25 @@ def file_hash(path: Path) -> str:
 
 
 def tracked_hashes(root: Path) -> dict[str, str]:
-    """Hash tracked files and link targets without following unrelated repository links."""
+    """Bind tracked files, link text and gitlink commits without traversing submodules."""
     hashes = {}
-    for name in git(root, "ls-files", "-z").split("\0"):
-        if not name:
+    for entry in git(root, "ls-files", "--stage", "-z").split("\0"):
+        if not entry:
             continue
+        metadata, name = entry.split("\t", 1)
+        mode, oid, stage = metadata.split()
+        if stage != "0":
+            raise ContractError(f"Unmerged registration input: {name}")
         path = root / name
         # Documentation assets may be tracked links on POSIX. Check their parent
         # for traversal, then bind the link text itself, never the target bytes.
         source_path(root, str(Path(name).parent))
+        if mode == "160000":
+            # Fresh registration worktrees do not initialize unrelated skill
+            # submodules. Pin their index identity; Git status guards local changes.
+            source_path(root, name)
+            hashes[name] = f"gitlink:{oid}"
+            continue
         hashes[name] = (
             "symlink:" + hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
             if path.is_symlink()

@@ -5,10 +5,12 @@ from __future__ import annotations
 import csv
 import io
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -98,9 +100,23 @@ def collect(task: TaskPackage, solutions: dict[str, dict[str, Any]], output: Pat
     SASS and native reports are retained even though they never affect promotion.
     Replay input materialization, mutations and RNG remain adapter-owned.
     """
-    ncu = shutil.which("ncu")
-    if not ncu:
-        raise ContractError("profile: true requires ncu on PATH")
+    from .flashinfer_adapter import _PROFILE_ENVIRONMENT
+
+    ncu = list(task.settings.profile_command)
+    if not shutil.which(ncu[0]):
+        raise ContractError(f"profile: true requires {ncu[0]} on PATH")
+    keep = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _PROFILE_ENVIRONMENT or name.startswith(("TRITON_", "FIB_", "CUDA_"))
+    }
+    scratch = Path(tempfile.gettempdir()) / f"kernel-tuning-ncu-{getattr(os, 'getuid', lambda: 0)()}"
+    scratch.mkdir(mode=0o700, exist_ok=True)
+    keep.update(
+        HOME=str(scratch / "home"),
+        TRITON_CACHE_DIR=str(scratch / "triton"),
+        TORCH_EXTENSIONS_DIR=str(scratch / "torch"),
+    )
     output.mkdir(parents=True, exist_ok=True)
     records = []
     for role, solution in solutions.items():
@@ -111,7 +127,7 @@ def collect(task: TaskPackage, solutions: dict[str, dict[str, Any]], output: Pat
             folder.mkdir(parents=True, exist_ok=True)
             report = folder / "ncu.ncu-rep"
             command = [
-                ncu,
+                *ncu,
                 "--target-processes",
                 "all",
                 "--set",
@@ -122,6 +138,8 @@ def collect(task: TaskPackage, solutions: dict[str, dict[str, Any]], output: Pat
                 "none",
                 "--export",
                 str(report),
+                "env",
+                *(f"{name}={value}" for name, value in sorted(keep.items())),
                 sys.executable,
                 str(Path(__file__).resolve()),
                 "--worker",
@@ -141,7 +159,7 @@ def collect(task: TaskPackage, solutions: dict[str, dict[str, Any]], output: Pat
             if not report.is_file() or report.is_symlink():
                 raise ContractError(f"NCU produced no regular report; see {folder / 'worker.log'}")
             metrics_command = [
-                ncu,
+                *ncu,
                 "--import",
                 str(report),
                 "--page",
@@ -166,7 +184,7 @@ def collect(task: TaskPackage, solutions: dict[str, dict[str, Any]], output: Pat
             metrics = parse_metrics(csv_result.stdout)
             # Assembly is diagnostic evidence. Missing source correlation must
             # not discard successfully collected counters.
-            assembly_command = [ncu, "--import", str(report), "--page", "source", "--print-source", "sass"]
+            assembly_command = [*ncu, "--import", str(report), "--page", "source", "--print-source", "sass"]
             try:
                 assembly = subprocess.run(
                     assembly_command,
@@ -194,7 +212,29 @@ def collect(task: TaskPackage, solutions: dict[str, dict[str, Any]], output: Pat
                     "assembly_excerpt": assembly.stdout[:6000] if role == "candidate" else "",
                 }
             )
+    primary = {}
+    if records:
+        selected = max(
+            records,
+            key=lambda row: (
+                {"baseline": 0, "incumbent": 1, "candidate": 2}.get(row["role"], -1),
+                task.settings.weights.get(row["workload"], 1.0),
+            ),
+        )
+        source = output / selected["report"]
+        for source_path, name in (
+            (source, "ncu.ncu-rep"),
+            (source.parent / "metrics.csv", "details.txt"),
+            (source.parent / "worker.log", "ncu.log"),
+        ):
+            shutil.copyfile(source_path, output / name)
+        primary = {
+            "report": str(output / "ncu.ncu-rep"),
+            "details": str(output / "details.txt"),
+            "workload": selected["workload"],
+        }
     return {
+        **primary,
         "collector": "nsight-compute",
         "timing_evidence": False,
         "execution": "one eager call after warmup; not CUDA Graph production timing",

@@ -44,6 +44,7 @@ class NormalizationBackend(Protocol):
     """Prepare fixed-layout RMSNorm execution independently of model modules."""
 
     capabilities: OperatorCapabilities
+    supports_adaptive: bool
 
     def plan(self, inputs: torch.Tensor, *, adaptive: bool, eps: float = 1e-6) -> NormalizationPlan:
         """Allocate a scoped plan before capture and validate supported epsilon."""
@@ -91,6 +92,9 @@ class NormQuantBackend(Protocol):
 normalization_backends = BackendRegistry[NormalizationBackend]("normalization")
 normalization_backends.register_lazy("cuda_strict", "embodiinfer.backend.cuda.normalization", "NormFusion")
 normalization_backends.register_lazy("torch", "embodiinfer.backend.torch.normalization", "TorchRMSNorm")
+normalization_backends.register_lazy(
+    "flashinfer", "embodiinfer.backend.flashinfer.normalization", "FlashInferGemmaRMSNorm"
+)
 
 norm_quant_backends = BackendRegistry[NormQuantBackend]("residual/norm/quantization")
 norm_quant_backends.register_lazy("cuda_strict", "embodiinfer.backend.cuda.norm_quant", "NormQuantFusion")

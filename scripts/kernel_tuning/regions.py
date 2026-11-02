@@ -4,7 +4,7 @@
 runs an unmodified inference driver in the model runtime. Calls that the policy
 resolves through :mod:`embodiinfer.layers.ops` during the measured steps (after
 ``--warmup``) are recorded with their real inputs. The result is a model capture
-in the discovery format, so ``calibrate``, ``generate`` and ``tune-all`` apply
+in the shared capture format, so ``calibrate``, ``generate`` and ``tune-all`` apply
 unchanged. Each operator's identity has ``kind: registry``: its baseline and
 its FP64 oracle are the Torch reference in ``embodiinfer.backend.torch.ops``,
 and the implementation the model ran is shipped as the agent's starting point.

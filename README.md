@@ -80,6 +80,16 @@ Optimize the model path. Reuse the engine from robot inference to RL rollout.
 Choose features by policy and hardware in the [capability reference](docs/en/models.md#capabilities-and-installation).
 Adapters own model-specific optimizations; the shared scheduler stays model-independent.
 
+**Agent-tuned kernels:** coding agents tune operator kernels for a specific GPU and
+software stack. On Jetson AGX Orin, with all else equal, the `orin_pi05_r2` profile reduces
+π0.5 latency from 396.6 ms with hand-written kernels to **302.0 ms** (BF16, batch size 1;
+[conditions](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16),
+[example](examples/pi05_inference.py)). The [workflow](docs/proposals/0008-kernel-tuning.md)
+is a developer tool for π0.5 today; user-facing tuning for your own hardware and
+environment is planned. It draws on
+[NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda)
+([acknowledgments](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)).
+
 ## Performance
 
 ### Lower latency on a single RTX 4090

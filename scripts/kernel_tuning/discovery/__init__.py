@@ -1,4 +1,4 @@
-"""Model-scoped task discovery; Torch is imported only in the capture runtime."""
+"""Shared registry capture, replay and driver utilities; the historical module paths are retained."""
 
 from .contracts import ModelCapture
 
