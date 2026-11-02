@@ -99,8 +99,11 @@ def test_streamvln_factory_accepts_http_load_device(monkeypatch):
     assert load_options == [{"dtype": "bfloat16", "max_context": 32768, "load_device": "cuda:2"}]
 
 
-def test_streamvln_serving_maps_image_session_and_valid_actions():
+@pytest.mark.parametrize("byte_input", [False, True])
+def test_streamvln_serving_maps_image_session_and_valid_actions(byte_input):
     core = _Core()
+    if byte_input:
+        core.policy.processor = SimpleNamespace(gpu_image_transform=object())
     adapter = StreamVLNServingAdapter(
         core=core,
         config={"image_fields": ["observation.images.rgb"], "return_steps": 4},
@@ -110,6 +113,9 @@ def test_streamvln_serving_maps_image_session_and_valid_actions():
 
     observation = core.policy.observations[0]
     assert observation.images.shape == (1, 3, 2, 3)
+    assert observation.images.dtype == (torch.uint8 if byte_input else torch.float32)
+    expected = 64 if byte_input else 64 / 255
+    assert observation.images[0, 1, 0, 0].item() == pytest.approx(expected)
     assert observation.instruction == "walk to the door"
     assert observation.metadata == {"step_id": 3, "episode": "demo"}
     assert core.sessions[0][1] == (SessionKey("session-1", "http"),)
@@ -127,6 +133,65 @@ def test_streamvln_serving_reset_uses_the_inference_session_key():
     adapter.reset("session-2")
 
     assert core.resets == [(SessionKey("session-2", "http"),)]
+
+
+@pytest.mark.parametrize("byte_input", [False, True])
+def test_streamvln_serving_preserves_every_primitive_frame_in_order(byte_input):
+    core = _Core()
+    if byte_input:
+        core.policy.processor = SimpleNamespace(gpu_image_transform=object())
+    adapter = StreamVLNServingAdapter(core=core, config={"image_fields": ["camera"]})
+    images = []
+    for index in range(4):
+        payload = BytesIO()
+        Image.new("RGB", (3, 2), color=(index * 40, 64, 0)).save(payload, format="PNG")
+        images.append(RawImage(f"camera.{index}.png", "image/png", payload.getvalue()))
+    request = replace(_request(images=tuple(images)), metadata={"stream_step_id": 4})
+
+    adapter.infer(request)
+
+    observation = core.policy.observations[0]
+    assert observation.images.shape == (4, 3, 2, 3)
+    assert observation.images.dtype == (torch.uint8 if byte_input else torch.float32)
+    expected = torch.arange(4) * 40
+    if not byte_input:
+        expected = expected.float() / 255
+    assert torch.equal(observation.images[:, 0, 0, 0], expected)
+    assert observation.metadata == {"stream_step_id": 4, "step_id": 3}
+    assert adapter.capabilities()["primitive_frame_fields"] == "camera.{index}"
+
+
+@pytest.mark.parametrize("step", [True, -1, 1.5])
+def test_streamvln_serving_rejects_invalid_primitive_step_before_execution(step):
+    core = _Core()
+    adapter = StreamVLNServingAdapter(core=core)
+    with pytest.raises(ValueError, match="stream_step_id"):
+        adapter.infer(replace(_request(), metadata={"stream_step_id": step}))
+    assert not core.sessions and not core.policy.observations
+
+
+@pytest.mark.parametrize("indices", [(), (0, 1, 2, 3, 4), (1, 0), (0, 0), (1,)])
+def test_streamvln_serving_rejects_missing_or_ambiguous_primitive_frames(indices):
+    core = _Core()
+    adapter = StreamVLNServingAdapter(core=core)
+    images = tuple(RawImage(f"observation.images.rgb.{index}", "image/png", _png()) for index in indices)
+    with pytest.raises(ValueError, match="primitive RGB frames"):
+        adapter.infer(replace(_request(images=images), metadata={"stream_step_id": 4}))
+    assert not core.sessions and not core.policy.observations
+
+
+def test_streamvln_serving_rejects_primitive_resolution_change():
+    core = _Core()
+    adapter = StreamVLNServingAdapter(core=core)
+    payload = BytesIO()
+    Image.new("RGB", (4, 2)).save(payload, format="PNG")
+    images = (
+        RawImage("observation.images.rgb.0", "image/png", _png()),
+        RawImage("observation.images.rgb.1", "image/png", payload.getvalue()),
+    )
+    with pytest.raises(ValueError, match="identical dimensions"):
+        adapter.infer(replace(_request(images=images), metadata={"stream_step_id": 2}))
+    assert not core.sessions and not core.policy.observations
 
 
 def test_streamvln_shared_service_keeps_retries_and_resets_transactional():
@@ -158,6 +223,27 @@ def test_streamvln_shared_service_keeps_retries_and_resets_transactional():
     assert restarted["session_revision"] == 3
     assert len(core.sessions) == 2
     assert core.sessions[-1][1] == (SessionKey(session_id, "http"),)
+
+
+def test_streamvln_primitive_frame_retries_do_not_execute_history_twice():
+    core = _Core()
+    service = PolicyService(StreamVLNServingAdapter(core=core))
+    opened = service.open_session(
+        {
+            "schema": "vvla.policy.session.v1",
+            "robot_id": "navigation",
+            "action_space": STREAMVLN_ACTION_SPACE,
+        }
+    )
+    first = replace(_request(session_id=opened["session_id"]), step_id=0, metadata={"stream_step_id": 0})
+    service.step(first)
+    images = tuple(RawImage(f"observation.images.rgb.{i}", "image/png", _png()) for i in range(4))
+    second = replace(first, request_id="request-2", step_id=1, images=images, metadata={"stream_step_id": 4})
+    response = service.step(second)
+    assert service.step(second) == response
+    assert len(core.sessions) == 2
+    assert core.policy.observations[-1].images.shape[0] == 4
+    assert core.policy.observations[-1].metadata["stream_step_id"] == 4
 
 
 def test_streamvln_serving_rejects_missing_or_duplicate_rgb_fields():

@@ -1,7 +1,10 @@
-"""Pinned R2R prompt and action grammar from ActiveVLN.
+"""Pinned R2R/RxR prompt and action grammar from ActiveVLN.
 
 Source (Apache-2.0):
 https://github.com/arvillion/ActiveVLN/tree/3a0c63b00e4f42c828cc74c3554afce17641da60
+
+Local lane extension: RxR action space (30/60/90-degree turns) with the official
+RxR system prompt, ported from the workspace's parity-stage RxR support.
 """
 
 from __future__ import annotations
@@ -21,6 +24,20 @@ SYSTEM_PROMPT_R2R = (
     "turn right 15 degrees, turn right 30 degrees, turn right 45 degrees, or stop. \n"
     "The instruction will be provided with each observation. You can take multiple actions at each turn. "
 )
+
+SYSTEM_PROMPT_RXR = (
+    "You are a helpful assistant. "
+    "Your goal is to follow the given instruction to reach a specified destination. \n"
+    "At each step, you receive a first-person image (starting view if first step (step 1), or "
+    "post-action view otherwise). "
+    "Your task is to select choose one action from: move forward 25cm, move forward 50cm, "
+    "move forward 75cm, turn left 30 degrees, turn left 60 degrees, turn left 90 degrees, "
+    "turn right 30 degrees, turn right 60 degrees, turn right 90 degrees, or stop. \n"
+    "The instruction will be provided with each observation. You can take multiple actions at each turn. "
+)
+
+SYSTEM_PROMPTS = {"r2r": SYSTEM_PROMPT_R2R, "rxr": SYSTEM_PROMPT_RXR}
+DEFAULT_TURN_ANGLE = {"r2r": 15, "rxr": 30}
 
 _INITIAL_LABEL = "[Initial Observation]:"
 _SUBSEQUENT_LABEL = "After that, the observation is:"
@@ -74,15 +91,17 @@ def user_turn_content(instruction: str, *, initial: bool) -> list[dict]:
     ]
 
 
-def chat_messages(instruction: str, *, initial: bool) -> list[dict]:
+def chat_messages(instruction: str, *, initial: bool, action_space: str = "r2r") -> list[dict]:
     messages = []
     if initial:
-        messages.append({"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT_R2R}]})
+        messages.append(
+            {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPTS[action_space]}]}
+        )
     messages.append({"role": "user", "content": user_turn_content(instruction, initial=initial)})
     return messages
 
 
-def render_turn_text(processor, instruction: str, *, initial: bool) -> str:
+def render_turn_text(processor, instruction: str, *, initial: bool, action_space: str = "r2r") -> str:
     """Serialize one delta turn without inserting a second system prompt.
 
     Qwen's chat template supplies a default ``system`` message when called with
@@ -93,7 +112,7 @@ def render_turn_text(processor, instruction: str, *, initial: bool) -> str:
     """
     if initial:
         return processor.apply_chat_template(
-            chat_messages(instruction, initial=True),
+            chat_messages(instruction, initial=True, action_space=action_space),
             tokenize=False,
             add_generation_prompt=True,
         )
@@ -104,7 +123,9 @@ def render_turn_text(processor, instruction: str, *, initial: bool) -> str:
     )
 
 
-def parse_r2r_actions(text: str, *, max_actions: int = MAX_ACTIONS) -> ParsedNavigation:
+def parse_navigation_actions(
+    text: str, *, max_actions: int = MAX_ACTIONS, default_turn_angle: int = 15
+) -> ParsedNavigation:
     cleaned = text.replace("<image>", "").strip()
     fragments = [part.strip().lower() for part in cleaned.split(",") if part.strip()]
     truncated = len(fragments) > max_actions
@@ -118,12 +139,21 @@ def parse_r2r_actions(text: str, *, max_actions: int = MAX_ACTIONS) -> ParsedNav
         elif "forward" in fragment:
             actions.append(NavigationAction("move forward", int(number.group()) if number else 25))
         elif "left" in fragment:
-            actions.append(NavigationAction("turn left", int(number.group()) if number else 15))
+            actions.append(
+                NavigationAction("turn left", int(number.group()) if number else default_turn_angle)
+            )
         elif "right" in fragment:
-            actions.append(NavigationAction("turn right", int(number.group()) if number else 15))
+            actions.append(
+                NavigationAction("turn right", int(number.group()) if number else default_turn_angle)
+            )
         else:
             invalid.append(fragment)
     return ParsedNavigation(cleaned, tuple(actions), tuple(invalid), truncated)
+
+
+def parse_r2r_actions(text: str, *, max_actions: int = MAX_ACTIONS) -> ParsedNavigation:
+    """Backward-compatible R2R parser: missing turn angles default to 15 degrees."""
+    return parse_navigation_actions(text, max_actions=max_actions, default_turn_angle=15)
 
 
 def actions_to_tensor(parsed: ParsedNavigation) -> tuple[torch.Tensor, torch.Tensor]:

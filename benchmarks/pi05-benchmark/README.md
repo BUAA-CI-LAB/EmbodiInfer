@@ -1,5 +1,70 @@
 # PI0.5 Benchmark
 
+## 非量化 prefix BF16 GELU/product 融合（2026-10-14）
+
+新增默认关闭的 `Pi05OptimizationConfig(prefix_gelu_fusion=True)`，复用已有 Torch
+BF16 GELU 查表及乘法舍入，直接读取 packed gate/up 的 row-strided views，合并两个
+pointwise kernel。gate/up 和 down GEMM、action expert、checkpoint 原 BF16/FP32、
+噪声、50×32 动作和完整十步 solver 均不变。可替换的 `GatedGeluBackend` 位于
+`layers/`；`cuda_packed` 实现在 `backend/cuda/`，不构造或调用量化器。政策层按
+layer/layout/graph/stream 持有临时输出，warmup 后才可 capture；refit/迁移/销毁会
+释放图及工作区。新开关不启用已有量化配方或 Thor/Spark paired GEMM。
+
+对照是未修改的 main `4650e8eadb0c2a461c46991be7d715b726928157`，218 个包内源文件
+逐一匹配 Git 对象，启用已证明字节等价的 KV workspace、prefix tail skip 和
+action context reuse，关闭 norm fusion。candidate 仅增加新 pointwise 开关。
+这些已有开关的收益已归入 baseline；本节是新增实现的增量，不使用下一节组合的
+3.6% 作为新增收益。最终生产源码全部按文件摘要绑定到 GPU 验收。
+
+沿用下一节的同一模型/夹具摘要、原参数精度、四组输入与 seed、同步计时范围。
+独立 main 自重复误差为零，因此门槛保持 `maxabs=RMS=relativeL2=0` 且原字节一致。
+四组逐层 KV/逐步 AE/最终归一化与物理动作各 70 个量全部通过，共 280 项；诊断与
+正常捕获输出、独立 main 动作数组、变输入/重复/不 alias、两条非默认 stream、
+refit 失效/恢复、捕获失败回退均通过。两路夹爪各四组 `>0.5` 诊断无翻转。
+FP32 全模型提升的独立诊断见下一节；新算子只声明 BF16 支持，不把 FP32 误差
+用来放宽主门槛。其他模型的真实权重 GPU 精度没有由本节建立。
+
+算子 CUDA 测试在 RTX 4090/Torch 2.7.1+cu118 与 L20/Torch 2.10+cu128 各通过四项：
+奇数宽度/row stride、变输入、穷举有限 BF16 查表、capture/replay 与输出 clone。
+CPU 全套 762 passed、152 skipped；Ruff 与中英文 strict docs 通过。
+
+最终独立、无 profiler 的 RTX 4090 同卡配对数据如下。每组预热五次，两轮各 60 次，
+交替 A/B 与 B/A；全部原始样本保留，capture/cache 计数在计时前后不变。
+
+| P50 / P95（ms） | untouched main + 已有等价配置 | 仅增加 prefix GELU 融合 |
+|---|---:|---:|
+| 完整请求，轮 1 | 70.989 / 71.030 | 70.064 / 70.090 |
+| 完整请求，轮 2 | 71.127 / 71.176 | 70.193 / 70.241 |
+| GPU-resident 两图 replay，轮 1 | 70.579 / 70.631 | 69.643 / 69.677 |
+| GPU-resident 两图 replay，轮 2 | 70.601 / 70.624 | 69.658 / 69.687 |
+
+完整请求的 P50 新增收益约 **1.3%**，mean 也从 70.948→70.014、71.136→70.199 ms
+下降。replay 包含静态 GPU 输入复制、prefix/loop replay、两图 KV clone/copy 和
+独立输出 clone；排除 H2D、D2H、EngineCore 打包和物理恢复。这些成本全部计入完整
+请求。不同作业的绝对延迟不可横向比较；不宣称其他 batch、模型、GPU 或闭环收益。
+
+首次生产计时波动较大，保留了 candidate 约 379 ms 的长尾样本，该轮 mean
+为 76.332→80.864 ms，下一轮为 80.131→79.025 ms。没有删掉这个样本。完成独立
+profiler 作业后才另起计时作业，得到上表；不能把首次整轮吞吐也写成收益。
+
+独立 Nsight CUDA graph-node 记录确认四次请求有 68 次新 BF16 strided kernel，
+原 BF16 GELU 68→0，对应 BF16 乘法 280→212。其余聚合计数有小幅变化，不据此
+声称所有 kernel 计数严格相同，也不把 profiler 时长替代同步 wall。
+筛选过的其他路径未纳入：cuBLASLt gate/up 最快等价微测仅约 0.9%，down 的 8 个
+算法均被严格门拒绝；视觉 FP32 packed QKV 的 18 项微测虽完全一致，延迟约
+0.065→0.071 ms，反而变慢；现有 paired GEMM 明确不支持 SM89 的 Thor/Spark 配方，
+没有伪造硬件 profile。
+
+公开复现入口（配方与实际 checkpoint/夹具必须匹配）：
+
+```bash
+python benchmarks/pi05-benchmark/ablate_nonquant.py --checkpoint /models/pi05 --inputs /data/inputs.pt --out devlocal/nonquant/gelu --stages baseline kv_prefix_context kv_prefix_context_gelu --physical-action-dim 14 --gripper-indices 6 13 --gripper-threshold 0.5 --gripper-comparison gt
+python -m pytest tests/test_packed_gelu.py -q
+```
+
+`kv_prefix_context` 与 `kv_prefix_context_gelu` 的 incremental pair 隔离新增开关；
+runner 在未通过逐层/逐步/夹爪精度门时不会计时。真实权重和录制输入不随仓库分发。
+
 ## 非量化整请求捕获与精度验收（2026-10-14）
 
 本次新增默认关闭的 `request_cuda_graph=True`：在 native CUDA 推理和

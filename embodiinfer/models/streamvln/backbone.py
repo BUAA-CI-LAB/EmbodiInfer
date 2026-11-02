@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import torch
@@ -20,6 +21,7 @@ from embodiinfer.backend.triton import (
     supports_swiglu,
     swiglu,
 )
+from embodiinfer.backend.triton.attention import gqa_verify_graph
 from embodiinfer.backend.triton.prefill_attention import (
     flash_prefill_attention,
     flash_prefill_attention_graph,
@@ -27,8 +29,11 @@ from embodiinfer.backend.triton.prefill_attention import (
 from embodiinfer.backend.triton.rotary import fused_prefill_rope_cache_graph
 from embodiinfer.models.linear import QuantizedLinear
 
+from .optimized import StreamVLNTextOptions
+
 IMAGE_TOKEN_INDEX = -200
 MEMORY_TOKEN_INDEX = -300
+_CAUSAL_MASK_CACHE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -121,12 +126,22 @@ def _linear(module: nn.Module, inputs: torch.Tensor) -> torch.Tensor:
     return F.linear(inputs, module.weight, getattr(module, "bias", None))
 
 
-def _rms_norm(inputs: torch.Tensor, module: nn.Module, default_eps: float) -> torch.Tensor:
-    if supports_rms_norm(inputs, module.weight):
+def _linear_token_rows(module: nn.Module, inputs: torch.Tensor) -> torch.Tensor:
+    """Keep serial GEMM shapes while batching the surrounding candidate operators."""
+    if inputs.shape[1] == 1:
+        return _linear(module, inputs)
+    return torch.cat([_linear(module, inputs[:, i : i + 1]) for i in range(inputs.shape[1])], dim=1)
+
+
+def _rms_norm(
+    inputs: torch.Tensor, module: nn.Module, default_eps: float, *, decode_semantics: bool = False
+) -> torch.Tensor:
+    if supports_rms_norm(inputs, module.weight, allow_multiple_rows=decode_semantics):
         return rms_norm(
             inputs,
             module.weight,
             float(getattr(module, "variance_epsilon", default_eps)),
+            allow_multiple_rows=decode_semantics,
         )
     dtype = inputs.dtype
     eps = float(getattr(module, "variance_epsilon", default_eps))
@@ -139,10 +154,15 @@ def _add_rms_norm(
     update: torch.Tensor,
     module: nn.Module,
     default_eps: float,
+    *,
+    decode_semantics: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     epsilon = float(getattr(module, "variance_epsilon", default_eps))
-    if supports_rms_norm(residual, module.weight) and update.is_contiguous():
-        return add_rms_norm(residual, update, module.weight, epsilon)
+    if (
+        supports_rms_norm(residual, module.weight, allow_multiple_rows=decode_semantics)
+        and update.is_contiguous()
+    ):
+        return add_rms_norm(residual, update, module.weight, epsilon, allow_multiple_rows=decode_semantics)
     hidden = residual + update
     return hidden, _rms_norm(hidden, module, default_eps)
 
@@ -216,7 +236,10 @@ class StreamVLNBackbone(nn.Module):
         self.register_buffer("_rope_sine", angles.sin(), persistent=False)
         self._projections_fused = False
         self._quantization_enabled = False
-        self._causal_mask_cache: dict[tuple[torch.device, int, int], torch.Tensor] = {}
+        self.text_options = StreamVLNTextOptions()
+        self.vision_kernel = "hf"
+        self._causal_mask_cache: OrderedDict[tuple[torch.device, int, int], torch.Tensor] = OrderedDict()
+        self._causal_mask_cache_bytes = 0
         self._prefill_optimizations = False
         self._language_prefill_optimizations = False
         self._vision_runner = None
@@ -224,6 +247,12 @@ class StreamVLNBackbone(nn.Module):
         self._startup_capture_active = False
         self._startup_capture_frozen = False
         self._compiled_prefill_tail = None
+        self.kv_cache_initial_capacity = 0
+        self.cache_generation_reserve = 0
+        self.quantized_prefill_graphs = False
+        self._text_graph_cache: StreamVLNCache | None = None
+        self._text_graph_pool = None
+        self._text_graph_stream: int | None = None
         if self.hidden_size != self.num_heads * self.head_dim:
             raise ValueError("invalid StreamVLN Qwen2 hidden/head dimensions")
         if self.num_heads % self.num_kv_heads:
@@ -278,6 +307,9 @@ class StreamVLNBackbone(nn.Module):
         self._language_prefill_optimizations = False
         self._prefill_runner = None
         self._compiled_prefill_tail = None
+        self._text_graph_cache = None
+        self._text_graph_pool = None
+        self._text_graph_stream = None
 
     def _suffix_causal_mask(
         self,
@@ -291,13 +323,25 @@ class StreamVLNBackbone(nn.Module):
         key = (device, query_length, past_length)
         cached = self._causal_mask_cache.get(key)
         if cached is not None:
+            self._causal_mask_cache.move_to_end(key)
             return cached
+        # Generated histories produce new lengths across episodes. Retaining
+        # every dense mask would grow device memory for the replica's lifetime.
+        mask_bytes = query_length * (past_length + query_length)  # torch.bool
+        while (
+            self._causal_mask_cache and self._causal_mask_cache_bytes + mask_bytes > _CAUSAL_MASK_CACHE_BYTES
+        ):
+            _, evicted = self._causal_mask_cache.popitem(last=False)
+            self._causal_mask_cache_bytes -= evicted.numel() * evicted.element_size()
+            del evicted
         cached = torch.ones(
             (query_length, past_length + query_length),
             dtype=torch.bool,
             device=device,
         ).tril(diagonal=past_length)[None, None]
-        self._causal_mask_cache[key] = cached
+        if mask_bytes <= _CAUSAL_MASK_CACHE_BYTES:
+            self._causal_mask_cache[key] = cached
+            self._causal_mask_cache_bytes += mask_bytes
         return cached
 
     def configure_prefill_optimizations(
@@ -308,7 +352,7 @@ class StreamVLNBackbone(nn.Module):
     ) -> None:
         self._prefill_optimizations = bool(enabled)
         self._language_prefill_optimizations = bool(
-            enabled and language_prefill and not self._quantization_enabled
+            enabled and language_prefill and (not self._quantization_enabled or self.quantized_prefill_graphs)
         )
         if not self._language_prefill_optimizations:
             self._prefill_runner = None
@@ -317,6 +361,9 @@ class StreamVLNBackbone(nn.Module):
             self._prefill_runner = None
             self._startup_capture_active = False
             self._startup_capture_frozen = False
+            self._text_graph_cache = None
+            self._text_graph_pool = None
+            self._text_graph_stream = None
 
     def begin_startup_graph_capture(self) -> None:
         """Enter the only phase in which native StreamVLN graphs may be created."""
@@ -350,6 +397,10 @@ class StreamVLNBackbone(nn.Module):
         self._prefill_runner = None
         self._startup_capture_active = False
         self._startup_capture_frozen = False
+
+        self._text_graph_cache = None
+        self._text_graph_pool = None
+        self._text_graph_stream = None
 
     def graph_capture_stats(self) -> dict[str, int | bool]:
         return {
@@ -442,12 +493,12 @@ class StreamVLNBackbone(nn.Module):
         attended = attended.transpose(1, 2).reshape(batch, query_length, self.hidden_size)
         return _linear(attention.o_proj, attended)
 
-    def _allocate_cache(self, inputs: torch.Tensor) -> StreamVLNCache:
+    def _allocate_cache(self, inputs: torch.Tensor, *, capacity: int | None = None) -> StreamVLNCache:
         shape = (
             len(self.llm.model.layers),
             inputs.shape[0],
             self.num_kv_heads,
-            self.max_context,
+            self.max_context if capacity is None else capacity,
             self.head_dim,
         )
         return StreamVLNCache(
@@ -455,6 +506,55 @@ class StreamVLNBackbone(nn.Module):
             torch.empty(shape, dtype=inputs.dtype, device=inputs.device),
             0,
         )
+
+    def _cache_for_append(self, inputs: torch.Tensor, cache: StreamVLNCache | None) -> StreamVLNCache:
+        """Grow eager KV storage without modifying the committed prefix on failure.
+
+        Physical capacity is independent of the model context limit. Reserve a
+        whole response so decode graphs never need to resize during generation.
+        Fixed-address graph staging retains its separate maximum-size storage.
+        """
+        if not self.kv_cache_initial_capacity:
+            return self._allocate_cache(inputs) if cache is None else cache
+        length = 0 if cache is None else cache.seq_len
+        required = min(self.max_context, length + inputs.shape[1] + self.cache_generation_reserve)
+        if cache is not None and required <= cache.capacity:
+            return cache
+        capacity = min(
+            self.max_context, max(self.kv_cache_initial_capacity, 1 << (required - 1).bit_length())
+        )
+        working = self._allocate_cache(inputs, capacity=capacity)
+        if cache is not None:
+            working.key_storage[..., :length, :].copy_(cache.key_storage[..., :length, :])
+            working.value_storage[..., :length, :].copy_(cache.value_storage[..., :length, :])
+        return working.advance(length)
+
+    def text_graph_workspace(self, example: StreamVLNCache) -> tuple[StreamVLNCache, tuple[int, int]]:
+        """Share private fixed-address KV and an allocator pool across INT8 graphs.
+
+        Session memories never borrow this arena. Prefill and tree verification
+        stage a prefix and copy only their new suffix back on the owning stream.
+        """
+        if not self.quantized_prefill_graphs or not example.key_storage.is_cuda:
+            raise ValueError("shared text graph workspace requires the CUDA quantized-prefill profile")
+        stream = torch.cuda.current_stream(example.key_storage.device).cuda_stream
+        shape = list(example.key_storage.shape)
+        shape[-2] = self.max_context
+        if self._text_graph_cache is None:
+            self._text_graph_cache = StreamVLNCache(
+                example.key_storage.new_empty(shape), example.value_storage.new_empty(shape), 0
+            )
+            self._text_graph_pool = torch.cuda.graph_pool_handle()
+            self._text_graph_stream = stream
+        static = self._text_graph_cache
+        if (
+            tuple(shape) != static.key_storage.shape
+            or example.key_storage.device != static.key_storage.device
+            or example.key_storage.dtype != static.key_storage.dtype
+            or stream != self._text_graph_stream
+        ):
+            raise RuntimeError("shared text graph workspace shape, device, dtype or stream changed")
+        return static, self._text_graph_pool
 
     def _attention_graph(
         self,
@@ -494,30 +594,56 @@ class StreamVLNBackbone(nn.Module):
         token: torch.Tensor,
         position: torch.Tensor,
     ) -> torch.Tensor:
+        return self.decode_tokens_graph(cache, token.reshape(1, 1), position)[:, -1]
+
+    def decode_tokens_graph(
+        self,
+        cache: StreamVLNCache,
+        tokens: torch.Tensor,
+        position: torch.Tensor,
+    ) -> torch.Tensor:
+        """Decode a causal proposal block with the serial decoder's attention arithmetic.
+
+        Each projection keeps the serial GEMM shape to avoid BF16 batch-width
+        drift. Normalization, activation, rotary and causal attention run over
+        all candidate rows with the serial decoder's arithmetic.
+        """
+        if self.text_options.enabled:
+            from .optimized import forward_text
+
+            return forward_text(
+                self,
+                self.llm.model.embed_tokens(tokens),
+                cache,
+                position,
+                key_bucket=cache.capacity,
+                attention_plan_bucket=self.max_context if self.kv_cache_initial_capacity else None,
+            )
         self.fuse_projections()
-        hidden = self.llm.model.embed_tokens(token.reshape(1, 1))
+        hidden = self.llm.model.embed_tokens(tokens)
         normalized = _rms_norm(
             hidden,
             self.llm.model.layers[0].input_layernorm,
             self.rms_norm_eps,
+            decode_semantics=True,
         )
         for index, layer in enumerate(self.llm.model.layers):
-            attended = self._attention_graph(
-                layer.self_attn,
-                normalized,
-                cache,
-                index,
-                position,
-            )
+            if tokens.shape[1] == 1:
+                attended = self._attention_graph(layer.self_attn, normalized, cache, index, position)
+            else:
+                attended = self._prefill_attention_graph(
+                    layer.self_attn, normalized, cache, index, position, 0, decode_semantics=True
+                )
             hidden, normalized = _add_rms_norm(
                 hidden,
                 attended,
                 layer.post_attention_layernorm,
                 self.rms_norm_eps,
+                decode_semantics=True,
             )
-            gate_up = _linear(layer.mlp.gate_up_proj, normalized)
+            gate_up = _linear_token_rows(layer.mlp.gate_up_proj, normalized)
             gated = swiglu(gate_up)
-            down = _linear(layer.mlp.down_proj, gated)
+            down = _linear_token_rows(layer.mlp.down_proj, gated)
             next_norm = (
                 self.llm.model.layers[index + 1].input_layernorm
                 if index + 1 < len(self.llm.model.layers)
@@ -528,8 +654,9 @@ class StreamVLNBackbone(nn.Module):
                 down,
                 next_norm,
                 self.rms_norm_eps,
+                decode_semantics=True,
             )
-        return normalized[:, -1]
+        return normalized
 
     def _prefill_attention_graph(
         self,
@@ -539,9 +666,12 @@ class StreamVLNBackbone(nn.Module):
         layer_index: int,
         position: torch.Tensor,
         key_bucket: int,
+        *,
+        decode_semantics: bool = False,
     ) -> torch.Tensor:
         batch, query_length, _ = hidden.shape
-        queries, keys, values = _linear(attention.qkv_proj, hidden).split(
+        project = _linear_token_rows if decode_semantics else _linear
+        queries, keys, values = project(attention.qkv_proj, hidden).split(
             attention.qkv_proj.split_sizes,
             dim=-1,
         )
@@ -560,19 +690,16 @@ class StreamVLNBackbone(nn.Module):
             value_cache,
             position,
         )
-        attended = flash_prefill_attention_graph(
-            queries,
-            key_cache,
-            value_cache,
-            position,
-            key_bucket,
-        )
+        if decode_semantics:
+            attended = gqa_verify_graph(queries, key_cache, value_cache, position)
+        else:
+            attended = flash_prefill_attention_graph(queries, key_cache, value_cache, position, key_bucket)
         attended = attended.transpose(1, 2).reshape(
             batch,
             query_length,
             self.hidden_size,
         )
-        return _linear(attention.o_proj, attended)
+        return project(attention.o_proj, attended)
 
     def prefill_embeddings_graph(
         self,
@@ -581,6 +708,10 @@ class StreamVLNBackbone(nn.Module):
         position: torch.Tensor,
         key_bucket: int,
     ) -> torch.Tensor:
+        if self.text_options.enabled:
+            from .optimized import forward_text
+
+            return forward_text(self, inputs_embeds, cache, position, key_bucket=key_bucket)
         self.fuse_projections()
         hidden = inputs_embeds
         normalized = _rms_norm(
@@ -647,7 +778,26 @@ class StreamVLNBackbone(nn.Module):
 
         self.fuse_projections()
         hidden = inputs_embeds
-        working_cache = self._allocate_cache(hidden) if cache is None else cache
+        working_cache = self._cache_for_append(hidden, cache)
+        if self.text_options.enabled:
+            from .optimized import forward_text
+
+            position = torch.tensor([past_length], dtype=torch.long, device=hidden.device)
+            normalized = forward_text(
+                self,
+                hidden,
+                working_cache,
+                position,
+                key_bucket=min(
+                    working_cache.capacity, max(512, 1 << (past_length + hidden.shape[1] - 1).bit_length())
+                ),
+            )
+            output = normalized if return_hidden_states else normalized[:, -1]
+            if project_logits:
+                if return_hidden_states:
+                    raise ValueError("cannot project logits while returning all hidden states")
+                output = self.project_logits(output)
+            return working_cache.advance(past_length + hidden.shape[1]), output
         normalized = _rms_norm(
             hidden,
             self.llm.model.layers[0].input_layernorm,
@@ -728,10 +878,13 @@ class StreamVLNBackbone(nn.Module):
             and inputs_embeds.shape[1] > 1
         ):
             if self._prefill_runner is None:
-                from .prefill import StreamVLNPrefillRunner
+                from .prefill import StreamVLNPrefillRunner, StreamVLNQuantizedPrefillRunner
 
                 self.fuse_projections()
-                self._prefill_runner = StreamVLNPrefillRunner(self)
+                runner = (
+                    StreamVLNQuantizedPrefillRunner if self._quantization_enabled else StreamVLNPrefillRunner
+                )
+                self._prefill_runner = runner(self)
                 if self._startup_capture_active:
                     self._prefill_runner.begin_startup_capture()
             working_cache, hidden_states = self._prefill_runner.run(inputs_embeds, cache)
@@ -745,6 +898,10 @@ class StreamVLNBackbone(nn.Module):
         )
 
     def project_logits(self, hidden: torch.Tensor) -> torch.Tensor:
+        if self.text_options.enabled:
+            from .optimized import project
+
+            return project(self.llm.lm_head, hidden, self.text_options)
         return _linear(self.llm.lm_head, hidden)
 
     def _encode_frames_eager(self, pixel_values: torch.Tensor) -> torch.Tensor:
@@ -753,12 +910,17 @@ class StreamVLNBackbone(nn.Module):
             device=vision_parameter.device,
             dtype=vision_parameter.dtype,
         )
-        output = self.vision_tower(
-            pixel_values=pixel_values,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-        selected = output.hidden_states[self.vision_feature_layer]
+        if self.vision_kernel != "hf":
+            from .optimized import encode_siglip
+
+            selected = encode_siglip(self, pixel_values, fused=self.vision_kernel == "fused")
+        else:
+            output = self.vision_tower(
+                pixel_values=pixel_values,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            selected = output.hidden_states[self.vision_feature_layer]
         projected = self.projector(selected)
         frame_count, token_count, hidden_size = projected.shape
         side = math.isqrt(token_count)

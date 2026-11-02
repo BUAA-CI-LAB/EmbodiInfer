@@ -36,3 +36,7 @@ devlocal/
 
 # Optional tuning skills linked locally from pinned submodules or other skill directories.
 scripts/kernel_tuning/flow/skills/
+
+# Thor benchmark configurations and measurements stay in the local experiment workspace.
+benchmarks/activevln-benchmark/thor/**/*.json
+benchmarks/streamvln-benchmark/thor/**/*.json

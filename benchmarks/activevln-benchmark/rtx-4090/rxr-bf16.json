@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "model": "activevln",
+  "checkpoint_revision": "476f8410abb7749da8f5fed810c020984d578564",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 42,
+  "warmup_calls": 33,
+  "repeats": 1,
+  "attention": "sdpa",
+  "cuda_graph": true,
+  "fused_ops": true,
+  "split_attention": true,
+  "tree_decode": false,
+  "tree_fp32_projection": false,
+  "tree_repeat_actions": 1,
+  "query_bucket_size": 1,
+  "prewarm_context_buckets": [
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    128000
+  ],
+  "graph_workspace_tokens": 128000,
+  "max_new_tokens": 512,
+  "max_context": 128000,
+  "do_sample": false,
+  "repetition_penalty": 1.05,
+  "cpu_threads": 4,
+  "max_steps_per_episode": null,
+  "datasets": [
+    {
+      "name": "R2R",
+      "repository": "cywan/StreamVLN-Trajectory-Data",
+      "revision": "dc61ee9b4e90aa7ba63c1163b2134df5610dccb9",
+      "split": "published_training_trajectories",
+      "episode_limit": 48,
+      "selection_sha256": "b1fe693db13a4dcf3fbca696c796250c35b31e8e11126ab39b22deec54231457",
+      "root": "assets/R2R",
+      "annotations": "assets/R2R/annotations_v1-3.json",
+      "purpose": "startup warmup only; excluded from navigation metrics"
+    }
+  ],
+  "batch_size": 1,
+  "kv_pool_tokens": 128000,
+  "grammar_tree_budget": 31,
+  "grammar_prefix_weight": 1.0,
+  "grammar_local_weight": 1.0,
+  "grammar_refresh": 64,
+  "sampling_seed": 0,
+  "gpu_preprocess": true,
+  "uint8_observations": true,
+  "attention_kernel": "gqa",
+  "incremental_kv_commit": true,
+  "vision_kernel": "fused",
+  "skip_padded_queries": true,
+  "packed_prefill": true,
+  "packed_prefill_bucket": 64,
+  "decode_linear": true,
+  "action_space": "r2r",
+  "checkpoint_storage": "Pinned original FP32 snapshot; model executes in BF16.",
+  "checkpoint_repository": "Arvil/Qwen2.5-VL-3B_rl_rxr_4000_step350",
+  "checkpoint": "assets/checkpoints/activevln-rxr",
+  "output_dir": "results/active-4090-bf16-rxr-protocol-v18",
+  "resident_kv": true,
+  "streamed_loading": false,
+  "allocator_config": "expandable_segments:True,garbage_collection_threshold:0.7",
+  "navigation": {
+    "episode_count": 256,
+    "split": "val_unseen",
+    "sampling_seed": 42,
+    "sampling_method_version": "sha256-seed-dataset-scene-python-random-min1-v1",
+    "checkpoint_protocol": "Dataset-matched R2R or RxR checkpoint; published checkpoint uses R2R action grammar (15-degree turns).",
+    "selections": {
+      "r2r": {
+        "sha256": "ea4c07eeff3eaa2b5cb4085269404b04d5ef19aea8a3db0a44e2f8f576e9f7d8"
+      },
+      "rxr": {
+        "sha256": "3b4d565d6170a54041f449ae9ffceb9c71aeb5b2f8e496bdae0cff9308cc282d"
+      }
+    }
+  },
+  "evaluation_dataset": "rxr",
+  "navigation_manifest": "assets/manifests/selected-rxr-navigation-256.json",
+  "physical_gpu": 0,
+  "validation_profile": "active-4090-bf16-rxr-protocol-v18",
+  "action_protocol_provenance": {
+    "official_commit": "3a0c63b00e4f42c828cc74c3554afce17641da60",
+    "evaluation_dataset": "rxr",
+    "checkpoint_action_space": "r2r",
+    "simulator_turn_degrees": 15,
+    "sources": [
+      {
+        "source": "https://raw.githubusercontent.com/arvillion/ActiveVLN/3a0c63b00e4f42c828cc74c3554afce17641da60/examples/vlnce/eval_rxr.sh",
+        "file": "eval_rxr.sh",
+        "sha256": "8c8ca2814ec7c908e02f27a17da874d4c6509f7af94fb54a075fde29d5f49038"
+      },
+      {
+        "source": "https://raw.githubusercontent.com/arvillion/ActiveVLN/3a0c63b00e4f42c828cc74c3554afce17641da60/vlnce_server/VLN_CE/habitat_extensions/config/vlnce_task_activevln_rxr_test.yaml",
+        "file": "vlnce_task_activevln_rxr_test.yaml",
+        "sha256": "4653739455aa350ae84b706cbaf7ae17832e44a5de0945e0dee607d18636eaf9"
+      },
+      {
+        "source": "https://raw.githubusercontent.com/arvillion/ActiveVLN/3a0c63b00e4f42c828cc74c3554afce17641da60/eval/vlnce/eval_vlnce.py",
+        "file": "eval_vlnce.py",
+        "sha256": "7dec491e633f09d7ba028a9e26b6503af1d94b3d27d007081bc1ad213192b328"
+      }
+    ]
+  }
+}

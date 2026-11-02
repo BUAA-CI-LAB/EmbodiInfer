@@ -9,6 +9,7 @@ from torch import nn
 
 from embodiinfer.models.streamvln import StreamVLNCache
 from embodiinfer.models.streamvln.backbone import (
+    StreamVLNBackbone,
     _compiled_prefill_block_tail,
     _linear,
     _PackedLinear,
@@ -37,6 +38,46 @@ class _VisionTower(nn.Module):
         self.anchor = nn.Parameter(torch.zeros(()), requires_grad=False)
 
 
+def test_growing_kv_preserves_committed_storage_and_full_context_limit(monkeypatch):
+    llm = nn.Module()
+    llm.config = SimpleNamespace(
+        hidden_size=4,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        rope_theta=10000.0,
+        rms_norm_eps=1e-6,
+    )
+    llm.model = nn.Module()
+    llm.model.layers = nn.ModuleList([nn.Identity(), nn.Identity()])
+    backbone = StreamVLNBackbone(llm, nn.Identity(), nn.Identity(), max_context=96)
+    backbone.kv_cache_initial_capacity = 16
+    backbone.cache_generation_reserve = 4
+    inputs = torch.zeros(1, 8, 4)
+    first = backbone._cache_for_append(inputs, None)
+    assert first.capacity == 16
+    first.key_storage.fill_(7)
+    first.value_storage.fill_(-7)
+    committed = first.advance(12)
+    grown = backbone._cache_for_append(inputs, committed)
+    assert grown.capacity == 32 and grown.seq_len == 12
+    assert grown.key_storage.data_ptr() != first.key_storage.data_ptr()
+    assert (grown.key_storage[..., :12, :] == 7).all()
+    assert (grown.value_storage[..., :12, :] == -7).all()
+    grown.key_storage.fill_(99)
+    assert (committed.key_storage == 7).all()
+    assert backbone._cache_for_append(inputs, grown) is grown
+    largest = backbone._cache_for_append(torch.zeros(1, 70, 4), committed)
+    assert largest.capacity == 96 and backbone.max_context == 96
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("allocation failed")
+
+    monkeypatch.setattr(backbone, "_allocate_cache", fail)
+    with pytest.raises(RuntimeError, match="allocation failed"):
+        backbone._cache_for_append(inputs, committed)
+    assert committed.seq_len == 12 and (committed.key_storage == 7).all()
+
+
 def test_packed_projection_storage_preserves_independent_gemms() -> None:
     first = nn.Linear(5, 3, bias=False)
     second = nn.Linear(5, 2, bias=False)
@@ -48,6 +89,44 @@ def test_packed_projection_storage_preserves_independent_gemms() -> None:
 
     assert torch.equal(actual, expected)
     assert packed.weight.shape == (5, 5)
+
+
+@pytest.mark.parametrize("device_name", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
+def test_causal_mask_cache_bounds_retained_bytes_without_changing_masks(monkeypatch, device_name) -> None:
+    monkeypatch.setattr("embodiinfer.models.streamvln.backbone._CAUSAL_MASK_CACHE_BYTES", 32)
+    llm = nn.Module()
+    llm.config = SimpleNamespace(
+        hidden_size=4,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        rope_theta=10000.0,
+        rms_norm_eps=1e-6,
+    )
+    backbone = StreamVLNBackbone(llm, nn.Identity(), nn.Identity(), max_context=32)
+    device = torch.device(device_name)
+
+    def mask(past: int) -> torch.Tensor:
+        actual = backbone._suffix_causal_mask(2, past, device=device)
+        expected = torch.ones(2, past + 2, dtype=torch.bool, device=device).tril(diagonal=past)[None, None]
+        assert torch.equal(actual, expected)
+        assert backbone._causal_mask_cache_bytes == sum(
+            item.numel() * item.element_size() for item in backbone._causal_mask_cache.values()
+        )
+        assert backbone._causal_mask_cache_bytes <= 32
+        return actual
+
+    first = mask(1)  # 6 bytes
+    second = mask(2)  # 8 bytes
+    assert mask(1) is first  # Reuse promotes this entry ahead of the second.
+    mask(8)  # 20 bytes; evicts only the least recently used 8-byte entry.
+    assert (device, 2, 2) not in backbone._causal_mask_cache
+    assert mask(1) is first
+    assert mask(2) is not second
+    for past in range(1, 32):
+        mask(past)
+    assert not backbone._causal_mask_cache  # Oversized masks remain usable, but aren't retained.
+    assert backbone._suffix_causal_mask(1, 8, device=device) is None
+    assert backbone._suffix_causal_mask(2, 0, device=device) is None
 
 
 def test_prefill_tail_keeps_gate_and_up_as_independent_gemms(monkeypatch) -> None:
@@ -77,6 +156,8 @@ class _Backbone(nn.Module):
         super().__init__()
         self.anchor = nn.Parameter(torch.zeros(()), requires_grad=False)
         self.vision_tower = _VisionTower()
+        self.text_options = SimpleNamespace(enabled=False)
+        self.vision_kernel = "hf"
         self.vision_batches: list[int] = []
         self.memory_batches: list[int] = []
         self.prefill_optimizations = False
@@ -173,7 +254,7 @@ class _Backbone(nn.Module):
         return self.forward_embeddings(embeddings, cache, project_logits=False)
 
 
-def _policy(*, cache_history_features: bool) -> tuple[StreamVLNPolicy, _Backbone]:
+def _policy(*, cache_history_features: bool, tree_refresh: int = 64) -> tuple[StreamVLNPolicy, _Backbone]:
     backbone = _Backbone()
     processor = StreamVLNProcessor(
         _Tokenizer(),
@@ -189,8 +270,20 @@ def _policy(*, cache_history_features: bool) -> tuple[StreamVLNPolicy, _Backbone
         decode_block_size=4,
         cache_history_features=cache_history_features,
         fast_action_decode=False,
+        tree_refresh=tree_refresh,
     )
     return policy, backbone
+
+
+@pytest.mark.parametrize("refresh", [0, -1, 1.5, True])
+def test_policy_rejects_invalid_tree_refresh(refresh):
+    with pytest.raises(ValueError, match="tree_refresh must be a positive integer"):
+        _policy(cache_history_features=True, tree_refresh=refresh)
+
+
+def test_policy_preserves_default_and_explicit_tree_refresh():
+    assert _policy(cache_history_features=True)[0].tree_refresh == 64
+    assert _policy(cache_history_features=True, tree_refresh=4)[0].tree_refresh == 4
 
 
 def _observation(step: int) -> Observation:
@@ -200,6 +293,52 @@ def _observation(step: int) -> Observation:
         instruction_tokens=torch.empty(0, dtype=torch.long),
         instruction="go forward",
     )
+
+
+def test_primitive_frames_advance_history_without_extra_language_turns() -> None:
+    cached, cached_backbone = _policy(cache_history_features=True)
+    uncached, _ = _policy(cache_history_features=False)
+    memories = [None, None]
+    previous = -1
+    lengths = []
+    for step in (0, 3, 6, 9):
+        observation = _observation(0)
+        observation.images = torch.stack(
+            [torch.full((3, 2, 2), index / 100) for index in range(previous + 1, step + 1)]
+        )
+        observation.metadata["stream_step_id"] = step
+        results = []
+        for i, policy in enumerate((cached, uncached)):
+            committed = memories[i]
+            result = policy.encode_prefix(policy.collate([observation], [str(step)]), committed)
+            assert result.memory.step_id == step + 1
+            if committed is not None:
+                assert committed.step_id == previous + 1
+            memories[i] = result.memory
+            results.append(result)
+        assert torch.equal(results[0].next_hidden, results[1].next_hidden)
+        assert results[0].memory.seq_len == results[1].memory.seq_len
+        lengths.append(results[0].memory.seq_len)
+        previous = step
+    assert lengths == [2, 4, 6, 6]
+    assert memories[0].slow_frame_indices == (0, 4)
+    assert cached_backbone.memory_batches == [0, 0, 2, 2]
+    for step, feature in enumerate(memories[0].frame_features):
+        if step % 2 == 0:
+            assert torch.allclose(feature, torch.full_like(feature, step / 100))
+        else:
+            assert feature is None
+
+
+@pytest.mark.parametrize("step,frames", [(True, 1), (-1, 1), (4, 1), (1.5, 1)])
+def test_primitive_frames_reject_missing_or_ambiguous_history(step, frames) -> None:
+    policy, backbone = _policy(cache_history_features=True)
+    observation = _observation(0)
+    observation.images = observation.images.expand(frames, -1, -1, -1)
+    observation.metadata["stream_step_id"] = step
+    with pytest.raises(ValueError, match="stream_step_id"):
+        policy.prepare_prefix(policy.collate([observation], ["invalid"]))
+    assert not backbone.vision_batches
 
 
 def test_slow_memory_prompt_matches_published_streamvln_wording() -> None:

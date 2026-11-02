@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import suppress
 from dataclasses import dataclass
@@ -11,7 +12,11 @@ from typing import Any
 
 import torch
 
-from .backbone import StreamVLNBackbone, StreamVLNProjector
+from ...layers.linear import INT8Config
+from ..linear import INT8Linear
+from .backbone import StreamVLNBackbone, StreamVLNProjector, _PackedLinear
+
+_LOGGER = logging.getLogger(__name__)
 
 _LOCKED_PROFILE = {
     "hidden_size": 3584,
@@ -160,12 +165,118 @@ def _materialize_runtime_buffers(
     ).expand((1, -1))
 
 
+def _load_int8_checkpoint_weights(
+    root: Path,
+    llm: torch.nn.Module,
+    vision_tower: torch.nn.Module,
+    projector: torch.nn.Module,
+    dtype: torch.dtype,
+    device: torch.device,
+    config: INT8Config,
+) -> tuple[str, ...]:
+    """Convert one projection at a time, never materializing the full BF16 model.
+
+    Per-output-channel conversion commutes with QKV/gate-up concatenation.
+    Conversion runs on CPU for identical stored weights across CUDA platforms;
+    only the final packed tensors move to the serving device. Floating leaves
+    and explicitly ignored projections retain the requested checkpoint dtype.
+    """
+    from safetensors import safe_open
+
+    index = json.loads((root / "model.safetensors.index.json").read_text())["weight_map"]
+    groups = (
+        (llm, ""),
+        (vision_tower, "model.vision_tower.vision_tower."),
+        (projector, "model.mm_projector."),
+    )
+    expected = {prefix + key for module, prefix in groups for key in module.state_dict()}
+    if expected != set(index):
+        raise RuntimeError(
+            f"StreamVLN checkpoint key mismatch; missing={sorted(expected - set(index))[:8]}, "
+            f"unexpected={sorted(set(index) - expected)[:8]}"
+        )
+    loaded: set[str] = set()
+
+    def read(key: str, shape: torch.Size) -> torch.Tensor:
+        path = root / index[key]
+        with safe_open(path, framework="pt", device="cpu") as handle:
+            tensor = handle.get_tensor(key)
+            if tensor.shape != shape:
+                raise RuntimeError(f"StreamVLN tensor shape mismatch: {key}: {tensor.shape} != {shape}")
+            # Own the CPU storage before closing mmap and evicting filesystem pages.
+            owned = tensor.to(dtype=dtype, copy=True)
+            del tensor
+        if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+            with suppress(OSError), path.open("rb") as stream:
+                os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        loaded.add(key)
+        return owned
+
+    quantized = []
+    for i, layer in enumerate(llm.model.layers):
+        for owner, target, attributes, section in (
+            (layer.self_attn, "qkv_proj", ("q_proj", "k_proj", "v_proj"), "self_attn"),
+            (layer.self_attn, "o_proj", ("o_proj",), "self_attn"),
+            (layer.mlp, "gate_up_proj", ("gate_proj", "up_proj"), "mlp"),
+            (layer.mlp, "down_proj", ("down_proj",), "mlp"),
+        ):
+            name = f"llm.layers.{i}.{section}.{target}"
+            ignored = config.is_ignored(name)
+            parts = []
+            for attribute in attributes:
+                original = getattr(owner, attribute)
+                prefix = f"model.layers.{i}.{section}.{attribute}"
+                state = {
+                    key: read(f"{prefix}.{key}", value.shape) for key, value in original.state_dict().items()
+                }
+                original.load_state_dict(state, assign=True)
+                del state
+                parts.append(original if ignored else INT8Linear.from_linear(original, config))
+                delattr(owner, attribute)
+                del original
+            if ignored:
+                packed = _PackedLinear(*parts) if len(parts) > 1 else parts[0]
+            else:
+                # Unlike INT8Linear.pack, Qwen QKV has biases. Preserve them.
+                bias = (
+                    torch.cat([part.bias.detach() for part in parts]) if parts[0].bias is not None else None
+                )
+                packed = INT8Linear(
+                    torch.cat([part.weight.detach() for part in parts], dim=1).contiguous(),
+                    torch.cat([part.weight_scale for part in parts]),
+                    None if bias is None else torch.nn.Parameter(bias, requires_grad=False),
+                    compute_dtype=dtype,
+                    backend=config.backend,
+                    split_sizes=tuple(part.out_features for part in parts) if len(parts) > 1 else None,
+                )
+                quantized.append(name)
+            setattr(owner, target, packed.to(device))
+            del packed, parts
+        _LOGGER.info("StreamVLN INT8: loaded transformer layer %d/%d", i + 1, len(llm.model.layers))
+
+    # Assign floating multimodal leaves, embeddings, normalization, and LM head
+    # individually. No state dictionary retains a second copy of a full shard.
+    for module, prefix in groups:
+        for key, parameter in list(module.named_parameters()):
+            if not parameter.is_meta:
+                continue
+            source = prefix + key
+            tensor = read(source, parameter.shape).to(device)
+            owner_name, _, leaf = key.rpartition(".")
+            owner = module.get_submodule(owner_name) if owner_name else module
+            setattr(owner, leaf, torch.nn.Parameter(tensor, requires_grad=False))
+    if loaded != expected:
+        raise RuntimeError(f"StreamVLN tensors not loaded: {sorted(expected - loaded)[:8]}")
+    return tuple(quantized)
+
+
 def load_streamvln_checkpoint(
     checkpoint: str | Path,
     *,
     dtype: str = "bfloat16",
     max_context: int = 32768,
     load_device: str | torch.device = "cpu",
+    int8_config: INT8Config | None = None,
 ) -> StreamVLNCheckpoint:
     """Build stock weight containers and load every tensor without upstream code."""
 
@@ -235,14 +346,13 @@ def load_streamvln_checkpoint(
     finally:
         torch.set_default_dtype(previous_default_dtype)
 
-    _load_checkpoint_weights(
-        root,
-        llm,
-        vision_tower,
-        projector,
-        torch_dtype,
-        target_device,
-    )
+    quantized_names = None
+    if int8_config is None:
+        _load_checkpoint_weights(root, llm, vision_tower, projector, torch_dtype, target_device)
+    else:
+        quantized_names = _load_int8_checkpoint_weights(
+            root, llm, vision_tower, projector, torch_dtype, target_device, int8_config
+        )
     _materialize_runtime_buffers(llm, vision_tower, target_device)
     tokenizer = AutoTokenizer.from_pretrained(
         root,
@@ -273,6 +383,9 @@ def load_streamvln_checkpoint(
         vision_feature_layer=-1,
     )
     backbone.to(device=target_device)
+    if quantized_names is not None:
+        backbone._projections_fused = True
+        backbone.configure_quantized_projections(quantized_names)
     backbone.requires_grad_(False).eval()
     generation = json.loads((root / "generation_config.json").read_text(encoding="utf-8"))
     eos_token_ids = generation.get("eos_token_id", [151645, 151643])

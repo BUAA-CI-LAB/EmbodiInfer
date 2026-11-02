@@ -9,7 +9,11 @@ import torch
 
 from embodiinfer.layers import OperatorBackends
 from embodiinfer.policies.config import VLAPolicyConfig
-from embodiinfer.policies.pi05.inference.config import MlpLayerPrecision, Pi05OptimizationConfig
+from embodiinfer.policies.pi05.inference.config import (
+    MlpLayerPrecision,
+    Pi05OptimizationConfig,
+    _resolve_kernel_profile,
+)
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
 
 
@@ -18,6 +22,40 @@ def test_strict_preset_preserves_default_numerics_without_fixed_request_shape(de
     config = Pi05OptimizationConfig.from_preset(device)
     assert config == Pi05OptimizationConfig(hardware=device)
     assert config.numerics == "lerobot" and not config.fused_mlp
+    assert not config.prefix_gelu_fusion
+
+
+def test_prefix_gelu_opt_in_roundtrips_without_quantization(tmp_path):
+    config = Pi05OptimizationConfig(prefix_gelu_fusion=True)
+    assert not config.has_quantized_mlp and not config.fused_mlp
+    path = tmp_path / "recipe.json"
+    config.to_json(path)
+    assert Pi05OptimizationConfig.from_json(path) == config
+
+
+@pytest.mark.parametrize("projection", ["flashinfer_cublaslt", "torch_matmul"])
+def test_prefix_gelu_rejects_replacement_projection_backend(projection):
+    with pytest.raises(ValueError, match="original GEMMs"):
+        Pi05OptimizationConfig(prefix_gelu_fusion=True, operators=OperatorBackends(projection=projection))
+
+
+def test_flashinfer_profile_rejects_prefix_gelu_before_loading_kernels():
+    with pytest.raises(ValueError, match="original GEMMs"):
+        _resolve_kernel_profile("flashinfer", Pi05OptimizationConfig(prefix_gelu_fusion=True))
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"prefix_gelu_fusion": 1},
+        {"numerics": "openpi_rlinf", "activation": "gelu_pytorch_exact"},
+        {"action_layers": (MlpLayerPrecision(gate_up="fp8"),), "checkpoint_sha256": "a" * 64},
+        {"fused_mlp": True, "hardware": "thor"},
+    ],
+)
+def test_prefix_gelu_rejects_altered_numerics_or_projection_contract(values):
+    with pytest.raises(ValueError):
+        Pi05OptimizationConfig(**({"prefix_gelu_fusion": True} | values))
 
 
 @pytest.mark.parametrize("prefix_mlp,action_mlp", [("fp8", "bf16"), ("bf16", "nvfp4"), ("fp8", "nvfp4")])

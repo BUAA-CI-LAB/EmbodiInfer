@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -158,6 +159,10 @@ class StreamVLNVisionRunner(_StartupCaptureRunner):
                 self.backbone._encode_frames_eager,
                 pixel_values,
                 self.pool,
+                # The explicit vision paths already select their kernels and
+                # BF16 rounding boundaries. A second compiler pass can fuse
+                # across those boundaries and change downstream actions.
+                compile_call=self.backbone.vision_kernel == "hf",
             )
             self.graphs[key] = graph
         self.graph_replays += 1
@@ -267,4 +272,77 @@ class StreamVLNPrefillRunner(_StartupCaptureRunner):
         return static_cache.advance(cache_end), hidden
 
 
-__all__ = ["StreamVLNPrefillRunner", "StreamVLNVisionRunner"]
+class StreamVLNQuantizedPrefillRunner(StreamVLNPrefillRunner):
+    """Capture INT8 prefills with private staging and transactional session KV.
+
+    Reuse the same fixed-address arena and allocator pool as tree verification.
+    Exact query lengths and attention buckets retain the eager arithmetic; an
+    unseen frozen shape runs eagerly and never captures during measurement.
+    """
+
+    def __init__(self, backbone: StreamVLNBackbone) -> None:
+        super().__init__(backbone)
+        self.options = backbone.text_options
+        self.parameters = self._parameter_signature()
+        self.stream = torch.cuda.current_stream(next(backbone.parameters()).device).cuda_stream
+
+    def _parameter_signature(self) -> tuple:
+        return tuple(
+            (value.data_ptr(), None if value.is_inference() else value._version)
+            for value in itertools.chain(self.backbone.parameters(), self.backbone.buffers())
+        )
+
+    def _run_eager(
+        self, inputs: torch.Tensor, cache: StreamVLNCache | None
+    ) -> tuple[StreamVLNCache, torch.Tensor]:
+        self.eager_fallbacks += 1
+        return self.backbone._forward_embeddings_eager(
+            inputs, cache, project_logits=False, return_hidden_states=True
+        )
+
+    def run(self, inputs: torch.Tensor, cache: StreamVLNCache | None) -> tuple[StreamVLNCache, torch.Tensor]:
+        """Publish only the appended KV suffix after a successful graph replay."""
+        if (
+            self.options != self.backbone.text_options
+            or self.parameters != self._parameter_signature()
+            or torch.cuda.current_stream(inputs.device).cuda_stream != self.stream
+        ):
+            raise RuntimeError("quantized prefill graph profile, parameters or CUDA stream changed")
+        past_length = 0 if cache is None else cache.seq_len
+        query_length = int(inputs.shape[1])
+        cache_end = past_length + query_length
+        if cache_end > self.backbone.max_context:
+            raise RuntimeError("StreamVLN prefill graph exceeded KV capacity")
+        key_bucket = min(self.backbone.max_context, max(512, 1 << (cache_end - 1).bit_length()))
+        key = (query_length, key_bucket, inputs.dtype, inputs.device)
+        graph = self.graphs.get(key)
+        if graph is None and not self.capture_active:
+            return self._run_eager(inputs, cache)
+        working = self.backbone._cache_for_append(inputs, cache)
+        self.cache, self.pool = self.backbone.text_graph_workspace(working)
+        static_cache = self.cache
+        for target, source in (
+            (static_cache.key_storage, working.key_storage),
+            (static_cache.value_storage, working.value_storage),
+        ):
+            if target.data_ptr() == source.data_ptr():
+                raise ValueError("session KV must not borrow private graph staging")
+            target[..., :past_length, :].copy_(source[..., :past_length, :])
+        if graph is None:
+
+            def prefill(embeddings: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+                return self.backbone.prefill_embeddings_graph(embeddings, static_cache, position, key_bucket)
+
+            graph = _CapturedPrefillCall(prefill, inputs, past_length, self.pool)
+            self.graphs[key] = graph
+        hidden = graph.replay(inputs, past_length)
+        for target, source in (
+            (working.key_storage, static_cache.key_storage),
+            (working.value_storage, static_cache.value_storage),
+        ):
+            target[..., past_length:cache_end, :].copy_(source[..., past_length:cache_end, :])
+        self.graph_replays += 1
+        return working.advance(cache_end), hidden
+
+
+__all__ = ["StreamVLNPrefillRunner", "StreamVLNQuantizedPrefillRunner", "StreamVLNVisionRunner"]

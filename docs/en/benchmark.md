@@ -8,6 +8,7 @@ and RL integration. Each section describes the workload and timing method.
 | Directory | Model | Default data |
 |---|---|---|
 | [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | First 48 episodes each of R2R/RxR, full-frame replay |
+| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | First 48 episodes each of R2R/RxR, full-frame replay; E2E and model-forward timing |
 | [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | PI0.5 | LIBERO-10, 1,600 frames |
 | [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | First 48 episodes each of R2R/RxR, 4 frames per segment |
 | [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | The same LIBERO-10 as PI0.5, 1,600 frames |
@@ -19,7 +20,8 @@ and CPU output, and excludes loading, disk decode, and warmup. These are offline
 replay measurements. Panoramic uses a shape-compatible RGB-derived input;
 Cosmos measures action generation.
 
-Each directory ships its own `setup_env.py` to create an isolated virtual environment;
+The original benchmark directories ship `setup_env.py` for isolated environments;
+ActiveVLN uses the existing `activevln` dependency group. In each directory,
 `benchmark.py` handles data sampling, timing, and inference. Qwen Low/Panoramic use SDPA + Inductor
 + CUDA Graph. Each README gives the exact run command.
 
@@ -50,6 +52,18 @@ at B=1 with their respective Torch CUDA builds and drivers.
 <!-- offline-results:end -->
 
 ## Reproducing a result
+
+The October 14 non-quantized Pi05 prefix GELU/product experiment is separate from
+the offline table above. On one RTX 4090, B1/H50/ten steps with the unchanged
+RoboTwin checkpoint, default-off pointwise fusion improves paired complete-request
+P50 from 70.989 to 70.064 ms and 71.127 to 70.193 ms (about 1.3%). The reference is
+untouched main with its best tested byte-equivalent KV/prefix/context settings;
+their existing gains are part of the baseline. Four cases pass all 280 KV/AE/action
+byte comparisons at zero tolerance. GPU replay has its own timing scope, and the
+first high-variance run, including a long-tail sample, is retained and disclosed.
+See the [Pi05 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md)
+for exact conditions, rejection evidence and limits. This result does not establish
+other models, batches, hardware or closed-loop task quality.
 
 Start with the selected benchmark directory's README. Use its environment,
 checkpoint, dataset preparation, and measurement command to set up your run.

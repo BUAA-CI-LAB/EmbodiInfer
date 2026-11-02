@@ -1,0 +1,41 @@
+schema_version: 1
+model: activevln
+checkpoint: /models/benchmark/activevln
+checkpoint_revision: 160987313e3e869705f42400d1b8f28177044518
+device: cuda:0
+dtype: bfloat16
+seed: 42
+warmup_calls: 33
+repeats: 1
+attention: sdpa
+cuda_graph: false
+fused_ops: false
+split_attention: false
+tree_decode: false
+tree_fp32_projection: false
+tree_repeat_actions: 1
+query_bucket_size: 32
+prewarm_context_buckets: []
+graph_workspace_tokens: null
+max_new_tokens: 512
+max_context: 128000
+do_sample: false
+repetition_penalty: 1.05
+cpu_threads: 4
+max_steps_per_episode: null
+datasets:
+  - name: R2R
+    repository: cywan/StreamVLN-Trajectory-Data
+    revision: dc61ee9b4e90aa7ba63c1163b2134df5610dccb9
+    split: published_training_trajectories
+    root: /benchmark-data/navigation/R2R
+    annotations: /benchmark-data/navigation/R2R/annotations_v1-3.json
+    episode_limit: 48
+  - name: RxR
+    repository: cywan/StreamVLN-Trajectory-Data
+    revision: dc61ee9b4e90aa7ba63c1163b2134df5610dccb9
+    split: published_training_trajectories
+    root: /benchmark-data/navigation/RxR
+    annotations: /benchmark-data/navigation/RxR/annotations.json
+    episode_limit: 48
+output_dir: runs

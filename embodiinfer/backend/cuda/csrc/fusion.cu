@@ -83,3 +83,30 @@ extern "C" int cc_geglu_fp4(const void* gate, const void* up, void* output,
         (uint8_t*)scales, (uint8_t*)blocked, (const float*)global, rows, columns, (const uint16_t*)table);
     return int(cudaGetLastError());
 }
+
+// BF16-only entry point over row-strided gate/up views, including packed GEMMs.
+// Reuse the exact lookup and product-rounding implementation; no encoding.
+__global__ void fused_geglu_bf16_strided(const __nv_bfloat16* gate,
+        const __nv_bfloat16* up, __nv_bfloat16* output, int64_t count,
+        int columns, int64_t row_stride, const uint16_t* table) {
+    int64_t index = (int64_t(blockIdx.x) * THREADS + threadIdx.x) * 2;
+    if (index >= count) return;
+    int64_t offset = (index / columns) * row_stride + index % columns;
+    float first = gelu_mul(gate, up, offset, table);
+    if (index + 1 < count) {
+        int64_t next = ((index + 1) / columns) * row_stride + (index + 1) % columns;
+        float second = gelu_mul(gate, up, next, table);
+        reinterpret_cast<__nv_bfloat162*>(output)[index / 2] = __floats2bfloat162_rn(first, second);
+    } else output[index] = __float2bfloat16(first);
+}
+
+extern "C" int cc_geglu_bf16_strided(const void* gate, const void* up, void* output,
+        int rows, int columns, int64_t row_stride, const void* table, void* stream) {
+    if (rows <= 0 || columns <= 0 || row_stride < columns) return int(cudaErrorInvalidValue);
+    int64_t count = int64_t(rows) * columns;
+    int blocks = (count + THREADS * 2 - 1) / (THREADS * 2);
+    fused_geglu_bf16_strided<<<blocks, THREADS, 0, (cudaStream_t)stream>>>(
+        (const __nv_bfloat16*)gate, (const __nv_bfloat16*)up,
+        (__nv_bfloat16*)output, count, columns, row_stride, (const uint16_t*)table);
+    return int(cudaGetLastError());
+}

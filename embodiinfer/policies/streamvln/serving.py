@@ -20,7 +20,9 @@ from embodiinfer.engine.serve.contracts import (
     RawPolicyRequest,
     ServingAdapter,
 )
-from embodiinfer.types import ActionChunk, Observation, SessionKey
+from embodiinfer.types import ActionChunk, SessionKey
+
+from .processing import make_streamvln_observation
 
 STREAMVLN_ACTION_SPACE = "streamvln.action_chunk.v1"
 STREAMVLN_IMAGE_FIELD = "observation.images.rgb"
@@ -41,7 +43,7 @@ def _image_name(value: str) -> str:
     return stem
 
 
-def _load_raw_image(image: RawImage) -> torch.Tensor:
+def _load_raw_image(image: RawImage, *, uint8: bool = False) -> torch.Tensor:
     if image.mime_type not in {"image/jpeg", "image/png"}:
         raise ValueError(f"unsupported image type {image.mime_type!r}")
     if not image.data:
@@ -51,7 +53,9 @@ def _load_raw_image(image: RawImage) -> torch.Tensor:
             if opened.width * opened.height > 8_000_000:
                 raise ValueError(f"{image.name} image has too many pixels")
             rgb = opened.convert("RGB")
-            array = np.asarray(rgb, dtype=np.float32) / 255.0
+            array = np.asarray(rgb, dtype=np.uint8 if uint8 else np.float32)
+            if not uint8:
+                array = array / 255.0
     except (UnidentifiedImageError, OSError) as error:
         raise ValueError(f"{image.name} is not a valid encoded image") from error
     if array.ndim != 3 or array.shape[-1] != 3:
@@ -121,19 +125,29 @@ class StreamVLNServingAdapter(ServingAdapter):
             "recurrent": True,
             "execution_mode": "serialized_b1",
             "max_batch_size": 1,
+            "primitive_frame_metadata": "stream_step_id",
+            "primitive_frame_fields": f"{self._config.image_field}.{{index}}",
+            "max_primitive_frames": 4,
         }
 
     def infer(self, request: RawPolicyRequest) -> ModelResult:
         """Execute one StreamVLN turn and commit its state under the HTTP session."""
 
-        image = self._request_image(request.images)
-        observation = Observation(
-            images=_load_raw_image(image),
-            state=torch.empty(0, dtype=torch.float32),
-            instruction_tokens=torch.empty(0, dtype=torch.long),
-            instruction=request.instruction,
+        images = self._request_images(request)
+        byte_input = (
+            getattr(getattr(self._policy, "processor", None), "gpu_image_transform", None) is not None
+        )
+        frames = [_load_raw_image(image, uint8=byte_input) for image in images]
+        if any(frame.shape != frames[0].shape for frame in frames):
+            raise ValueError("primitive RGB frames must have identical dimensions")
+        observation = make_streamvln_observation(
+            frames[-1],
+            request.instruction,
+            uint8=byte_input,
             metadata={**dict(request.metadata), "step_id": request.step_id},
         )
+        if len(frames) > 1:
+            observation.images = torch.stack(frames)
         batch = self._policy.collate([observation], [request.request_id])
         with self._lock:
             chunks = self._core.execute(
@@ -174,6 +188,25 @@ class StreamVLNServingAdapter(ServingAdapter):
             return requested[self._config.image_field]
         except KeyError as error:
             raise ValueError(f"missing requested image field {self._config.image_field!r}") from error
+
+    def _request_images(self, request: RawPolicyRequest) -> tuple[RawImage, ...]:
+        """Preserve legacy single-camera requests or validate ordered primitive frames."""
+        if "stream_step_id" not in request.metadata:
+            return (self._request_image(request.images),)
+        step = request.metadata["stream_step_id"]
+        if type(step) is not int or step < 0:
+            raise ValueError("stream_step_id must be a nonnegative integer")
+        if not 1 <= len(request.images) <= 4:
+            raise ValueError("expected one to four consecutive primitive RGB frames")
+        names = tuple(_image_name(image.name) for image in request.images)
+        # A single frame can retain the existing camera field. Multi-frame
+        # requests must explicitly name every frame in chronological order.
+        if names == (self._config.image_field,):
+            return request.images
+        expected = tuple(f"{self._config.image_field}.{index}" for index in range(len(request.images)))
+        if names != expected:
+            raise ValueError("primitive RGB frames must be ordered and consecutively named")
+        return request.images
 
     def _valid_actions(self, chunk: ActionChunk) -> torch.Tensor:
         actions = torch.as_tensor(chunk.actions).detach().float().cpu()
