@@ -38,6 +38,7 @@ class ActiveVLNServingAdapter:
         if not core.policy.is_recurrent or core.policy.action_space != "r2r":
             raise ValueError("ActiveVLN HTTP serving requires a recurrent R2R policy")
         self._core = core
+        self.policy = core.policy
         self._lock = threading.RLock()
         self._committed: dict[str, tuple[int, str]] = {}
 

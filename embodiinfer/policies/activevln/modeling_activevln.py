@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .batching_activevln import ActiveVLNBatchedRuntime
     from .cuda_graph import ActiveVLNGraphRuntime
     from .serving import ActiveVLNServingAdapter
+    from .text_serving import ActiveVLNSharedTextAdapter
 
 
 ACTIVEVLN_REPO = "https://github.com/arvillion/ActiveVLN"
@@ -565,6 +566,9 @@ class ActiveVLNPolicy(VLAPolicy):
         self.qwen = qwen
         self._processor = processor
         self._attn = get_attention_backend(attention)
+        self._reference_text_attn = (
+            get_attention_backend("sdpa_causal") if self._attn.name == "sdpa" else self._attn
+        )
         self.max_new_tokens = max_new_tokens
         self.max_context = max_context
         self.temperature = temperature
@@ -584,6 +588,31 @@ class ActiveVLNPolicy(VLAPolicy):
         self._inference_runtime: ActiveVLNGraphRuntime | None = None
         self.gpu_image_transform = None
         self._host_turns: dict[tuple, tuple[ProcessedTurn, torch.Tensor, int]] = {}
+
+    def _apply(self, fn, recurse: bool = True):
+        # HF constructs these nonpersistent RoPE frequencies in FP32 even when
+        # loading BF16 weights. Module.to(dtype=...) would round the frequencies
+        # before forward casts them back to FP32, changing positional phases.
+        # Retain the original values while allowing normal device transfers.
+        rotary = []
+        if recurse:
+            for name, module in self.qwen.named_modules():
+                if name.rsplit(".", 1)[-1] not in {"rotary_emb", "rotary_pos_emb"}:
+                    continue
+                frequency = module._buffers.get("inv_freq")
+                if frequency is not None:
+                    rotary.append((module, frequency, getattr(module, "original_inv_freq", None)))
+        result = super()._apply(fn, recurse=recurse)
+        for module, frequency, original in rotary:
+            device = module.inv_freq.device
+            module.inv_freq = frequency.to(device=device)
+            if original is not None:
+                # HF's dynamic-RoPE reset reference is a plain tensor attribute,
+                # so Module.to does not move it. Preserve its alias when shared.
+                module.original_inv_freq = (
+                    module.inv_freq if original is frequency else original.to(device=device)
+                )
+        return result
 
     def set_gpu_preprocess(self, enabled: bool) -> None:
         """Compute image patches on the device with the bit-exact processor port."""
@@ -804,11 +833,25 @@ class ActiveVLNPolicy(VLAPolicy):
         core: EngineCore,
         checkpoint: str | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> ActiveVLNServingAdapter:
+    ) -> ActiveVLNServingAdapter | ActiveVLNSharedTextAdapter:
         """Expose eager recurrent inference through the shared serving CLI."""
         from .serving import ActiveVLNServingAdapter
 
-        return ActiveVLNServingAdapter(core=core, checkpoint=checkpoint, config=config)
+        options = dict(config or {})
+        shared_text = options.pop("shared_text", False)
+        if type(shared_text) is not bool:
+            raise ValueError("shared_text must be a boolean")
+        text_decode_graphs = options.pop("text_decode_graphs", False)
+        if type(text_decode_graphs) is not bool:
+            raise ValueError("text_decode_graphs must be a boolean")
+        if text_decode_graphs and not shared_text:
+            raise ValueError("text_decode_graphs requires shared_text")
+        adapter = ActiveVLNServingAdapter(core=core, checkpoint=checkpoint, config=options)
+        if shared_text:
+            from .text_serving import ActiveVLNSharedTextAdapter
+
+            return ActiveVLNSharedTextAdapter(adapter, self, decode_graphs=text_decode_graphs)
+        return adapter
 
     def pad(self, batch: ActiveVLNBatch, target_batch_size: int) -> ActiveVLNBatch:
         if target_batch_size != 1:
@@ -817,6 +860,10 @@ class ActiveVLNPolicy(VLAPolicy):
 
     def _embed_turn(self, turn: ProcessedTurn) -> torch.Tensor:
         embeds = self._text.embed_tokens(turn.input_ids)
+        if turn.image_grid_thw.numel() == 0:
+            if bool((turn.input_ids == self.qwen.config.image_token_id).any()):
+                raise ValueError("image tokens require an image grid")
+            return embeds
         visual_dtype = next(self._visual.parameters()).dtype
         image_embeds = None
         runtime = self._inference_graphs
@@ -841,23 +888,30 @@ class ActiveVLNPolicy(VLAPolicy):
         hidden: torch.Tensor,
         position_ids: torch.Tensor,
         prefix_kv: list[tuple[torch.Tensor, torch.Tensor]] | None,
+        *,
+        checkpoint_rotary: bool = False,
     ) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor]]]:
         text = self._text
         head_dim = text.layers[0].self_attn.head_dim
         sections, theta = _mrope_config(self._text_config)
-        cos, sin = mrope_cos_sin(
-            position_ids,
-            head_dim,
-            theta,
-            hidden.dtype,
-        )
+        if checkpoint_rotary:
+            cos, sin = text.rotary_emb(hidden, position_ids)
+        else:
+            cos, sin = mrope_cos_sin(position_ids, head_dim, theta, hidden.dtype)
         prefix_len = 0 if prefix_kv is None else prefix_kv[0][0].shape[2]
-        mask = rectangular_causal_mask(
-            prefix_len,
-            hidden.shape[1],
-            device=hidden.device,
-            dtype=hidden.dtype,
-        )
+        attention_backend = self._attn
+        if checkpoint_rotary and self._attn.name == "sdpa":
+            # Text has an exact, unpadded prefix. Match Qwen's explicit KV-head
+            # expansion and causal-mask elision as well as its RoPE values.
+            attention_backend = self._reference_text_attn
+            mask = None
+        else:
+            mask = rectangular_causal_mask(
+                prefix_len,
+                hidden.shape[1],
+                device=hidden.device,
+                dtype=hidden.dtype,
+            )
         collected = []
         for i, layer in enumerate(text.layers):
             residual = hidden
@@ -873,7 +927,7 @@ class ActiveVLNPolicy(VLAPolicy):
                 pk, pv = prefix_kv[i]
                 k = torch.cat([pk, k], dim=2)
                 v = torch.cat([pv, v], dim=2)
-            out = self._attn.attend(q, k, v, attn_mask=mask, scaling=head_dim**-0.5)
+            out = attention_backend.attend(q, k, v, attn_mask=mask, scaling=head_dim**-0.5)
             hidden = residual + attn.o_proj(out.transpose(1, 2).reshape(batch, query_len, -1))
             residual = hidden
             hidden = residual + _mlp(layer.mlp, _rmsnorm(layer.post_attention_layernorm, hidden))
@@ -1011,7 +1065,9 @@ class ActiveVLNPolicy(VLAPolicy):
         with runtime.lock if runtime is not None else nullcontext():
             return self._encode_prepared_prefix(prepared)
 
-    def _encode_prepared_prefix(self, prepared: PreparedActiveVLNTurn) -> ActiveVLNPrefix:
+    def _encode_prepared_prefix(
+        self, prepared: PreparedActiveVLNTurn, *, checkpoint_rotary: bool = False
+    ) -> ActiveVLNPrefix:
         turn, positions, memory = prepared.turn, prepared.positions, prepared.memory
         device = turn.input_ids.device
         embeds = self._embed_turn(turn)
@@ -1022,10 +1078,13 @@ class ActiveVLNPolicy(VLAPolicy):
         )
         old_kv = None if working is None else working.visible_kv()
         result = None
-        runtime = self._inference_graphs
+        runtime = None if checkpoint_rotary else self._inference_graphs
         if runtime is not None:
             result = runtime.forward(embeds, positions, working)
-        hidden, new_kv = self._forward_chunk(embeds, positions, old_kv) if result is None else result
+        if checkpoint_rotary:
+            hidden, new_kv = self._forward_chunk(embeds, positions, old_kv, checkpoint_rotary=True)
+        else:
+            hidden, new_kv = self._forward_chunk(embeds, positions, old_kv) if result is None else result
         if working is None:
             working = ActiveVLNMemory.from_chunk(
                 new_kv,
@@ -1057,7 +1116,7 @@ class ActiveVLNPolicy(VLAPolicy):
             return self._append_token(memory, token)
 
     def _append_token(
-        self, memory: ActiveVLNMemory, token: torch.Tensor
+        self, memory: ActiveVLNMemory, token: torch.Tensor, *, checkpoint_rotary: bool = False
     ) -> tuple[ActiveVLNMemory, torch.Tensor]:
         token = token.to(memory.token_ids_buffer.device)
         next_position = memory.next_position
@@ -1069,10 +1128,15 @@ class ActiveVLNPolicy(VLAPolicy):
         )
         hidden = self._text.embed_tokens(token)
         result = None
-        runtime = self._inference_graphs
+        runtime = None if checkpoint_rotary else self._inference_graphs
         if runtime is not None:
             result = runtime.forward(hidden, position, memory)
-        hidden, kv = self._forward_chunk(hidden, position, memory.visible_kv()) if result is None else result
+        if checkpoint_rotary:
+            hidden, kv = self._forward_chunk(hidden, position, memory.visible_kv(), checkpoint_rotary=True)
+        else:
+            hidden, kv = (
+                self._forward_chunk(hidden, position, memory.visible_kv()) if result is None else result
+            )
         memory.append_chunk(kv, token, torch.ones_like(token), position, next_position=next_position + 1)
         if result is not None:
             runtime.bind_memory(memory)

@@ -172,6 +172,7 @@ register_lazy_attention(
     "EagerBroadcastAttention",
 )
 register_lazy_attention("sdpa", "embodiinfer.backend.torch.attention", "SDPAAttention")
+register_lazy_attention("sdpa_causal", "embodiinfer.backend.torch.attention", "CausalSDPAAttention")
 register_lazy_attention("flex", "embodiinfer.backend.torch.attention", "FlexAttention")
 register_lazy_attention(
     "triton_segmented",

@@ -1,6 +1,7 @@
 """PyTorch-backed operator implementations."""
 
 from .attention import (
+    CausalSDPAAttention,
     EagerAttention,
     EagerBroadcastAttention,
     FlexAttention,
@@ -8,6 +9,7 @@ from .attention import (
 )
 
 __all__ = [
+    "CausalSDPAAttention",
     "EagerAttention",
     "EagerBroadcastAttention",
     "FlexAttention",

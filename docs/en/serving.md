@@ -197,6 +197,43 @@ See [refit integration patterns](api.md#zero-copy-refit) for the weight-update l
 
 ## ActiveVLN eager serving
 
+The optional adapter setting `"shared_text": true` enables raw text and image
+conversations using the same resident ActiveVLN parameters. This is experimental:
+it does not certify that a navigation checkpoint can plan or call tools reliably.
+For example, save `{"shared_text": true}` as `activevln-agent.json` and add
+`--adapter-config activevln-agent.json` to the command below.
+
+With a BF16 CUDA policy and `policy_kwargs.attention: "sdpa"`, the additional
+adapter option `"text_decode_graphs": true` captures private text decode segments
+at startup. Dynamic-length attention keeps the eager path's exact, unpadded
+shapes. This requires `shared_text`; it is separate from navigation graph options
+and remains off by default. Recreate the adapter after refit or device changes.
+
+Read `adapter.shared_text.model_instance` from `/v1/capabilities`, then POST JSON
+to `/v1/text` using the same authentication:
+
+```json
+{
+  "schema": "vvla.text.request.v1",
+  "request_id": "decision-1",
+  "model_instance": "<identity from capabilities>",
+  "messages": [{"role": "user", "content": "What is the capital of France?"}],
+  "max_new_tokens": 64,
+  "timeout_s": 30
+}
+```
+
+The response contains raw `text`, `token_ids`, `input_tokens`, `stop_reason`,
+`elapsed_s` and the model identity. For one image, add `image_base64` with JPEG/PNG
+bytes encoded as base64, and use content blocks such as
+`[{"type":"image"},{"type":"text","text":"Describe this view."}]`.
+Limits are 4096 input tokens, 512 output tokens, 307200 image pixels and 60 seconds.
+Navigation has priority between text tokens; prefill is not preemptible. An
+additional concurrent text request returns 429. Navigation and text have separate
+KV histories. Recreate the adapter after refit; stale identities return 409.
+This endpoint has no tool execution and no automatic retry or idempotency cache.
+The harness owns tool validation, task revision checks and decisions to retry.
+
 With the ActiveVLN dependency group installed and a local checkpoint:
 
 ```bash

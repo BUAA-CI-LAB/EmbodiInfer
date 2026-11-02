@@ -104,7 +104,10 @@ class ActiveVLNGraphRuntime:
         workspace_tokens: int | None = None,
         batch_size: int = 1,
         vision_kernel: str = "hf",
+        checkpoint_rotary: bool = False,
     ) -> None:
+        if type(checkpoint_rotary) is not bool:
+            raise ValueError("checkpoint_rotary must be a boolean")
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive Python integer")
         if vision_kernel not in ("hf", "segmented", "fused"):
@@ -126,6 +129,7 @@ class ActiveVLNGraphRuntime:
         if tree_decode and policy.do_sample:
             raise ValueError("ActiveVLN tree_decode requires greedy decoding")
         self.policy = policy
+        self.checkpoint_rotary = checkpoint_rotary
         self.lock = RLock()
         self.query_bucket_size = query_bucket_size
         self.fused_ops = fused_ops
@@ -206,6 +210,7 @@ class ActiveVLNGraphRuntime:
             "fused_ops": self.fused_ops,
             "split_attention": self.split_attention,
             "vision_kernel": self.vision_kernel,
+            "checkpoint_rotary": self.checkpoint_rotary,
             "workspace_mib": self.storage.numel() * self.storage.element_size() / 2**20,
             "workspace_tokens": self.storage.shape[-2],
             "model_max_context": self.policy.max_context,
@@ -404,7 +409,10 @@ class ActiveVLNGraphRuntime:
         text = policy._text
         head_dim = text.layers[0].self_attn.head_dim
         sections, theta = _mrope_config(policy._text_config)
-        cos, sin = mrope_cos_sin(positions, head_dim, theta, hidden.dtype)
+        if self.checkpoint_rotary:
+            cos, sin = text.rotary_emb(hidden, positions)
+        else:
+            cos, sin = mrope_cos_sin(positions, head_dim, theta, hidden.dtype)
         norm = _rmsnorm
         mlp = _mlp
         rotary = partial(apply_mrope, cos=cos, sin=sin, sections=sections)

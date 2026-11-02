@@ -173,6 +173,38 @@ HTTP 与 WirelessComm 遵循相同的会话和推理步骤规则。
 
 ## ActiveVLN eager 服务
 
+可选适配器配置 `"shared_text": true` 允许文字和图像对话复用同一份驻留 ActiveVLN
+参数。该能力仍在实验阶段，不代表导航权重已具备可靠的规划或工具调用能力。
+将 `{"shared_text": true}` 保存为 `activevln-agent.json`，在下方命令中添加
+`--adapter-config activevln-agent.json` 即可启用。
+
+当 policy 使用 CUDA、BF16 和 `policy_kwargs.attention: "sdpa"` 时，可再设置适配器选项
+`"text_decode_graphs": true`，在启动时捕获独立的文字解码片段。变长注意力保留 eager
+路径的精确长度，不填充 KV。该选项要求启用 `shared_text`，与导航 graph 选项独立，
+默认关闭；refit 或切换设备后需重建适配器。
+
+先从 `/v1/capabilities` 读取 `adapter.shared_text.model_instance`，再使用相同认证向
+`/v1/text` 发送 JSON：
+
+```json
+{
+  "schema": "vvla.text.request.v1",
+  "request_id": "decision-1",
+  "model_instance": "<capabilities 返回的标识>",
+  "messages": [{"role": "user", "content": "What is the capital of France?"}],
+  "max_new_tokens": 64,
+  "timeout_s": 30
+}
+```
+
+响应保留原始 `text`、`token_ids`、`input_tokens`、`stop_reason`、`elapsed_s` 和模型标识。
+需要图像时，添加 JPEG/PNG 字节的 base64 编码字段 `image_base64`，并将 content 写成
+`[{"type":"image"},{"type":"text","text":"Describe this view."}]`。
+限制为 4096 输入 token、512 输出 token、307200 图像像素和 60 秒。
+导航在文字 token 之间优先执行，prefill 不能被抢占；同时到来的第二个文字请求返回 429。
+导航与文字分别持有 KV 历史；refit 后需重建适配器，旧模型标识返回 409。
+接口不执行工具，也不自动重试或缓存幂等结果；工具校验、任务版本检查和重试决策由 harness 负责。
+
 安装 ActiveVLN 依赖组并准备本地权重后：
 
 ```bash

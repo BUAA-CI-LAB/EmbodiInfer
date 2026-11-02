@@ -219,6 +219,48 @@ class _Processor:
     tokenizer = None
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float64])
+def test_policy_cast_preserves_text_and_vision_rotary_precision(dtype):
+    qwen = _Qwen()
+    qwen.model.rotary_emb = torch.nn.Module()
+    qwen.visual = torch.nn.Module()
+    qwen.visual.rotary_pos_emb = torch.nn.Module()
+    frequency = torch.tensor([1.0, 0.17782794, 0.03162278])
+    for module in (qwen.model.rotary_emb, qwen.visual.rotary_pos_emb):
+        module.register_buffer("inv_freq", frequency.clone(), persistent=False)
+    text_rotary = qwen.model.rotary_emb
+    text_rotary.original_inv_freq = text_rotary.inv_freq
+    qwen.register_buffer("other_float_buffer", frequency.clone())
+    policy = ActiveVLNPolicy(qwen, _Processor())
+
+    assert policy.to(dtype=dtype) is policy
+
+    assert qwen.lm_head.weight.dtype == dtype
+    assert qwen.other_float_buffer.dtype == dtype
+    for module in (text_rotary, qwen.visual.rotary_pos_emb):
+        assert module.inv_freq.dtype == torch.float32
+        assert torch.equal(module.inv_freq, frequency)
+    assert text_rotary.original_inv_freq is text_rotary.inv_freq
+
+
+@pytest.mark.parametrize("shared_original", [True, False])
+def test_policy_moves_rotary_reset_reference_with_device(shared_original):
+    qwen = _Qwen()
+    rotary = qwen.model.rotary_emb = torch.nn.Module()
+    rotary.register_buffer("inv_freq", torch.tensor([1.0, 0.17782794]), persistent=False)
+    rotary.original_inv_freq = rotary.inv_freq if shared_original else rotary.inv_freq * 2
+    original = rotary.original_inv_freq.clone()
+    policy = ActiveVLNPolicy(qwen, _Processor()).to(dtype=torch.bfloat16)
+    assert torch.equal(rotary.original_inv_freq, original)
+
+    policy.to(device="meta")
+
+    assert rotary.inv_freq.device.type == "meta"
+    assert rotary.original_inv_freq.device.type == "meta"
+    assert rotary.original_inv_freq.dtype == torch.float32
+    assert (rotary.original_inv_freq is rotary.inv_freq) == shared_original
+
+
 def test_tiny_self_hosted_forward_incremental_matches_full_last_token():
     torch.manual_seed(0)
     policy = ActiveVLNPolicy(_Qwen(), _Processor(), do_sample=False, max_new_tokens=2)

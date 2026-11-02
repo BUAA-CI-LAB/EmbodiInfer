@@ -32,6 +32,7 @@ def test_registry_lists_and_resolves():
         "query_major",
         "query_major_cuda",
         "sdpa",
+        "sdpa_causal",
         "triton_segmented",
         "triton_split_kv",
     ]
@@ -281,6 +282,41 @@ def test_sdpa_unknown_signature_uses_compatibility_path(monkeypatch):
     monkeypatch.setattr(attention_module.inspect, "signature", lambda _: (_ for _ in ()).throw(ValueError()))
     assert not attention_module._supports_gqa(lambda *args: None)
     assert attention_module._supports_gqa(torch_functional.scaled_dot_product_attention)
+
+
+@pytest.mark.parametrize("query_length,key_length", [(1, 1), (8, 8), (3, 8), (1, 8)])
+def test_causal_sdpa_matches_right_aligned_reference(monkeypatch, query_length, key_length):
+    q, k, v = _gqa_qkv(seq=key_length)
+    q = q[:, :, -query_length:]
+    sdpa = torch_functional.scaled_dot_product_attention
+    calls = []
+
+    def record(query, key, value, **kwargs):
+        calls.append((query.shape[1], key.shape[1], kwargs))
+        return sdpa(query, key, value, **kwargs)
+
+    monkeypatch.setattr(attention_module.F, "scaled_dot_product_attention", record)
+    actual = get_attention_backend("sdpa_causal").attend(q, k, v)
+    # The complete triangular mask cropped to the suffix expresses the causal
+    # contract independently of the SDPA dispatch/mask-elision implementation.
+    full_mask = torch.full((key_length, key_length), -torch.inf).triu(1)
+    mask = full_mask[-query_length:][None, None]
+    expected = get_attention_backend("eager").attend(q, k, v, attn_mask=mask)
+    torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+    heads, kv_heads, arguments = calls[0]
+    assert len(calls) == 1 and heads == kv_heads
+    assert "enable_gqa" not in arguments
+    assert arguments["is_causal"] == (query_length == key_length and query_length > 1)
+    assert (arguments["attn_mask"] is None) == (query_length in (1, key_length))
+
+
+def test_causal_sdpa_rejects_masks_and_incomplete_current_keys():
+    q, k, v = _gqa_qkv()
+    backend = get_attention_backend("sdpa_causal")
+    with pytest.raises(ValueError, match="external mask"):
+        backend.attend(q, k, v, attn_mask=torch.zeros(q.shape[-2], k.shape[-2]))
+    with pytest.raises(ValueError, match="current query tokens"):
+        backend.attend(q, k[:, :, :-1], v[:, :, :-1])
 
 
 @pytest.mark.parametrize("name", ["query_major", "query_major_cuda"])

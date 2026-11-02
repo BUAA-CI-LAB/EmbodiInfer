@@ -811,3 +811,101 @@ physical navigation. A separate JetPack 5.1.1 / CUDA 11.4 target check has now
 completed one stationary camera-to-model HTTP turn using BF16 weights and
 prebuilt PyTorch 2.2.0 / torchvision 0.17.2. This does not certify sustained
 latency, long histories or closed-loop navigation.
+
+## 23. Shared-weight agent inference (proposed, capability-gated)
+
+The target is one ActiveVLN checkpoint and one resident parameter set for both
+navigation actions and agent decisions. RPent owns tools, task progress, bounded
+working memory and decision application; EmbodiRun owns observations and action
+execution. EmbodiInfer owns the shared model, decoding, KV state and scheduling.
+An external planning model is outside this design.
+
+Unconstrained checkpoint probes are required before advertising tool-use or
+planning capabilities. Valid navigation output does not imply instruction-following
+or reliable task completion judgments. Format validity, semantic correctness,
+visual grounding and closed-loop task success must be reported separately. A
+schema-constrained response is not evidence of an unconstrained capability.
+Checkpoint adaptation, if required, is an offline training experiment outside
+this inference package; its revision and navigation-accuracy effects must be
+reported. Both deployed modes use the same resulting parameters.
+
+The opt-in `ActiveVLNTextDecoder(policy)` primitive borrows the existing policy's
+parameter objects. `prepare` performs a bounded standalone prefill, `step`
+generates at most one token, and `result` returns unrepaired text and token IDs.
+The caller serializes GPU work and calls `invalidate` on owner reset/refit. A
+failed append poisons its request because KV writes may have partially completed.
+The primitive does not select tools. Opt-in `ActiveVLNSharedTextAdapter` wraps an
+existing navigation adapter that owns exactly the same policy object. The generic
+HTTP server dispatches `/v1/text` through `TextServingAdapter`, with no model-name
+branch. `shared_text: true` in the ActiveVLN adapter configuration enables it;
+the default remains navigation only. Text has one admission slot, 4096 input
+tokens, at most 512 output tokens, one JPEG/PNG up to 307200 pixels and a deadline
+of at most 60 seconds. The shared gate yields between text tokens and serializes
+both paths on the owning CUDA device's default stream. Prefill is not preemptible.
+The response retains malformed model output for the harness to handle.
+Text prefill and decode use the loaded model's rotary-embedding buffers. Recomputing
+inverse frequencies on the GPU can produce different BF16 trigonometric values
+and change a close greedy decision. Text therefore bypasses navigation-owned
+graph buffers; a private text graph opts into `checkpoint_rotary=True` and must
+be compared against both the text eager path and the same-weight HF reference.
+Existing navigation keeps its established rotary path and default graph settings.
+Policy dtype conversions retain the loaded text and vision RoPE frequency
+precision while moving both buffers and the dynamic-reset reference to the target
+device. This matches HF's direct BF16 loading, which initializes these frequencies
+in FP32. Casting an FP32-loaded policy previously rounded the vision frequencies;
+correcting that can change navigation outputs and requires a fresh reference and
+closed-loop comparison. Earlier navigation measurements cannot establish parity
+for the corrected loading path.
+The private SDPA text prefill also uses the registered `sdpa_causal` backend:
+explicit KV-head expansion, the causal kernel hint for an unpadded initial
+prefill, no mask for one-token appends, and a rectangular causal mask for cached
+multi-token appends. This matches Qwen's reference dispatch; native GQA with an
+always-explicit mask produced different greedy text on long instructions. The
+backend rejects external masks and requires exact, unpadded K/V. Navigation and
+bucketed graph attention retain their existing backend; graph token parity must
+be checked separately after the corrected prefill.
+
+Optional `text_decode_graphs: true` captures only constant-shape BF16 CUDA decode
+segments: initial projection/rotary, then each layer's output/MLP and the next
+layer's projection. Between segments, the existing text SDPA backend receives
+the exact growing prefix with its original head expansion and no padding or
+mask. Capture borrows the policy tensors and owns private scratch buffers; it
+does not introduce a second model, replace native navigation graphs, or change
+the per-token scheduling boundary. Captured outputs are copied into private text
+memory before another step can reuse the buffers. Startup and replay use the
+same serialized stream; policy-version changes reject replay. Decoder invalidation
+releases graphs and cancels outstanding text state. This option requires
+`shared_text` and stays disabled by default. Validate exact tokens and KV against
+eager text on the actual checkpoint, plus request interleaving and cancellation;
+model-only timing is not evidence of the end-to-end latency acceptance target.
+
+Requests contain bounded messages,
+public RGB observations, an output-token limit, a deadline and a cancellation
+handle. Results retain raw generated text, token counts, timing and checkpoint
+identity. Tool interpretation remains in RPent. Existing navigation requests
+and their sampling defaults are unchanged. No generic engine path may branch
+on the ActiveVLN model name; shared scheduling uses an advertised capability.
+
+Navigation and agent conversations have independently owned KV histories. An
+agent request cannot commit into navigation history or reset an active navigation
+session. Navigation reset affects only that session. Shutdown invalidates text
+state; refit removes the shared capability and rejects pending text until a new
+adapter is constructed. RPent discards responses to an older task revision.
+Observation-age checks are still required before asynchronous decision application.
+
+Background threads alone do not meet the latency target. Planning decode must
+yield between tokens to pending navigation work. Its prefill, visual-token count
+and context are bounded; navigation has scheduling priority. GPU graph buffers
+and KV arenas require explicit ownership when switching requests. Execution may
+continue under a valid current instruction while an agent request is outstanding;
+EmbodiRun retains the decision to stop at an invalid or hazardous state.
+
+Validation compares matched baseline and agent runs on the same GPU, checkpoint,
+precision, episodes and simulator conditions. If weights were adapted, include
+both original-model and adapted-model-without-harness controls. The acceptance
+target is at most 1.5 times baseline episode wall time and policy-call latency,
+with SR/SPL, P95, planner waiting, cancellation, stale-result counts and memory
+reported. A single frame, syntactic tool call or synthetic text test cannot
+establish this contract. An on-device claim requires a separate measurement on
+the actual device. The raw shared-weight serving path is implemented; reliable
+agent capability, closed-loop improvement and the latency target remain unverified.

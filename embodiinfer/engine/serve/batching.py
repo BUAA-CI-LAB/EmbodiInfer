@@ -10,6 +10,7 @@ from time import monotonic
 from typing import Any
 
 from .contracts import BatchServingAdapter, ModelResult, RawPolicyRequest, ServeError
+from .text import TextRequest, TextServingAdapter
 
 
 class BatchedServingAdapter:
@@ -72,6 +73,15 @@ class BatchedServingAdapter:
         """Delegate session reset after PolicyService has drained its step."""
         self.adapter.reset(session_id)
 
+    def infer_text(self, request: TextRequest) -> dict[str, Any]:
+        """Delegate optional text admission to the adapter that owns GPU execution."""
+        if not isinstance(self.adapter, TextServingAdapter):
+            raise ServeError(404, "unsupported_text", "adapter does not expose text generation")
+        with self._condition:
+            if self._closed:
+                raise ServeError(503, "server_stopping", "batch service is stopping")
+        return dict(self.adapter.infer_text(request))
+
     def shutdown(self) -> None:
         """Reject queued work and wait for the single in-flight model call."""
         with self._condition:
@@ -82,6 +92,9 @@ class BatchedServingAdapter:
             self._condition.notify_all()
         if self._worker is not None:
             self._worker.join()
+        shutdown = getattr(self.adapter, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
 
     def _run(self) -> None:
         while True:
