@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 import pytest
 from scripts.kernel_tuning import batch
 from scripts.kernel_tuning.__main__ import main
-from scripts.kernel_tuning.artifacts import RunStore
+from scripts.kernel_tuning.artifacts import RunStore, atomic_json
 from scripts.kernel_tuning.contracts import ContractError, TaskPackage, promotion, read_json
 from scripts.kernel_tuning.operators import select
 
@@ -134,6 +135,28 @@ def test_interrupt_stops_the_batch_and_resume_continues_it(tmp_path: Path) -> No
     assert items["rms_norm"]["status"] == "pending"
     batch.execute(root, launcher=runs)
     assert [command[3] for command in runs.commands] == ["run", "resume", "run"]
+
+
+def test_parallel_batch_overlaps_runs_and_leaves_skipped_items(tmp_path: Path) -> None:
+    """--parallel starts runs together; an item set to skipped by hand never starts."""
+    root = new_batch(tmp_path, ["gated_residual", "swiglu", "rms_norm"])
+    record = read_json(root / "batch.json")
+    record["items"]["rms_norm"]["status"] = "skipped"
+    atomic_json(root / "batch.json", record)
+    fake = FakeRuns({"gated_residual": ["promote"], "swiglu": ["promote"]})
+    together = threading.Barrier(2, timeout=10)
+
+    def runs(argv: list[str], log: Path) -> int:
+        together.wait()  # Fails unless the other run has started too.
+        return fake(argv, log)
+
+    record = batch.execute(root, launcher=runs, parallel=2)
+    status = {name: item["status"] for name, item in record["items"].items()}
+    assert status == {"gated_residual": "completed", "swiglu": "completed", "rms_norm": "skipped"}
+    assert (root / "exports/gated_residual").is_dir() and (root / "exports/swiglu").is_dir()
+    assert read_json(root / "batch.json")["items"] == record["items"]
+    with pytest.raises(ContractError, match="at least 1"):
+        batch.execute(root, launcher=runs, parallel=0)
 
 
 def test_run_that_fails_before_archiving_is_started_again(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ Mode = Literal["pointwise", "reduce"]
 class NormFusion:
     """Compile standalone CUDA kernels without changing the reference model."""
 
+    supports_adaptive = True
     capabilities = OperatorCapabilities(
         ("cuda",), (torch.bfloat16,), "torch_rmsnorm_bf16_rounding", rank=3, minimum_sm=(8, 0)
     )

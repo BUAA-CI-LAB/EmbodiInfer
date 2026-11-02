@@ -79,6 +79,9 @@ class KernelProfile:
         if spec is None or spec.loader is None:
             raise ImportError(f"kernel profile {self.name!r}: cannot import {path}")
         module = importlib.util.module_from_spec(spec)
+        # A reinstalled package must not reuse submodules imported from its earlier files.
+        for stale in [key for key in sys.modules if key.startswith(f"{name}.")]:
+            del sys.modules[stale]
         # Packages import their own files relatively, which needs the parent registered.
         sys.modules[name] = module
         try:

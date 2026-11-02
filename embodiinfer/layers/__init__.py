@@ -10,6 +10,7 @@ from .activation import (
 )
 from .attention import (
     AttentionBackend,
+    ScopedAttentionBackend,
     SplitKVAttentionBackend,
     available_attention_backends,
     get_attention_backend,
@@ -63,6 +64,7 @@ __all__ = [
     "quantization_backends",
     "projection_backends",
     "AttentionBackend",
+    "ScopedAttentionBackend",
     "SplitKVAttentionBackend",
     "get_attention_backend",
     "get_split_kv_attention_backend",

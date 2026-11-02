@@ -46,6 +46,8 @@ support Python 3.10 and newer.
 
 - `serve` — the websocket server.
 - `wireless` — the WirelessComm policy server.
+- `flashinfer` — Linux-only optional BF16 Gemma attention/norm and cuBLASLt
+  projection backends, pinned to `flashinfer-python==0.7.2.post1`.
 
 HTTP serving is included in the core package. For either transport, install
 the selected model's dependencies and prepare its checkpoint.
@@ -77,6 +79,35 @@ Native builds use a locked, atomic cache under `$XDG_CACHE_HOME/embodiinfer/cuda
 (default `~/.cache/embodiinfer/cuda`), keyed by CUDA sources, compiler and GPU
 architecture. Override it with `EMBODIINFER_CUDA_CACHE_DIR`. Importing the core
 package does not compile kernels or require these optional capabilities.
+
+### Optional FlashInfer backends
+
+In the repository's CUDA 13.0 environment, install the extra alongside Pi05:
+
+```bash
+uv sync --python 3.12 --frozen --group pi05 --extra flashinfer
+python -m pytest tests/test_flashinfer_backend.py tests/pi05/test_flashinfer.py -q
+```
+
+The default install and default operator selections do not import FlashInfer.
+Selecting a FlashInfer backend requires Linux, CUDA SM80 or newer, and exactly
+version `0.7.2.post1`. A matching CUDA toolkit/compiler must be available for JIT
+modules not provided by the installed package. The version pin also protects the
+cuBLASLt runner interface used to provide private graph/stream workspaces.
+Use `make_policy("pi05", checkpoint=..., kernel_profile="flashinfer")` to select
+all three integrated operators. See the [selection example](api.md#optional-flashinfer-operators)
+for the profile's scope and optional per-operator ablations.
+
+AGX Orin (SM87) is admitted by the adapters' capability checks, but is **not a
+validated target** for this integration. Its CUDA 12/JetPack environment must be
+prepared separately; the repository's CUDA 13 lock is not an Orin installer.
+Keep the working Jetson Torch build and install FlashInfer into that isolated
+environment with matching CUDA 12 dependencies (including `cuda-python<13`).
+For JIT builds, set `FLASHINFER_CUDA_ARCH_LIST=8.7` before starting Python.
+Do not assume an upstream AArch64 kernel cache contains SM87 binaries. Passing
+the capability probe does not prove compilation, graph replay, accuracy or speed.
+Run the tests above on Orin before real-checkpoint validation; skipped tests do
+not validate the kernels. No FlashInfer dependency is installed on Windows.
 
 ## OpenPI and Orbax checkpoint helper
 

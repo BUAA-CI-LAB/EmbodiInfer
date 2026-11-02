@@ -68,13 +68,34 @@ def atomic_json(path: Path, value: Any) -> None:
             os.unlink(name)
 
 
+#: Skills a chaser carries when a directory of that name is linked into ``FLOW_SKILLS``.
+TUNING_SKILLS = ("KernelWiki", "ncu-report-skill")
+#: Local, untracked links to optional skills, including the repository's pinned submodules.
+FLOW_SKILLS = Path(__file__).resolve().with_name("flow") / "skills"
+
+
+def carried_skills() -> tuple[str, ...]:
+    """Return optional tuning skills with a linked ``SKILL.md``, in declaration order."""
+    return tuple(name for name in TUNING_SKILLS if (FLOW_SKILLS / name / "SKILL.md").is_file())
+
+
+def skill_identity() -> dict[str, str]:
+    """SHA-256 of each carried skill's ``SKILL.md``, recorded with every run."""
+    return {
+        name: hashlib.sha256((FLOW_SKILLS / name / "SKILL.md").read_bytes()).hexdigest()
+        for name in carried_skills()
+    }
+
+
 def tool_files() -> dict[str, str]:
     """List source files needed to reproduce this controller and evaluator version."""
     hashes = {}
     for folder in (REPOSITORY / "scripts/kernel_tuning", REPOSITORY / "benchmarks/kernel_tuning"):
         for directory, subdirs, names in os.walk(folder):
             subdirs[:] = [
-                name for name in subdirs if name not in ("tasks", "__pycache__", ".venv", ".ruff_cache")
+                name
+                for name in subdirs
+                if name not in ("tasks", "skills", "__pycache__", ".venv", ".ruff_cache")
             ]
             for name in names:
                 path = Path(directory) / name
@@ -200,6 +221,7 @@ class RunStore:
             "tool_runtime": runtime_identity(),
             "agent": agent,
             "unfenced": unfenced,
+            "skills": skill_identity(),
             "baseline_digest": digest(baseline),
             "environment": None,
             "elapsed_seconds": 0.0,
@@ -294,7 +316,27 @@ class RunStore:
         atomic_json(scratch / "history.json", history(previous_attempts))
         atomic_json(scratch / "environment.json", self.manifest["environment"])
         (scratch / "HARDWARE.md").write_text(render_notes(self.manifest["environment"]), encoding="utf-8")
+        previous = self.manifest["attempts"][-2]["id"] if len(self.manifest["attempts"]) > 1 else None
+        for name, profiled in (("incumbent", self.manifest["best"]), ("previous", previous)):
+            if name == "previous" and (previous is None or previous == self.manifest["best"]):
+                continue
+            self._lend_profile(profiled, scratch / "profiles" / name)
         return candidate, archive, scratch
+
+    def profile_path(self, candidate: str | None = None) -> Path:
+        """Where the controller's Nsight Compute evidence for a candidate (or the baseline) lives."""
+        return self.root / ("baseline" if candidate is None else f"candidates/{candidate}") / "profile"
+
+    def _lend_profile(self, candidate: str | None, destination: Path) -> None:
+        """Copy profile evidence an agent may read; requests and responses stay in the archive."""
+        source = self.profile_path(candidate)
+        names = ("ncu.ncu-rep", "details.txt", "ncu.log", "error.json")
+        found = [source / name for name in names if (source / name).is_file()]
+        if not found:
+            return
+        destination.mkdir(parents=True, exist_ok=True)
+        for path in found:
+            shutil.copyfile(path, destination / path.name)
 
     def finish_attempt(
         self, candidate: str, *, status: str, decision: dict[str, Any], solution: dict[str, Any] | None = None

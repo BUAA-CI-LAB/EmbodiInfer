@@ -1,0 +1,554 @@
+{
+  "schema": 1,
+  "match": {
+    "device_name": "Orin",
+    "capability": [
+      8,
+      7
+    ],
+    "torch": "2.10.0",
+    "triton": "3.6.0"
+  },
+  "ops": {
+    "rotate_qk": {
+      "module": "rotate_qk",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "64c903094fd41ba0c2356afd18fdc1cb79724e4c0333e7540cb8f13c3ea22c2b",
+      "verified_layouts": 3,
+      "variants": {
+        "v_ccdf6c1a608d": {
+          "verified_layouts": 2,
+          "evidence": {
+            "run_id": "20261027T041343Z-ef7e804e63",
+            "task_digest": "ccdf6c1a608df3557f3622756e201f2c91e7f907bcb1122b774b6a0a9b65c725",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "d70f257325d1bbc81c5759c413fc69cb3f707ba23250091ff49547da2b0d2adb",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.44775858662525814,
+                    "incumbent": 0.447966522321105,
+                    "candidate": 0.05076805332116783
+                  },
+                  "improvement": {
+                    "baseline": 0.8866173539991606,
+                    "incumbent": 0.886669983600299
+                  },
+                  "workloads": {
+                    "babc36de001b62a19e1b": {
+                      "baseline": 0.43326427720983823,
+                      "incumbent": 0.4336045540173849,
+                      "candidate": 0.049644991979002955
+                    },
+                    "a0ab556c7d346771d136": {
+                      "baseline": 0.462252896040678,
+                      "incumbent": 0.4623284906248251,
+                      "candidate": 0.0518911146633327
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.4450803947001695,
+                    "incumbent": 0.4453479732175668,
+                    "candidate": 0.05079510931919018
+                  },
+                  "improvement": {
+                    "baseline": 0.8858743051277095,
+                    "incumbent": 0.8859428752932145
+                  },
+                  "workloads": {
+                    "babc36de001b62a19e1b": {
+                      "baseline": 0.4301639789740244,
+                      "incumbent": 0.430393365552028,
+                      "candidate": 0.04973093333219488
+                    },
+                    "a0ab556c7d346771d136": {
+                      "baseline": 0.45999681042631463,
+                      "incumbent": 0.4603025808831056,
+                      "candidate": 0.05185928530618548
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "e5c2e7c6a74c87a64a50f970e62f9be38c29e8a706c2681b49ff4113821b4625"
+          }
+        },
+        "v_376f14beeaec": {
+          "verified_layouts": 1,
+          "evidence": {
+            "run_id": "20261027T022339Z-cc147a0ad6",
+            "task_digest": "376f14beeaeca2a297578487afc6d9d34e864bccf7339ce63b0ca3ebb3c2b7ed",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "efa256abc3f54fe6d3f9a9b4c3232be73c2f1a0a6f97329e5ca75645fcaeeefc",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.07133507190893094,
+                    "incumbent": 0.01299987200802813,
+                    "candidate": 0.012535946675886712
+                  },
+                  "improvement": {
+                    "baseline": 0.8242667128465143,
+                    "incumbent": 0.03568691536769886
+                  },
+                  "workloads": {
+                    "326542b83ce4e9399c9c": {
+                      "baseline": 0.07133507190893094,
+                      "incumbent": 0.01299987200802813,
+                      "candidate": 0.012535946675886712
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.0712163732672731,
+                    "incumbent": 0.012966666686348619,
+                    "candidate": 0.012475242665037514
+                  },
+                  "improvement": {
+                    "baseline": 0.8248262008763312,
+                    "incumbent": 0.03789902472225026
+                  },
+                  "workloads": {
+                    "326542b83ce4e9399c9c": {
+                      "baseline": 0.0712163732672731,
+                      "incumbent": 0.012966666686348619,
+                      "candidate": 0.012475242665037514
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "bec730e18f01e95ea64527979a9018f147a9df924778bfa4054234c5b0fab5a4"
+          }
+        }
+      }
+    },
+    "split_kv_attention": {
+      "module": "split_kv_attention",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "b1eb696a4dd49c5b6b5890d9fe92fa802779996305a841bca435c7eac2d2ac7e",
+      "verified_layouts": 4,
+      "variants": {
+        "v_40fe11b05c35": {
+          "verified_layouts": 4,
+          "evidence": {
+            "run_id": "20261026T192726Z-44b77e65fd",
+            "task_digest": "40fe11b05c35f6fd2d50147a057e8e40f0f3a59fcb03e079bf992477a93db99c",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "3d1e539d815c7fd62fa0e64efc4e92697b24dc1c7541fdf50c0c0f61975ec72b",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 1.1742999710603192,
+                    "incumbent": 0.18731852997816875,
+                    "candidate": 0.15785082862526179
+                  },
+                  "improvement": {
+                    "baseline": 0.8655787852206687,
+                    "incumbent": 0.15731332803188935
+                  },
+                  "workloads": {
+                    "b0ad7092f18525113f97": {
+                      "baseline": 3.6167936424414315,
+                      "incumbent": 0.7957726188699404,
+                      "candidate": 0.6924721921086312
+                    },
+                    "1638483f0c27ed92a3ce": {
+                      "baseline": 0.9069359465440114,
+                      "incumbent": 0.1112562987456719,
+                      "candidate": 0.09193061330914498
+                    },
+                    "31004697b5c69e6e4792": {
+                      "baseline": 3.80979579838117,
+                      "incumbent": 1.024746079881986,
+                      "candidate": 0.8606548907160759
+                    },
+                    "44e6ac0d6604137e7a42": {
+                      "baseline": 0.933865045706431,
+                      "incumbent": 0.11879259733110666,
+                      "candidate": 0.10002850138396024
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 1.172239992871429,
+                    "incumbent": 0.1865857018029148,
+                    "candidate": 0.15752566258135167
+                  },
+                  "improvement": {
+                    "baseline": 0.8656199553510464,
+                    "incumbent": 0.15574633501262836
+                  },
+                  "workloads": {
+                    "b0ad7092f18525113f97": {
+                      "baseline": 3.6005237540404003,
+                      "incumbent": 0.7899903145631155,
+                      "candidate": 0.6873673495650291
+                    },
+                    "1638483f0c27ed92a3ce": {
+                      "baseline": 0.9033876258730889,
+                      "incumbent": 0.11045198928316434,
+                      "candidate": 0.09237055998543897
+                    },
+                    "31004697b5c69e6e4792": {
+                      "baseline": 3.804840361992518,
+                      "incumbent": 1.019862378358841,
+                      "candidate": 0.8574982406497001
+                    },
+                    "44e6ac0d6604137e7a42": {
+                      "baseline": 0.9350039468407632,
+                      "incumbent": 0.11905128539105257,
+                      "candidate": 0.09969933867206177
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "cf37cb1810219080ecb0cbccd3ce0604b3afa6d1baf57b676adca7aa63f4049b"
+          }
+        }
+      }
+    },
+    "gated_gelu": {
+      "module": "gated_gelu",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "3ad887613ea482aba7a55e1fe03a9cf2864d17fefb2f0d8f7ccae67a6ba4268e",
+      "verified_layouts": 3,
+      "variants": {
+        "v_015dca5b0fe0": {
+          "verified_layouts": 2,
+          "evidence": {
+            "run_id": "20261027T003333Z-273b3ff7e2",
+            "task_digest": "015dca5b0fe06b7d9ea7c3a22ff8deb9028205bbb207dbe0a16565d3dcd57b4e",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "88f4e6473c8b356fa5defceddc2aa49249e69d7ca30c57a0d8fe282a5df98a7e",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 1.3144893386761347,
+                    "incumbent": 1.3146619194348652,
+                    "candidate": 0.36412113065024215
+                  },
+                  "improvement": {
+                    "baseline": 0.72299423058314,
+                    "incumbent": 0.7230305942026775
+                  },
+                  "workloads": {
+                    "8819ac9bc1acacd871d0": {
+                      "baseline": 1.277188288251559,
+                      "incumbent": 1.2769342294931412,
+                      "candidate": 0.3537990721166134
+                    },
+                    "754a10764eebacdd916e": {
+                      "baseline": 1.3517903891007104,
+                      "incumbent": 1.3523896093765895,
+                      "candidate": 0.37444318918387093
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 1.3077242031296095,
+                    "incumbent": 1.3076648540695508,
+                    "candidate": 0.36458404831588265
+                  },
+                  "improvement": {
+                    "baseline": 0.721207233571597,
+                    "incumbent": 0.7211945804146453
+                  },
+                  "workloads": {
+                    "8819ac9bc1acacd871d0": {
+                      "baseline": 1.2705782194137574,
+                      "incumbent": 1.2706211845080058,
+                      "candidate": 0.3546071896652381
+                    },
+                    "754a10764eebacdd916e": {
+                      "baseline": 1.3448701868454613,
+                      "incumbent": 1.3447085236310958,
+                      "candidate": 0.3745609069665273
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "bf22df1e28d1c0e49179dd96ba7cb745a390061bef33018cd5797e4be8b8e023"
+          }
+        },
+        "v_fbff547f1bb3": {
+          "verified_layouts": 1,
+          "evidence": {
+            "run_id": "20261027T055939Z-b94ceefecd",
+            "task_digest": "fbff547f1bb3ff43b0d1898aec8f5b8967cf42d5c12b8697e1fd4c7eef95cd10",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "9807588a21dfdee2f337d856a1c2519b9b3696f9e113ae53d8543b04a5b34abb",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.038722165374706186,
+                    "incumbent": 0.03863613871484995,
+                    "candidate": 0.01633999999736746
+                  },
+                  "improvement": {
+                    "baseline": 0.5780194666478813,
+                    "incumbent": 0.5770798909807434
+                  },
+                  "workloads": {
+                    "db6baac39f9aca0ba685": {
+                      "baseline": 0.038722165374706186,
+                      "incumbent": 0.03863613871484995,
+                      "candidate": 0.01633999999736746
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.038723552056898675,
+                    "incumbent": 0.03876856535797318,
+                    "candidate": 0.016283136014516156
+                  },
+                  "improvement": {
+                    "baseline": 0.5795030375676684,
+                    "incumbent": 0.5799912670442071
+                  },
+                  "workloads": {
+                    "db6baac39f9aca0ba685": {
+                      "baseline": 0.038723552056898675,
+                      "incumbent": 0.03876856535797318,
+                      "candidate": 0.016283136014516156
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "f20eb7ac9aedf9c3bb82e6487482c55d3d1d117f38241694cfce84dd84f4d740"
+          }
+        }
+      }
+    },
+    "gelu_tanh": {
+      "module": "gelu_tanh",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "4ae6af3141ac14bd8bb31ab3bb4a6fa4e89fde1444ba7aea9943142576c6219a",
+      "verified_layouts": 1,
+      "variants": {
+        "v_3c1b65517c2f": {
+          "verified_layouts": 1,
+          "evidence": {
+            "run_id": "20261027T083104Z-63d432d46f",
+            "task_digest": "3c1b65517c2fb699ee21d461d034118d703337c0404959d6c25d23fa79209bca",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "3bcde461cd18b2d9bcf5686625676b7e6fb76f732b860b0b10d5071bc55b914a",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.05866117330764731,
+                    "incumbent": 0.058687989305704825,
+                    "candidate": 0.05453373863423864
+                  },
+                  "improvement": {
+                    "baseline": 0.07036058845537274,
+                    "incumbent": 0.0707853637620256
+                  },
+                  "workloads": {
+                    "52d9ff55db34f28264c3": {
+                      "baseline": 0.05866117330764731,
+                      "incumbent": 0.058687989305704825,
+                      "candidate": 0.05453373863423864
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.05855713061740001,
+                    "incumbent": 0.058607039940853915,
+                    "candidate": 0.054568256014337145
+                  },
+                  "improvement": {
+                    "baseline": 0.06811936583992362,
+                    "incumbent": 0.06891294852278329
+                  },
+                  "workloads": {
+                    "52d9ff55db34f28264c3": {
+                      "baseline": 0.05855713061740001,
+                      "incumbent": 0.058607039940853915,
+                      "candidate": 0.054568256014337145
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "77668dd6074747a819dc343f5f5fcd553ad6a25858b1a33a469cbe96e04c251d"
+          }
+        }
+      }
+    },
+    "gated_residual": {
+      "module": "gated_residual",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "4e32488a006fe54d799509fad7a00dc805eafae1c101f091e9b9a69c56b12908",
+      "verified_layouts": 1,
+      "variants": {
+        "v_b8ad7b5f1af9": {
+          "verified_layouts": 1,
+          "evidence": {
+            "run_id": "20261027T083103Z-13ee35774e",
+            "task_digest": "b8ad7b5f1af9e38386c8193a3023a7af4ba8a9420b856d8b4bb7ec290fe695d1",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "b473d8e96fe3e9667cd61b3f107f117c334f8775b97f759f3fdc56f4dedd5471",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.016365802651271227,
+                    "incumbent": 0.016395818651964267,
+                    "candidate": 0.009293002657592296
+                  },
+                  "improvement": {
+                    "baseline": 0.43216945385379835,
+                    "incumbent": 0.43320898731220303
+                  },
+                  "workloads": {
+                    "9aea05ca99896b6d0a0d": {
+                      "baseline": 0.016365802651271227,
+                      "incumbent": 0.016395818651964267,
+                      "candidate": 0.009293002657592296
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.016379285320018727,
+                    "incumbent": 0.016364842642098667,
+                    "candidate": 0.00933678932239612
+                  },
+                  "improvement": {
+                    "baseline": 0.4299635704504936,
+                    "incumbent": 0.4294604887689438
+                  },
+                  "workloads": {
+                    "9aea05ca99896b6d0a0d": {
+                      "baseline": 0.016379285320018727,
+                      "incumbent": 0.016364842642098667,
+                      "candidate": 0.00933678932239612
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "d0fd6fd1effcd9903f95e793fe4cc0549c40554358e9c45d0a55450cd151064d"
+          }
+        }
+      }
+    },
+    "linear": {
+      "module": "linear",
+      "function": "call",
+      "applies": "applies",
+      "sha256": "98ea86c34d5e00c0f59910767610d35e7fedd0720c4ac0ca07aab47acec3cc88",
+      "verified_layouts": 3,
+      "variants": {
+        "v_626df466f9fe": {
+          "verified_layouts": 3,
+          "evidence": {
+            "run_id": "20261027T083101Z-f3a3fe58e8",
+            "task_digest": "626df466f9fe91494f270d99c6222a94a981246ae5a7aae44cfc20dc50e029c7",
+            "capture_identity": "962e6cdb3aba8387dd566f28ee7825c647dcfba94efa2056cf2ae3c82ef1238a",
+            "solution_digest": "ecb5c08d66cdb90a74b9459000c1a56c2475a4f8f458bf4f29f705e8f11ba0a6",
+            "decision": {
+              "promoted": true,
+              "reasons": [],
+              "rounds": [
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.6621377448286071,
+                    "incumbent": 0.3818587679971348,
+                    "candidate": 0.3490527079606598
+                  },
+                  "improvement": {
+                    "baseline": 0.4728397366155115,
+                    "incumbent": 0.0859115012823829
+                  },
+                  "workloads": {
+                    "314996bff1d029c820f1": {
+                      "baseline": 6.429608120600382,
+                      "incumbent": 3.4287672616640728,
+                      "candidate": 3.0635469869772596
+                    },
+                    "6710bb786b7c1911f185": {
+                      "baseline": 0.07643137066066265,
+                      "incumbent": 0.07641477330525716,
+                      "candidate": 0.07644210138668617
+                    },
+                    "bc533e115adeaedeb1b7": {
+                      "baseline": 6.60879485241572,
+                      "incumbent": 3.44383016816775,
+                      "candidate": 3.086770560423533
+                    }
+                  }
+                },
+                {
+                  "mean_latency_ms": {
+                    "baseline": 0.6622049918003154,
+                    "incumbent": 0.38202106515340734,
+                    "candidate": 0.3492250037166206
+                  },
+                  "improvement": {
+                    "baseline": 0.47263308485912536,
+                    "incumbent": 0.08584882989009235
+                  },
+                  "workloads": {
+                    "314996bff1d029c820f1": {
+                      "baseline": 6.429242940425873,
+                      "incumbent": 3.4286670485337574,
+                      "candidate": 3.063638291835785
+                    },
+                    "6710bb786b7c1911f185": {
+                      "baseline": 0.07656497069696584,
+                      "incumbent": 0.07662163199732701,
+                      "candidate": 0.0766333439995845
+                    },
+                    "bc533e115adeaedeb1b7": {
+                      "baseline": 6.6079674652417495,
+                      "incumbent": 3.4433637448946635,
+                      "candidate": 3.0866449099381765
+                    }
+                  }
+                }
+              ]
+            },
+            "export_checksums": "bc8c99d0bf24fa1a616c5a0c36ea1019c9bf1e6ada0c893f6475de915b6ac0ed"
+          }
+        }
+      }
+    }
+  }
+}

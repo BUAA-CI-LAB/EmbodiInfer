@@ -114,3 +114,54 @@ def test_baseline_code_is_unchanged_without_layout_differences(tmp_path):
     (op,) = capture.operators.values()
     code, _ = tasks._sources(op)
     assert "_LAYOUTS" not in code and "_relayout" not in code
+
+
+def test_capture_ops_cli_keeps_registry_selection_window_and_restores_hooks(tmp_path, monkeypatch):
+    from scripts.kernel_tuning.__main__ import main
+    from scripts.kernel_tuning.discovery.contracts import ModelCapture
+
+    from embodiinfer.engine import EngineCore
+    from embodiinfer.layers.ops import KernelSelection
+
+    def execute(_):
+        value = torch.ones(2, 4)
+        selection = KernelSelection("torch")
+        selection.resolve("gelu_tanh")(value)
+        selection.resolve("linear")(value, value)
+        return torch.sin(value)  # Unregistered ATen calls must not become tasks.
+
+    monkeypatch.setattr(EngineCore, "execute", execute)
+    original_resolve = KernelSelection.resolve
+    script = tmp_path / "driver.py"
+    script.write_text(
+        "from embodiinfer.engine import EngineCore\n"
+        "from embodiinfer.policies.factory import make_policy\n"
+        "policy = make_policy('mock_flow_vla', preset='tiny')\n"
+        "for _ in range(6):\n    EngineCore.execute(None)\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "capture"
+    assert (
+        main(
+            [
+                "capture-ops",
+                "--model",
+                "mock_flow_vla",
+                "--ops",
+                "gelu_tanh",
+                "--warmup",
+                "2",
+                "--steps",
+                "3",
+                "--output",
+                str(output),
+                "--",
+                str(script),
+            ]
+        )
+        == 0
+    )
+    (op,) = ModelCapture.load(output).operators
+    assert op["name"] == "registry.gelu_tanh"
+    assert sum(case["count"] for case in op["workloads"]) == 3
+    assert EngineCore.execute is execute and KernelSelection.resolve is original_resolve

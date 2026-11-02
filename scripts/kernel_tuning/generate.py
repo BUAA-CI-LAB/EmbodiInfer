@@ -1,4 +1,4 @@
-"""Render catalog operators into self-contained KDA task packages.
+"""Render catalog operators into self-contained EmbodiInfer tuning task packages.
 
 The baseline is EmbodiInfer's production kernel, copied byte-for-byte from the
 repository together with the repository modules it imports. Generation is
@@ -198,6 +198,7 @@ def tuning_settings(operator: Operator, overrides: dict[str, Any] | None = None)
             "evaluation_timeout_seconds": 600,
         },
         "profile": False,
+        "profile_command": ["ncu"],
     }
     weights = {work.uuid: work.weight for work in operator.workloads}
     if len(set(weights.values())) > 1:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,37 +9,8 @@ from typing import Any
 from ..contracts import ContractError, digest, read_json, relative_path, tree_hashes
 
 SCHEMA = "embodiinfer-model-capture-v1"
-DISPOSITIONS = {"ready", "excluded_quantized", "metadata_only", "host_only", "blocked"}
-RNG_OVERLOADS = {"aten.randn.default", "aten.randn.generator"}
+DISPOSITIONS = {"ready", "blocked"}
 REPLAY_SCHEMA = "embodiinfer-replay-v1"
-
-
-def validate_rng(contract: dict[str, Any] | None, case: dict[str, Any], files: dict[str, str]) -> None:
-    """Bind both RNG-state transitions to immutable files for the declared devices."""
-    if contract is None:
-        if "rng" in case:
-            raise ContractError("Undeclared RNG state in workload")
-        return
-    if not isinstance(contract, dict):
-        raise ContractError("Invalid default-generator RNG contract")
-    devices = contract.get("devices")
-    if (
-        set(contract) != {"kind", "devices"}
-        or contract["kind"] != "torch_default"
-        or not isinstance(devices, list)
-        or not 1 <= len(devices) <= 2
-        or devices[0] != "cpu"
-        or (len(devices) == 2 and not re.fullmatch(r"cuda:\d+", str(devices[1])))
-    ):
-        raise ContractError("Invalid default-generator RNG contract")
-    states = case.get("rng", {})
-    if not isinstance(states, dict) or set(states) != {"before", "after"}:
-        raise ContractError("RNG replay requires before and after states")
-    for phase in states.values():
-        if not isinstance(phase, dict) or set(phase) != set(devices):
-            raise ContractError("RNG state devices differ from the contract")
-        if any(relative_path(path) not in files for path in phase.values()):
-            raise ContractError("RNG fixture missing from the capture/task")
 
 
 def validate_replay(
@@ -61,27 +31,19 @@ def validate_replay(
         and schema != REPLAY_SCHEMA
     ):
         raise ContractError("float64 requires the explicit replay definition schema")
-    if replay.get("rng") is not None and replay.get("operator") not in RNG_OVERLOADS:
-        raise ContractError("Unsupported RNG replay operator")
+    if replay.get("kind") != "registry" or replay.get("rng") or replay.get("undefined_outputs"):
+        raise ContractError("Only registry replay tasks are supported; recapture with capture-ops")
     if set(replay.get("cases", {})) != {trace["workload"]["uuid"] for trace in traces}:
         raise ContractError("Replay cases must cover every workload exactly")
     if not isinstance(replay.get("mutates"), list) or any(
         type(index) is not int or not 0 <= index < len(definition["inputs"]) for index in replay["mutates"]
     ):
         raise ContractError("Invalid declared input mutations")
-    undefined = replay.get("undefined_outputs", [])
-    if (
-        not isinstance(undefined, list)
-        or (undefined and not str(replay.get("operator")).startswith("aten._scaled_dot_product_"))
-        or len(set(undefined)) != len(undefined)
-        or len(undefined) >= len(definition["outputs"])
-        or any(type(index) is not int or not 0 <= index < len(definition["outputs"]) for index in undefined)
-    ):
-        raise ContractError("Only unused attention dropout state may be excluded from output checks")
     for trace in traces:
         work = trace["workload"]
         case = replay["cases"][work["uuid"]]
-        validate_rng(replay.get("rng"), case, hashes)
+        if "rng" in case:
+            raise ContractError("Registry workloads cannot contain RNG replay state")
         for kind in ("inputs", "outputs"):
             specs = case[kind]
             if len(specs) != len(definition[kind]):
@@ -113,7 +75,7 @@ def validate_replay(
 
 @dataclass(frozen=True)
 class ModelCapture:
-    """A completed preparation run bound to one actual policy and all observed cases."""
+    """A registry capture bound to one policy and every case of its selected operators."""
 
     root: Path
     manifest: dict[str, Any]
@@ -133,6 +95,10 @@ class ModelCapture:
         manifest = read_json(root / "manifest.json")
         if manifest.get("schema") != SCHEMA:
             raise ContractError("Unsupported model capture schema")
+        if manifest.get("capture") != "registry":
+            raise ContractError(
+                "Full-model discovery captures are no longer supported; recapture with capture-ops"
+            )
         target = manifest.get("target", {})
         if not target.get("model") or not target.get("type"):
             raise ContractError("Capture has no verified target model")
@@ -151,6 +117,12 @@ class ModelCapture:
                 raise ContractError("Malformed or duplicate captured operator")
             if op["id"] != digest(op["identity"])[:20] or op["name"] != op["identity"]["name"]:
                 raise ContractError("Captured operator identity differs from its content")
+            if (
+                op["identity"].get("kind") != "registry"
+                or op["identity"].get("rng")
+                or op["identity"].get("undefined_outputs")
+            ):
+                raise ContractError("Only registry operators are supported; recapture with capture-ops")
             identities.add(op["id"])
             cases = op.get("workloads", [])
             if not cases or len({case["id"] for case in cases}) != len(cases):
@@ -163,18 +135,15 @@ class ModelCapture:
                 for tensor in case.get("inputs", []):
                     if "fixture" in tensor and relative_path(tensor["fixture"]) not in hashes:
                         raise ContractError("Captured fixture must be included in the capture directory")
-                if op["status"] == "ready":
-                    rng = op["identity"].get("rng")
-                    if rng is not None and op["name"] not in RNG_OVERLOADS:
-                        raise ContractError("Unsupported RNG capture operator")
-                    validate_rng(rng, case, hashes)
+                if "rng" in case:
+                    raise ContractError("Registry workloads cannot contain RNG replay state")
         capture = cls(root, manifest, tuple(operators))
         if require_ready:
             capture.require_ready()
         return capture
 
     def require_ready(self) -> None:
-        """Reject incomplete runs and any non-quantized operator preparation gaps."""
+        """Reject incomplete runs and any selected-operator capture gaps."""
         gaps = list(self.manifest.get("errors", []))
         gaps += [
             f"{op['name']}: {op.get('reason', 'unsupported')}"
