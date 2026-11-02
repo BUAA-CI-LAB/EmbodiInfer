@@ -76,8 +76,8 @@
 根据策略与硬件在[能力参考](docs/zh/models.md#capabilities-and-installation)中选择配置。
 适配器负责模型专用优化，共享调度器保持模型无关。
 
-**Agent 调优 kernel：** 由 coding agent 针对特定 GPU 和软件栈调优算子 kernel。在 Jetson AGX Orin 上，
-`orin_pi05_r2` profile 运行 π0.5 耗时 **302.0 ms**，我们最快的手写路径为 353.4 ms（BF16，batch size 1；
+**Agent 调优 kernel：** 由 coding agent 针对特定 GPU 和软件栈调优算子 kernel。在 Jetson AGX Orin 上，其他条件相同时，
+`orin_pi05_r2` profile 将 π0.5 的延迟从手写 kernel 的 396.6 ms 降到 **302.0 ms**（BF16，batch size 1；
 [测量条件](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16)、[示例](examples/pi05_inference.py)）。
 [调优工作流](docs/proposals/0008-kernel-tuning.md)目前是面向开发者的工具，已接入 π0.5，后续将支持用户针对自己的硬件和环境调优。其设计借鉴了
 [NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda)（[致谢说明](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)）。

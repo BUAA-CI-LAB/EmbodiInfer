@@ -712,9 +712,9 @@ rows capture the full denoise loop in one CUDA Graph.
 |---|---|---|---:|---:|---:|---:|
 | `none` | eager prefix | on | 1 | 412.3 | 411.9 | 415.0 |
 | `none` | prefix graph | on | 1 | 402.2 | 401.8 | 404.8 |
-| `none` | prefix graph | off | 1 | 396.6 | 396.4 | 398.0 |
+| `none` | prefix graph | off | 1 | **396.6** | 396.4 | 398.0 |
 | `none` | Inductor, prefix graph | on | 1 | 368.3 | 367.9 | 371.0 |
-| `none` | Inductor, prefix graph | off | 3 | **353.4** | 352.9–353.2 | 355.7–356.2 |
+| `none` | Inductor, prefix graph | off | 3 | 353.4 | 352.9–353.2 | 355.7–356.2 |
 | `none` | `Pi05OptimizationConfig`, `folded_flash` | off | 1 | 380.7 | 368.8 | 372.0 |
 | `none` | `Pi05OptimizationConfig`, `query_major` | off | 1 | 388.4 | 388.2 | 390.3 |
 | `none` | `Pi05OptimizationConfig`, `reference` (`strict`) | off | 1 | 570.4 | 570.1 | 572.8 |
@@ -731,8 +731,8 @@ than 0.2 ms. That report's 313.34 ms uses another checkpoint
 (`pi05_libero_finetuned_v044_gitcode`), 1,600 frames and Torch 2.9.1, so it is not
 comparable with these rows. Inductor cannot compile the tuned kernels' layout gates
 (Section 9.1), so the fastest tuned row differs from it by replacing Inductor with
-the kernels. That row is 14.5% below the fastest hand-written row and 23.8% below
-the same path with `none`.
+the kernels. That row is 23.8% below the same path with `none` and 14.5% below the
+fastest hand-written row.
 
 **Numerical gate.** The Section 6 gate passed over the 200 inputs with shared noise
 for both tuned CUDA Graph rows: worst ratio 0.864 without native embeddings and

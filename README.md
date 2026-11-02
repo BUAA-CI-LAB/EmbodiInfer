@@ -81,8 +81,8 @@ Choose features by policy and hardware in the [capability reference](docs/en/mod
 Adapters own model-specific optimizations; the shared scheduler stays model-independent.
 
 **Agent-tuned kernels:** coding agents tune operator kernels for a specific GPU and
-software stack. On Jetson AGX Orin, the `orin_pi05_r2` profile runs π0.5 in **302.0 ms**,
-against 353.4 ms on our fastest hand-written path (BF16, batch size 1;
+software stack. On Jetson AGX Orin, with all else equal, the `orin_pi05_r2` profile reduces
+π0.5 latency from 396.6 ms with hand-written kernels to **302.0 ms** (BF16, batch size 1;
 [conditions](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16),
 [example](examples/pi05_inference.py)). The [workflow](docs/proposals/0008-kernel-tuning.md)
 is a developer tool for π0.5 today; user-facing tuning for your own hardware and
