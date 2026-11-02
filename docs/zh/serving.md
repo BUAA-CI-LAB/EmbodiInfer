@@ -170,3 +170,20 @@ HTTP 与 WirelessComm 遵循相同的会话和推理步骤规则。
 这些集成覆盖 LIBERO 上的 π0.5、GR00T 和 OpenVLA-OFT，以及 RoboTwin 上的 LingBot-VLA。
 
 权重更新流程见 [refit 接口用法](api.md#zero-copy-refit)。
+
+## ActiveVLN eager 服务
+
+安装 ActiveVLN 依赖组并准备本地权重后：
+
+```bash
+embodiinfer-http-serve --policy activevln --checkpoint /models/activevln-bf16 \
+  --device cuda:0 --dtype auto --no-cuda-graph --max-batch 1 \
+  --host 127.0.0.1 --port 8000
+```
+
+提交一张名为 `observation.images.rgb` 的 JPEG/PNG、任务指令和空 state。
+每个 episode 保持同一 session，step ID 从零递增，修改指令前先 reset。
+返回 `discrete_chunk` 动作行和 `parsed_valid`；客户端必须拒绝解析失败的输出。
+此 eager 路径保留 policy 原始解码默认值，可通过适配器 JSON 中的
+`policy_kwargs` 显式选择解码参数。该服务不启用 benchmark 的 graph/Triton
+配置，也不执行机器人动作。
