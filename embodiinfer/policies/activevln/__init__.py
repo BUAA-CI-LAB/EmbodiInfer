@@ -7,6 +7,8 @@ from .modeling_activevln import (
     ACTIVEVLN_REVISION,
     ActiveVLNPolicy,
 )
+from .text_activevln import ActiveVLNTextDecoder, ActiveVLNTextResult, ActiveVLNTextState
+from .text_serving import ActiveVLNSharedTextAdapter
 
 __all__ = [
     "ACTIVEVLN_CHECKPOINT",
@@ -14,4 +16,8 @@ __all__ = [
     "ACTIVEVLN_REPO",
     "ACTIVEVLN_REVISION",
     "ActiveVLNPolicy",
+    "ActiveVLNSharedTextAdapter",
+    "ActiveVLNTextDecoder",
+    "ActiveVLNTextResult",
+    "ActiveVLNTextState",
 ]

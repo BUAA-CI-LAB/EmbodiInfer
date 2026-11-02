@@ -131,7 +131,51 @@ class FlexAttention:
         )
 
 
+class CausalSDPAAttention:
+    """Right-aligned causal SDPA with explicit KV-head expansion.
+
+    K/V contain exactly the cached prefix followed by the current queries, with
+    no padding. Full prefills use the causal kernel hint; single-token decoding
+    needs no mask. Cached multi-token appends use an additive mask and contiguous
+    CUDA inputs, matching the legacy Qwen SDPA reference's dispatch and layout.
+    Arbitrary masks are rejected rather than silently discarded.
+    """
+
+    name = "sdpa_causal"
+
+    def attend(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        attn_mask: torch.Tensor | None = None,
+        scaling: float | None = None,
+        dropout_p: float = 0.0,
+    ) -> torch.Tensor:
+        """Attend to the exact prefix and current tokens, with no future visibility."""
+        if attn_mask is not None:
+            raise ValueError("sdpa_causal requires unpadded causal K/V without an external mask")
+        query_length, key_length = q.shape[-2], k.shape[-2]
+        if query_length > key_length:
+            raise ValueError("causal K/V must include all current query tokens")
+        repeats = q.shape[1] // k.shape[1]
+        k, v = _repeat_kv(k, repeats), _repeat_kv(v, repeats)
+        causal = query_length == key_length and query_length > 1
+        if 1 < query_length < key_length:
+            queries = torch.arange(query_length, device=q.device) + key_length - query_length
+            keys = torch.arange(key_length, device=q.device)
+            blocked = keys[None, :] > queries[:, None]
+            attn_mask = torch.zeros((query_length, key_length), device=q.device, dtype=q.dtype)
+            attn_mask = attn_mask.masked_fill(blocked, torch.finfo(q.dtype).min)[None, None]
+            if q.is_cuda:
+                q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        return F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, scale=scaling, dropout_p=dropout_p, is_causal=causal
+        )
+
+
 __all__ = [
+    "CausalSDPAAttention",
     "EagerAttention",
     "EagerBroadcastAttention",
     "FlexAttention",

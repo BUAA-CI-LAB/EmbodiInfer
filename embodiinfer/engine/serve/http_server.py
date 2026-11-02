@@ -20,7 +20,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
 
-from .batching import BatchedServingAdapter
 from .contracts import (
     ServeError,
     ServingAdapter,
@@ -29,6 +28,7 @@ from .contracts import (
 )
 from .factory import add_policy_arguments, build_serving_adapter
 from .service import PolicyService
+from .text import TextServingAdapter, parse_text_request
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _LOG = logging.getLogger(__name__)
@@ -81,6 +81,13 @@ class PolicyHttpHandler(BaseHTTPRequestHandler):
             self._require_token_if_needed()
             parsed = urlsplit(self.path)
             path = parsed.path.rstrip("/")
+            if path == "/v1/text":
+                adapter = self.server.service.adapter
+                if not isinstance(adapter, TextServingAdapter):
+                    raise ServeError(404, "unsupported_text", "adapter does not expose text generation")
+                request = parse_text_request(parse_json(self._read_body(), name="text request"))
+                self._write_json(200, adapter.infer_text(request))
+                return
             if path == "/v1/sessions":
                 payload = parse_json(self._read_body(), name="session body")
                 session = self.server.service.open_session(payload)
@@ -293,8 +300,9 @@ def main(argv: list[str] | None = None) -> None:
     try:
         server.serve_forever()
     finally:
-        if isinstance(adapter, BatchedServingAdapter):
-            adapter.shutdown()
+        shutdown = getattr(adapter, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
         server.server_close()
 
 

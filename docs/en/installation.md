@@ -124,3 +124,6 @@ python benchmarks/benchmark.py --preset small --sweep   # hf vs embodiinfer-eage
 
 The benchmark compares batch-one eager, batched eager, and batched CUDA-graph
 execution. It selects CUDA when available and otherwise runs on CPU.
+
+The ActiveVLN profile includes Accelerate for memory-efficient checkpoint loading.
+Its eager HTTP adapter requires `--no-cuda-graph --max-batch 1`; see [Serving](serving.md).

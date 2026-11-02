@@ -70,7 +70,7 @@ lingbot-vla = ["transformers>=4.49", "torchvision", "safetensors"]
 # ActiveVLN numerical parity is anchored to the checkpoint's transformers version.
 # Install this group in a dedicated environment; GR00T and other adapters may need
 # incompatible transformers versions for their own reference generation.
-activevln = ["transformers==4.51.3", "torchvision", "safetensors"]
+activevln = ["transformers==4.51.3", "torchvision", "safetensors", "accelerate>=0.34.2"]
 # StreamVLN is self-hosted: VVLA owns the Qwen2 execution, KV cache, visual
 # pooling, multimodal splice, and recurrent policy state. Keep its optimized
 # Torch/Triton runtime isolated from model profiles with incompatible pins.

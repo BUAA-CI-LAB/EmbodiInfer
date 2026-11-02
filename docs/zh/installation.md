@@ -91,3 +91,6 @@ python benchmarks/benchmark.py --preset small --sweep   # hf vs embodiinfer-eage
 
 该测试比较单请求 eager、批处理 eager 和批处理 CUDA graph 的执行性能。
 有 CUDA 时使用 CUDA，否则在 CPU 上运行。
+
+ActiveVLN 依赖组包含 Accelerate，用于降低加载权重时的内存占用。
+其 eager HTTP 适配器使用 `--no-cuda-graph --max-batch 1`，见[服务部署](serving.md)。
