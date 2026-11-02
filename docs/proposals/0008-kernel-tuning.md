@@ -192,8 +192,10 @@ NCU skill submodule. It is not an automatic step in the tuning flow.
 
 A task contains `README.md`, `definition.json`, `workloads.jsonl`, `baseline.py`,
 `tuning.yaml`, and optionally trusted `benchmark.py`; replay tasks also include
-layout/fixture contracts. Task and solution schemas reuse NVlabs KDA/FlashInfer
-formats. Humanize2 is pinned in the isolated tooling environment.
+layout/fixture contracts. Definitions, workloads and solutions use FlashInfer
+schemas; EmbodiInfer owns the tuning settings and evaluation contracts.
+Humanize2 is pinned in the isolated tooling environment. Workflow references are
+acknowledged in [Third-Party Notices](../../THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references).
 
 Humanize2 revision `58dd43a` fixes the Codex event-order issue upstream: an `idle`
 notification does not end the turn, and successful `turn/completed` clears earlier
@@ -213,12 +215,13 @@ of Humanize2's `flame_chase`: attempt *n* is planned and implemented by
 session that starts from the incumbent and every earlier attempt's evidence.
 `--agent` takes one hmz spec for both chasers or two comma-separated specs, e.g.
 a Claude Code and a Codex harness, whose different habits (rewrites against
-refinements) the alternation exploits. The KDA skills `KernelWiki` and
-`ncu-report-skill` travel with the flow when linked into its untracked `skills/`
+refinements) the alternation exploits. The optional `KernelWiki` and
+`ncu-report-skill` skills travel with the flow when linked into its untracked `skills/`
 directory; each run records the digest of every carried skill and refuses to
-resume after they change. NVlabs' originals are B200-specific; device-routed forks
-(SM87/Orin, SM89, SM90, SM100, SM103, SM110/Thor) keep the same names, and the plan
-prompt asks agents to select the target matching `environment.json`.
+resume after they change. The pinned Thor/Orin adaptations under the repository's
+`skills/` provide device-specific guidance; the plan prompt asks agents to select
+the target matching `environment.json`. Their upstream origins, revisions and
+license notices are preserved in Third-Party Notices.
 
 A turn is stopped after `agent_timeout_seconds`. A stopped turn whose deliverable
 (`PLAN.md`, then `solution.json`) already exists still counts, and the attempt

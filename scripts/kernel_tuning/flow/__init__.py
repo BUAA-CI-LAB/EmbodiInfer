@@ -1,4 +1,4 @@
-"""The KDA minimal loop, driven flame-chase style, as a resumable Humanize2 Flow.
+"""EmbodiInfer's operator tuning loop as a resumable Humanize2 Flow.
 
 Two coding agents take turns, one candidate apiece, the way Humanize2's builtin
 ``flame_chase`` alternates two fresh agents on one repository: each turn starts a
@@ -6,9 +6,11 @@ fresh session from the incumbent and every earlier attempt's evidence, whichever
 agent produced them. Attempt ``n`` belongs to ``CHASERS[(n - 1) % 2]``, so a
 resumed run hands the next attempt to the same agent it would have had.
 
-The kernel-design skills of NVlabs KDA travel with the flow when they are linked
-into ``skills/`` beside this file (``KernelWiki``, ``ncu-report-skill``); the
-directory is local, untracked, and each run records what it carried.
+Optional kernel-design and profiling skills travel with the flow when linked
+into ``skills/`` beside this file (``KernelWiki``, ``ncu-report-skill``). The
+repository's pinned skill submodules can supply these local, untracked links;
+each run records what it carried. Workflow references and skill attribution
+are documented in ``THIRD_PARTY_NOTICES.md`` at the repository root.
 
 Only this module needs hmz. Importing it defines a flow; executing the developer
 CLI's run/resume command is what opens coding-agent sessions.
@@ -58,7 +60,7 @@ def chaser_of(candidate: str) -> str:
 
 
 class Chaser(Coder):
-    """A coding-agent role carrying whichever KDA skills are linked into ``skills/``."""
+    """A coding-agent role carrying optional tuning skills linked into ``skills/``."""
 
     _skills = carried_skills()
 

@@ -23,7 +23,7 @@ def plan_prompt(
 ) -> str:
     """Ask for a reviewable hypothesis and executable plan before source generation.
 
-    ``role`` names the chaser taking this turn, ``skills`` the KDA skills its session
+    ``role`` names the chaser taking this turn, ``skills`` the tuning skills its session
     carries, and ``profiles`` whether the controller collects Nsight Compute evidence.
     """
     turns = (

@@ -43,6 +43,21 @@ The Marlin-derived implementation retains Copyright (C) Marlin.2024 Elias Franta
 follows [IST-DASLab/Marlin](https://github.com/IST-DASLab/marlin); calibrated
 codes are loaded from external artifacts and never regenerated at deployment.
 
+## Kernel tuning workflow references
+
+The operator tuning workflow in `scripts/kernel_tuning/` and its evaluator in
+`benchmarks/kernel_tuning/` draw on
+[NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda) as a design
+reference for agent-assisted kernel research, implementation, verification and
+iteration. EmbodiInfer adapts this workflow to its operator registry, captured
+model workloads, numerical contracts and hardware profiles.
+
+The tooling uses Humanize2 for agent orchestration and FlashInfer schemas and
+evaluation components for kernel tasks. It does not require a KDA checkout or
+package. The optional KernelWiki and ncu-report-skill submodules retain the
+separate origins, pinned revisions and license notices listed above; their
+embedded third-party code and references retain their original names and notices.
+
 ## KernelWiki and ncu-report-skill MIT notice
 
 ```text

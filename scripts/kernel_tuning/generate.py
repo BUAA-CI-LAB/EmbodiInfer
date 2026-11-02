@@ -1,4 +1,4 @@
-"""Render catalog operators into self-contained KDA task packages.
+"""Render catalog operators into self-contained EmbodiInfer tuning task packages.
 
 The baseline is EmbodiInfer's production kernel, copied byte-for-byte from the
 repository together with the repository modules it imports. Generation is

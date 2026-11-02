@@ -34,5 +34,5 @@ site-zh/
 # Task-local engineering artifacts and validation logs.
 devlocal/
 
-# Kernel-design skills linked into the tuning flow from a local NVlabs KDA checkout.
+# Optional tuning skills linked locally from pinned submodules or other skill directories.
 scripts/kernel_tuning/flow/skills/

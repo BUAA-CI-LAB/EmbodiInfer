@@ -1,4 +1,4 @@
-"""FlashInfer 0.1.2 building/input generation with strict KDA measurement gates.
+"""FlashInfer 0.1.2 building/input generation with EmbodiInfer's measurement gates.
 
 The upstream default evaluator permits numerical tolerances and only eager
 timing. We reuse its builders, generators, and eager timer and implement the

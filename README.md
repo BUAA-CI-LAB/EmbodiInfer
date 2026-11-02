@@ -80,6 +80,8 @@ Optimize the model path. Reuse the engine from robot inference to RL rollout.
 Choose features by policy and hardware in the [capability reference](docs/en/models.md#capabilities-and-installation).
 Adapters own model-specific optimizations; the shared scheduler stays model-independent.
 
+**Planned: Custom operator tuning for your hardware and environment.** We are working on an operator tuning agent that generates, validates, and benchmarks device-specific kernels tailored to your software stack, target GPU, and model workloads. This upcoming feature builds on our [experimental developer workflow](docs/proposals/0008-kernel-tuning.md) and is inspired by [NVIDIA's Kernel Design Agents (KDA)](https://github.com/NVlabs/kda) (see [acknowledgments](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references) for details).
+
 ## Performance
 
 ### Lower latency on a single RTX 4090

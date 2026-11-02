@@ -53,14 +53,14 @@ def atomic_json(path: Path, value: Any) -> None:
 
 
 #: Skills a chaser carries when a directory of that name is linked into ``FLOW_SKILLS``.
-KDA_SKILLS = ("KernelWiki", "ncu-report-skill")
-#: The tuning flow's own ``skills/``: local links to an NVlabs KDA checkout, never tracked.
+TUNING_SKILLS = ("KernelWiki", "ncu-report-skill")
+#: Local, untracked links to optional skills, including the repository's pinned submodules.
 FLOW_SKILLS = Path(__file__).resolve().with_name("flow") / "skills"
 
 
 def carried_skills() -> tuple[str, ...]:
-    """The KDA skills linked into the tuning flow's ``skills/``, in declaration order."""
-    return tuple(name for name in KDA_SKILLS if (FLOW_SKILLS / name / "SKILL.md").is_file())
+    """Return optional tuning skills with a linked ``SKILL.md``, in declaration order."""
+    return tuple(name for name in TUNING_SKILLS if (FLOW_SKILLS / name / "SKILL.md").is_file())
 
 
 def skill_identity() -> dict[str, str]:
