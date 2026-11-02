@@ -464,7 +464,7 @@ capture, calibration, evaluator, batch tuning, GPU attribution, registry/profile
 loader, install, model verification, the CPU registration controller, and an
 opt-in `--unfenced` agent mode for hosts without Landlock (Section 11.1). The
 pi0.5 call sites are integrated. Two hardware profiles are committed for Jetson
-AGX Orin: `orin_pi05` (Section 9.1) and `orin_pi05_r2` (Section 9.2).
+AGX Orin: `orin_pi05` (Section 9.1) and `orin_pi05_r2` (Sections 9.2 and 9.3).
 `kernel_profile` still defaults to `none`, so a profile is used only when
 selected by name or by `auto` on matching hardware; `auto` takes the first
 matching profile in name order, which on Orin is `orin_pi05`.
@@ -603,10 +603,12 @@ The round ran two batches over the same capture:
   limits. A host reboot stopped it after 286 of its 300 minutes, and its best
   attempts were exported from the run archives.
 
+Together the two batches took about 18 hours on the device.
+
 Measured 2026-10-27 under the conditions of Section 9.1, with the following
 differences:
 
-- The source tree was `e131b3e` plus this profile.
+- The source tree was `fb9a575` plus this profile.
 - The GPU clock was not locked: a reboot had cleared the lock, leaving
   `nvhost_podgov` at 306–930.75 MHz.
 - Rows ran in the order `none`, `orin_pi05_r2`, `orin_pi05`, `orin_pi05_r2`,
@@ -688,6 +690,82 @@ call. `none`, however, already runs the existing Triton split-KV kernels, at
 path the tuned kernel saves 14.7 ms in the denoise loop and costs 3.3 ms in the
 prefix, at 0.67 ms against 0.49 ms per call. A task should therefore be measured
 against the implementation its production configuration actually runs.
+
+### 9.3 `orin_pi05_r2` in uniform BF16
+
+Sections 9.1 and 9.2 keep the SigLIP tower and projector in FP32, which costs about
+200 ms per inference on this device, and compare rows without Inductor. Neither
+is the fastest hand-written path, so this section measures the kernels against
+that path. Measured 2026-11-02 at `cb6e8b8` under the conditions of Section 9.2,
+with the following differences:
+
+- The whole policy was cast to BF16 on the CPU before the engine moved it.
+- Rows with Inductor warmed up on all 200 inputs, so both prompt buckets compiled
+  before timing. Other rows took ten warmup calls.
+- The `Pi05OptimizationConfig` rows kept the Gemma norms and the action/time
+  projections in FP32, as fused operators require, and used `hardware="orin"`.
+
+Other rows use `native_inference` and Triton prefix and denoise attention. All
+rows capture the full denoise loop in one CUDA Graph.
+
+| `kernel_profile` | Path | `native_embeddings` | Runs | Mean (ms) | P50 (ms) | P95 (ms) |
+|---|---|---|---:|---:|---:|---:|
+| `none` | eager prefix | on | 1 | 412.3 | 411.9 | 415.0 |
+| `none` | prefix graph | on | 1 | 402.2 | 401.8 | 404.8 |
+| `none` | prefix graph | off | 1 | 396.6 | 396.4 | 398.0 |
+| `none` | Inductor, prefix graph | on | 1 | 368.3 | 367.9 | 371.0 |
+| `none` | Inductor, prefix graph | off | 3 | **353.4** | 352.9–353.2 | 355.7–356.2 |
+| `none` | `Pi05OptimizationConfig`, `folded_flash` | off | 1 | 380.7 | 368.8 | 372.0 |
+| `none` | `Pi05OptimizationConfig`, `query_major` | off | 1 | 388.4 | 388.2 | 390.3 |
+| `none` | `Pi05OptimizationConfig`, `reference` (`strict`) | off | 1 | 570.4 | 570.1 | 572.8 |
+| `orin_pi05_r2` | eager prefix | on | 1 | 333.8 | 333.3 | 337.0 |
+| `orin_pi05_r2` | prefix graph | on | 3 | 307.3 | 306.6–307.4 | 309.7–310.3 |
+| `orin_pi05_r2` | prefix graph | off | 3 | **302.0** | 301.4–301.9 | 303.4–304.7 |
+
+The `folded_flash` mean includes one 2,670 ms call in the timed window.
+
+The fastest hand-written row is the configuration of the published
+[Orin BF16 benchmark](../../benchmarks/pi05-quant-benchmark/agx-orin/bf16/README.md);
+one of its three runs omitted `TORCHINDUCTOR_DETERMINISTIC=1` and differed by less
+than 0.2 ms. That report's 313.34 ms uses another checkpoint
+(`pi05_libero_finetuned_v044_gitcode`), 1,600 frames and Torch 2.9.1, so it is not
+comparable with these rows. Inductor cannot compile the tuned kernels' layout gates
+(Section 9.1), so the fastest tuned row differs from it by replacing Inductor with
+the kernels. That row is 14.5% below the fastest hand-written row and 23.8% below
+the same path with `none`.
+
+**Numerical gate.** The Section 6 gate passed over the 200 inputs with shared noise
+for both tuned CUDA Graph rows: worst ratio 0.864 without native embeddings and
+0.867 with them. As in Section 9.2, the reference was `kernel_profile: torch` in
+the same precision and path. For the fastest tuned row:
+
+| Measure | `orin_pi05_r2` | Limit | `none` |
+|---|---|---|---|
+| Mean max-abs error | 0.00518 | 0.00605 | 0.00484 |
+| Mean RMSE | 0.00171 | 0.00198 | 0.00159 |
+| Worst max-abs error | 0.0146 | 0.0313 | 0.0156 |
+
+This gate compares within uniform BF16, and BF16 vision itself moves the actions.
+Against the mixed-precision `torch` row of Section 9.2, the mean and worst max-abs
+errors are:
+
+| Row | Mean max-abs error | Worst max-abs error |
+|---|---:|---:|
+| `orin_pi05_r2`, uniform BF16 | 0.00589 | 0.0234 |
+| `none`, Inductor, uniform BF16 | 0.00537 | 0.0352 |
+| `none`, mixed precision | 0.00484 | 0.0195 |
+
+**Dispatch.** The check used the six inputs of Section 9.2 that cover both buckets.
+Every call of `rotate_qk`, `split_kv_attention`, `gated_gelu` and `gated_residual`
+dispatched to a tuned kernel. `linear` falls back only for the gate/up projections.
+Without native embeddings, SigLIP calls neither `gelu_tanh` nor `linear` through
+the registry, so seven of the eight kernels run. The kernels were captured and
+tuned on the mixed-precision path of Section 9.2, so no task targeted BF16 vision.
+
+**Mixed precision at this commit.** `none` measured 610.8 ms and `orin_pi05_r2`
+515.3 ms, and all 200 recorded action outputs were bit-identical to the Section 9.2
+runs, so that section's gate still applies. The prefix GELU fusion merged into
+`cb6e8b8` is off by default and is not enabled in any row.
 
 ## 10. Risks and limitations
 

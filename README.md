@@ -80,7 +80,15 @@ Optimize the model path. Reuse the engine from robot inference to RL rollout.
 Choose features by policy and hardware in the [capability reference](docs/en/models.md#capabilities-and-installation).
 Adapters own model-specific optimizations; the shared scheduler stays model-independent.
 
-**Planned: Custom operator tuning for your hardware and environment.** We are working on an operator tuning agent that generates, validates, and benchmarks device-specific kernels tailored to your software stack, target GPU, and model workloads. This upcoming feature builds on our [experimental developer workflow](docs/proposals/0008-kernel-tuning.md) and is inspired by [NVIDIA's Kernel Design Agents (KDA)](https://github.com/NVlabs/kda) (see [acknowledgments](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references) for details).
+**Agent-tuned kernels:** coding agents tune operator kernels for a specific GPU and
+software stack. On Jetson AGX Orin, the `orin_pi05_r2` profile runs π0.5 in **302.0 ms**,
+against 353.4 ms on our fastest hand-written path (BF16, batch size 1;
+[conditions](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16),
+[example](examples/pi05_inference.py)). The [workflow](docs/proposals/0008-kernel-tuning.md)
+is a developer tool for π0.5 today; user-facing tuning for your own hardware and
+environment is planned. It draws on
+[NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda)
+([acknowledgments](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)).
 
 ## Performance
 

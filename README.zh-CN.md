@@ -76,7 +76,11 @@
 根据策略与硬件在[能力参考](docs/zh/models.md#capabilities-and-installation)中选择配置。
 适配器负责模型专用优化，共享调度器保持模型无关。
 
-**后续计划：支持针对本地软硬件环境的算子调优。** 我们正在开发一款算子调优 Agent，可根据用户的软件栈、目标 GPU 和模型负载，自动生成、验证并测试特定设备的专属内核（Kernel）。该功能基于现有的[实验性开发者工作流](docs/proposals/0008-kernel-tuning.md)演进而来，并借鉴了 [NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda) 的设计思路（详见[致谢说明](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)）。
+**Agent 调优 kernel：** 由 coding agent 针对特定 GPU 和软件栈调优算子 kernel。在 Jetson AGX Orin 上，
+`orin_pi05_r2` profile 运行 π0.5 耗时 **302.0 ms**，我们最快的手写路径为 353.4 ms（BF16，batch size 1；
+[测量条件](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16)、[示例](examples/pi05_inference.py)）。
+[调优工作流](docs/proposals/0008-kernel-tuning.md)目前是面向开发者的工具，已接入 π0.5，后续将支持用户针对自己的硬件和环境调优。其设计借鉴了
+[NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda)（[致谢说明](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)）。
 
 ## 性能
 
