@@ -149,13 +149,13 @@ numbers.
 Formal Low and Panoramic JSON artifacts remain on the remote host at:
 
 ```text
-/benchmark-artifacts/vvla-benchmarks/navigation-3b/triton-v1-real-image-20260822/final/final-run
+/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/triton-v1-real-image-20260822/final/final-run
 ```
 
 The formal NaViDA rerun artifact is:
 
 ```text
-/benchmark-artifacts/vvla-benchmarks/navigation-3b/triton-v1-real-image-20260822/final/final-run/navida-rerun.json
+/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/triton-v1-real-image-20260822/final/final-run/navida-rerun.json
 ```
 
 The JSON result files are intentionally not committed to the repository.

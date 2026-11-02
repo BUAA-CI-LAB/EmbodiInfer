@@ -6,28 +6,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import time
-from typing import Iterator
+from collections.abc import Iterator
+from pathlib import Path
 
-
-BOOTSTRAP_ENV = "VVLA_COMPILE_CACHE_BOOTSTRAP_ASSERTION"
+BOOTSTRAP_ENV = "EMBODIINFER_COMPILE_CACHE_BOOTSTRAP_ASSERTION"
 BOOTSTRAP_TOKEN = "qwen25_vl_compile_cache_preimport_v1"
 LOW_PROFILE = "qwen2.5-vl-3b-r2r-low-level"
 PANORAMIC_PROFILE = "qwen2.5-vl-3b-r2r-panoramic"
 PROFILES = (LOW_PROFILE, PANORAMIC_PROFILE)
-MEGA_CACHE_DIRS = ("vvla-execution-entries", "vvla-content-blobs")
+MEGA_CACHE_DIRS = ("embodiinfer-execution-entries", "embodiinfer-content-blobs")
 
 
 def _atomic_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    temporary.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
 
@@ -76,14 +73,10 @@ def _walk_mappings(value: object) -> Iterator[dict[str, object]]:
 def _compile_stats(result: dict[str, object]) -> dict[str, object]:
     for mapping in _walk_mappings(result):
         candidate = mapping.get("torch_compile")
-        if isinstance(candidate, dict) and isinstance(
-            candidate.get("persistent_cache"), dict
-        ):
+        if isinstance(candidate, dict) and isinstance(candidate.get("persistent_cache"), dict):
             return candidate
     for mapping in _walk_mappings(result):
-        if "compile_abi" in mapping and isinstance(
-            mapping.get("persistent_cache"), dict
-        ):
+        if "compile_abi" in mapping and isinstance(mapping.get("persistent_cache"), dict):
             return mapping
     raise RuntimeError("benchmark JSON does not contain torch_compile stats")
 
@@ -99,9 +92,7 @@ def _child_environment(cache_root: Path, libdevice: Path, gpu: str) -> dict[str,
     environment["CUDA_VISIBLE_DEVICES"] = gpu
     repo = str(Path(__file__).resolve().parents[1])
     inherited_pythonpath = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = (
-        repo if not inherited_pythonpath else repo + os.pathsep + inherited_pythonpath
-    )
+    environment["PYTHONPATH"] = repo if not inherited_pythonpath else repo + os.pathsep + inherited_pythonpath
     environment.pop("TORCHINDUCTOR_FORCE_DISABLE_CACHES", None)
     return environment
 
@@ -117,11 +108,11 @@ def _phase_summary(
     persistent = compile_stats["persistent_cache"]
     assert isinstance(persistent, dict)
     entries = compile_stats.get("entries", [])
-    first_call = [
-        entry.get("first_call_wall_ms")
-        for entry in entries
-        if isinstance(entry, dict)
-    ] if isinstance(entries, list) else []
+    first_call = (
+        [entry.get("first_call_wall_ms") for entry in entries if isinstance(entry, dict)]
+        if isinstance(entries, list)
+        else []
+    )
     return {
         "phase": name,
         "outer_wall_ms": outer_wall_ms,
@@ -136,10 +127,7 @@ def _phase_summary(
         "capture_boundaries": [
             mapping
             for mapping in _walk_mappings(result)
-            if any(
-                key in mapping
-                for key in ("capture_ms", "capture_count", "timed_capture_delta")
-            )
+            if any(key in mapping for key in ("capture_ms", "capture_count", "timed_capture_delta"))
         ],
         "kernel_or_full_policy_measurements": result.get("measurements"),
         "torch_compile": compile_stats,
@@ -186,7 +174,11 @@ def _validate_phase(
             raise RuntimeError(f"{phase} execution entry was quarantined")
         if expect_loaded:
             admission = entry.get("persistent_hit_admission", {})
-            if not entry.get("artifact_loaded") or not isinstance(admission, dict) or not admission.get("admitted"):
+            if (
+                not entry.get("artifact_loaded")
+                or not isinstance(admission, dict)
+                or not admission.get("admitted")
+            ):
                 raise RuntimeError(f"{phase} did not admit an FX/AOT persistent hit")
             if not (entry.get("artifact_published") or entry.get("artifact_publish_skipped")):
                 raise RuntimeError(f"{phase} hit neither published nor legally skipped publish")
@@ -202,11 +194,7 @@ def _command(
     output: Path,
 ) -> list[str]:
     script_dir = Path(__file__).resolve().parent
-    script = (
-        script_dir / "benchmark_cuda_graph.py"
-        if scope == "kernel"
-        else script_dir / "benchmark.py"
-    )
+    script = script_dir / "benchmark_cuda_graph.py" if scope == "kernel" else script_dir / "benchmark.py"
     command = [
         args.python,
         str(script),
@@ -265,9 +253,7 @@ def _run_phase(
     if completed.returncode != 0:
         raise RuntimeError(f"{scope}/{phase} exited {completed.returncode}")
     result = json.loads(output.read_text(encoding="utf-8"))
-    summary = _phase_summary(
-        phase, result, outer_wall_ms=outer_wall_ms, cache_root=cache_root
-    )
+    summary = _phase_summary(phase, result, outer_wall_ms=outer_wall_ms, cache_root=cache_root)
     _validate_phase(phase, summary, expect_loaded=expect_loaded)
     return summary
 

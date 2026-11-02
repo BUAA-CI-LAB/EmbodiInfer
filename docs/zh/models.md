@@ -205,9 +205,9 @@ eager attention 路径每个 backbone 最多保留 64 MiB 的可复用因果 mas
 保持 attention 数值和有状态 KV 缓存不变；它不代表推理总内存的上限。
 
 ```python
-from embodiinfer import Vvla
+from embodiinfer import EmbodiInfer
 
-model = Vvla(
+model = EmbodiInfer(
     "streamvln",
     checkpoint="/models/streamvln",
     dtype="bfloat16",

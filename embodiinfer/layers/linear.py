@@ -31,7 +31,7 @@ class FP8Config:
 
     def __post_init__(self) -> None:
         if self.activation_scheme != "dynamic":
-            raise ValueError("VVLA online FP8 currently supports activation_scheme='dynamic' only")
+            raise ValueError("EmbodiInfer online FP8 currently supports activation_scheme='dynamic' only")
         if self.backend not in _FP8_BACKENDS:
             raise ValueError(
                 f"unsupported FP8 backend {self.backend!r}; expected one of {sorted(_FP8_BACKENDS)}"
@@ -97,7 +97,7 @@ class INT8Config:
 
     def __post_init__(self) -> None:
         if self.activation_scheme != "dynamic":
-            raise ValueError("VVLA INT8 currently supports activation_scheme='dynamic' only")
+            raise ValueError("EmbodiInfer INT8 currently supports activation_scheme='dynamic' only")
         if self.backend not in _INT8_BACKENDS:
             raise ValueError(
                 f"unsupported INT8 backend {self.backend!r}; expected one of {sorted(_INT8_BACKENDS)}"
@@ -157,7 +157,7 @@ class NVFP4Config:
 
     def __post_init__(self) -> None:
         if self.activation_scheme != "dynamic":
-            raise ValueError("VVLA NVFP4 currently supports activation_scheme='dynamic' only")
+            raise ValueError("EmbodiInfer NVFP4 currently supports activation_scheme='dynamic' only")
         if self.backend not in _NVFP4_BACKENDS:
             raise ValueError(
                 f"unsupported NVFP4 backend {self.backend!r}; expected one of {sorted(_NVFP4_BACKENDS)}"

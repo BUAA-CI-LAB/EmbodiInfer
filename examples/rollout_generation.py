@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import torch
 
-from embodiinfer import EngineConfig, ToyReachEnv, Vvla, preset_config
+from embodiinfer import EngineConfig, ToyReachEnv, EmbodiInfer, preset_config
 from embodiinfer.engine.rollout.demo import RolloutEngine
 
 

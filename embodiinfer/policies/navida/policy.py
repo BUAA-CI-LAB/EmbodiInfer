@@ -1,4 +1,4 @@
-"""VVLA policy, decoder, builder, and registry integration for NaViDA."""
+"""EmbodiInfer policy, decoder, builder, and registry integration for NaViDA."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Exception hierarchy for vvla.
+"""Exception hierarchy for embodiinfer.
 
 Every error raised by the library derives from :class:`EmbodiInferError`, so callers can
 catch the whole family with a single ``except EmbodiInferError``. Concrete subclasses add
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 class EmbodiInferError(Exception):
-    """Base class for all vvla-raised errors."""
+    """Base class for all embodiinfer-raised errors."""
 
 
 class PolicyNotFoundError(EmbodiInferError):

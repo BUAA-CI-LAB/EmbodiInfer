@@ -4,7 +4,7 @@
 
 - Date: 2026-08-22.
 - Result: **12/12 passed**.
-- Artifact root: `/benchmark-artifacts/vvla-benchmarks/navigation-3b/torch-compile-cache-v1-final2-real-image-20260822`.
+- Artifact root: `/benchmark-artifacts/embodiinfer-benchmarks/navigation-3b/torch-compile-cache-v1-final2-real-image-20260822`.
 - Result JSON remains under that remote artifact root and is not committed.
 - Hardware: NVIDIA RTX 4090, physical GPU 0 only. GPU 1 reported zero compute activity.
 - Software: PyTorch `2.13.0+cu130`, CUDA 13, Transformers `4.57.1`, Triton `3.7.1`.

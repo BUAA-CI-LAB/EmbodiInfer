@@ -114,7 +114,7 @@ def fp8_weight_only_linear(
     bias: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if not supports_fp8_weight_only(inputs, weight, weight_scale):
-        raise ValueError("unsupported input for VVLA Triton FP8 weight-only linear")
+        raise ValueError("unsupported input for EmbodiInfer Triton FP8 weight-only linear")
     contiguous_inputs = inputs.contiguous()
     input_features = weight.shape[1]
     output_features = weight.shape[0]

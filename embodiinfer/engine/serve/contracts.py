@@ -13,16 +13,17 @@ from typing import Any, Protocol, runtime_checkable
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
-# Versioned wire names.  EmbodiRun has shipped both prefixes during the
-# migration, therefore requests accept the canonical ``vvla`` name and the
-# newer ``embodiinfer`` alias while responses keep the legacy spelling.
-SESSION_SCHEMA = "vvla.policy.session.v1"
-STEP_SCHEMA = "vvla.policy.step.v1"
-RESET_SCHEMA = "vvla.policy.reset.v1"
-RPC_SCHEMA = "vvla.policy.rpc.v1"
-SESSION_SCHEMA_ALIASES = frozenset({SESSION_SCHEMA, "embodiinfer.policy.session.v1"})
-STEP_SCHEMA_ALIASES = frozenset({STEP_SCHEMA, "embodiinfer.policy.step.v1"})
-RPC_SCHEMA_ALIASES = frozenset({RPC_SCHEMA, "embodiinfer.policy.rpc.v1"})
+# Versioned wire names. The vvla -> embodiinfer rename is complete:
+# ``embodiinfer`` is the canonical name every payload is tagged with, while
+# the legacy ``vvla`` spelling stays accepted on request input so older
+# clients keep working during the deployment migration.
+SESSION_SCHEMA = "embodiinfer.policy.session.v1"
+STEP_SCHEMA = "embodiinfer.policy.step.v1"
+RESET_SCHEMA = "embodiinfer.policy.reset.v1"
+RPC_SCHEMA = "embodiinfer.policy.rpc.v1"
+SESSION_SCHEMA_ALIASES = frozenset({SESSION_SCHEMA, "vvla.policy.session.v1"})
+STEP_SCHEMA_ALIASES = frozenset({STEP_SCHEMA, "vvla.policy.step.v1"})
+RPC_SCHEMA_ALIASES = frozenset({RPC_SCHEMA, "vvla.policy.rpc.v1"})
 
 
 class ServeError(RuntimeError):

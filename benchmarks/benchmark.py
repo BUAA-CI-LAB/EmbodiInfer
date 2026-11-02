@@ -113,7 +113,9 @@ def run_benchmark(
         core_g = EngineCore(
             policy, EngineConfig(device=device, dtype=dtype, max_batch_size=num_envs, use_cuda_graph=True)
         )
-        rows.append(("embodiinfer-graph (batched+cudagraph)", _engine_run(core_g, obs, num_steps, iters, warmup)))
+        rows.append(
+            ("embodiinfer-graph (batched+cudagraph)", _engine_run(core_g, obs, num_steps, iters, warmup))
+        )
 
     base_ms = float(np.mean(rows[0][1]))
     hdr = f"{'config':32s} {'obs/s':>10s} {'actions/s':>12s} {'p50(ms)':>9s} {'p99(ms)':>9s} {'speedup':>8s}"

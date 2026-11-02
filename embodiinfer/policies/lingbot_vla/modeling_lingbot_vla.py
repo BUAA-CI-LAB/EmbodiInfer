@@ -161,10 +161,10 @@ class LingBotVLAPolicy(FlowVLAPolicy):
         super().__init__(config)
         self.attention = attention
         self._attn = get_attention_backend(attention)
-        # Option B (package-free, runs in vvla_env): stock Qwen2.5-VL VL
+        # Option B (package-free, runs in embodiinfer_env): stock Qwen2.5-VL VL
         # backbone (weight holder) + vendored action expert, weights loaded directly from the
         # checkpoint. No lingbotvla runtime dependency (its LeRobot-v3/torch-2.8 stack conflicts
-        # with vvla_env) — the GR00T pattern. ``checkpoint`` is a dir path (or a pre-built tuple
+        # with embodiinfer_env) — the GR00T pattern. ``checkpoint`` is a dir path (or a pre-built tuple
         # for tests). box-parity: Qwen2.5-VL class/config + ViT interface.
         vl, visual, expert, proj = (
             checkpoint if isinstance(checkpoint, tuple) else _build_and_load(checkpoint, backbone_path)
@@ -383,7 +383,7 @@ def _decode_mask(prefix_pad: torch.Tensor, suffix_len: int, dtype: torch.dtype) 
     return torch.where(ok, 0.0, _MASK_FILL).to(dtype)
 
 
-# ---- checkpoint build + load (option B: package-free, vvla_env-compatible) -----
+# ---- checkpoint build + load (option B: package-free, embodiinfer_env-compatible) -----
 def _build_and_load(checkpoint: str, backbone_path: str | None = None):
     """Build stock Qwen2.5-VL + vendored action expert, load ``lingbot-vla-4b`` weights directly.
 

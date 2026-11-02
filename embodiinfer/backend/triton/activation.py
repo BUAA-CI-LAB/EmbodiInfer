@@ -1,4 +1,4 @@
-"""Inference activation kernels owned by VVLA."""
+"""Inference activation kernels owned by EmbodiInfer."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def supports_swiglu(packed: torch.Tensor) -> bool:
 
 def swiglu(packed: torch.Tensor) -> torch.Tensor:
     if not supports_swiglu(packed):
-        raise ValueError("unsupported input for VVLA Triton SwiGLU")
+        raise ValueError("unsupported input for EmbodiInfer Triton SwiGLU")
     intermediate_size = packed.shape[-1] // 2
     rows = packed.numel() // packed.shape[-1]
     output = torch.empty(

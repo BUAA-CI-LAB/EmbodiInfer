@@ -105,7 +105,7 @@ def _positive_control(selection, calls, dtype):
     with torch.no_grad():
         result = _pair(x, first, second, selection)
     assert len(calls) == 1
-    _call_is(calls[0], x, first._vvla_fused_pair_weight, None)
+    _call_is(calls[0], x, first._embodiinfer_fused_pair_weight, None)
     for actual, expected in zip(result, calls[0].output.split((5, 9), dim=-1), strict=True):
         _equal(actual, expected)
     calls.clear()
@@ -310,7 +310,7 @@ def test_pi05_linear_pair_profile_preserves_packed_gemm():
             expected = F.linear(x, weight).split((5, 9), dim=-1)
             actual = _pair(x, first, second, selection)
             assert len(calls) == 1
-            packed = first._vvla_fused_pair_weight
+            packed = first._embodiinfer_fused_pair_weight
             assert packed.shape == (14, 7) and packed.is_contiguous()
             _call_is(calls[0], x, packed, None)
             for result, reference in zip(actual, expected, strict=True):
@@ -340,7 +340,7 @@ def test_pi05_mlp_linear_profile_reaches_pair_and_down(monkeypatch):
                 _equal(pi05._mlp(mlp, x, False, kernels=selection), expected)
                 assert len(calls) == 2
                 assert [call.args[1].shape for call in calls] == [(22, 7), (7, 11)]
-                _call_is(calls[0], x, mlp.gate_proj._vvla_fused_pair_weight, None)
+                _call_is(calls[0], x, mlp.gate_proj._embodiinfer_fused_pair_weight, None)
                 gate, up = calls[0].output.split((11, 11), dim=-1)
                 _equal(calls[1].args[0], F.gelu(gate, approximate="tanh") * up)
                 _call_is(calls[1], calls[1].args[0], mlp.down_proj.weight, mlp.down_proj.bias)
@@ -438,7 +438,7 @@ def test_pi05_linear_pair_gradient_and_training_bypass_profile():
                     reference_gradients = torch.autograd.grad(expected, operands, upstream)
                     for gradient, reference in zip(gradients, reference_gradients, strict=True):
                         _equal(gradient, reference)
-            assert not hasattr(first, "_vvla_fused_pair_weight")
+            assert not hasattr(first, "_embodiinfer_fused_pair_weight")
             assert calls == []
 
 
@@ -487,7 +487,7 @@ def test_pi05_linear_quantized_branches_bypass_profile(monkeypatch):
 
             monkeypatch.setattr(pi05, "_packed_quantized_projection", pack)
             actual = _pair(x, first, second, selection)
-            assert packing == [((first, second), first, "_vvla_fused_pair_quantized")]
+            assert packing == [((first, second), first, "_embodiinfer_fused_pair_quantized")]
             assert len(packed_calls) == 1 and packed_calls[0] is x
             for result, reference in zip(actual, expected, strict=True):
                 _equal(result, reference)
@@ -583,7 +583,7 @@ def test_pi05_linear_pair_routes_any_dense_projection_like_base():
                 with torch.no_grad():
                     actual = _pair(x, first, second, selection)
                 assert len(calls) == 1
-                _call_is(calls[0], x, first._vvla_fused_pair_weight, None)
+                _call_is(calls[0], x, first._embodiinfer_fused_pair_weight, None)
                 for result, reference in zip(actual, expected, strict=True):
                     _equal(result, reference)
                 calls.clear()
