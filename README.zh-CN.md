@@ -175,6 +175,10 @@ A800 的 DP/TP 与 RLinf 验证为不同工作负载。H20 结果来自仍待合
 Orin 的 FP8 / FP4、4090 的 FP4 不计为本表缺口。
 [完整口径与基准索引](docs/zh/benchmark.md)。
 
+**仍待补测：** GR00T 的 Thor 原生优化、其他 VLA 的 Orin / NX / Spark 覆盖、
+VLN 的部分首帧 / RxR / batch 配置，以及实验性 RLinf 的训练与一致性验证。
+[逐项缺口与已有证据](docs/zh/benchmark.md#coverage-gaps)；缺口不会作为已完成能力列入大表。
+
 ## 支持的模型
 
 ✓ 已实现 · ◐ 实验性 · ○ 计划支持；具体检查点与验证范围见[模型参考](docs/zh/models.md)。

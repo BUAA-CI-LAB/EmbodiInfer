@@ -193,6 +193,11 @@ an unmerged downstream PR. Orin FP8 / FP4 and RTX 4090 FP4 are outside the
 measured hardware profiles, rather than coverage gaps.
 [Methods and benchmark index](docs/en/benchmark.md).
 
+**Still pending:** GR00T native optimization on Thor; other VLA models on Orin / NX / Spark;
+remaining VLN first-frame / RxR / batch profiles; and training / consistency checks
+for experimental RLinf integration. [Evidence and remaining work](docs/en/benchmark.md#coverage-gaps)
+are tracked separately from completed measurements.
+
 ## Supported models
 
 ✓ Implemented · ◐ Experimental · ○ Planned.

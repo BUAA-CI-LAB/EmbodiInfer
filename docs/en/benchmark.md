@@ -9,13 +9,21 @@ retains its own workload and validation scope.
 
 ## Entry points
 
-| Directory | Model | Default data |
+| Directory / workflow | Model | Workload and reports |
 |---|---|---|
-| [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | First 48 episodes each of R2R/RxR, full-frame replay |
-| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | First 48 episodes each of R2R/RxR, full-frame replay; E2E and model-forward timing |
-| [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | PI0.5 | LIBERO-10, 1,600 frames |
-| [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | First 48 episodes each of R2R/RxR, 4 frames per segment |
-| [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | The same LIBERO-10 as PI0.5, 1,600 frames |
+| [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | π0.5 | FlashRT harness, Thor / RTX 4090 presets and LIBERO closed loop; historical replay retained |
+| [gr00t-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md) | GR00T N1.7 | LIBERO-10, 1,600 observations; RTX 4090 native optimization / batching and historical Thor baseline |
+| [openvla-oft-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/openvla-oft-benchmark/README.md) | OpenVLA-OFT | LIBERO-10, 1,600 observations; categorical action-token checkpoint |
+| [lingbot-vla-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/lingbot-vla-benchmark/README.md) | LingBot-VLA | RoboTwin2.0, 1,600 observations; three cameras and dual-arm joints |
+| [dm05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/dm05-benchmark/README.md) | DM0.5 | LIBERO-10, 1,600 observations; separately prepared OpenDM environment |
+| [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | LIBERO-10, 1,600 observations; action generation / candidate planning |
+| [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | R2R / RxR replay, fixed 128 first frames and retained closed-loop reports |
+| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R / RxR replay, native engine comparisons, first frames and closed-loop reports |
+| [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen R2R low / panoramic · NaViDA | First 48 R2R / RxR episodes, 4 recorded frames per episode |
+| [3B-navigation](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/3B-navigation/README.md) | Qwen R2R low / panoramic · NaViDA | Real-image full-policy / kernel / compile-cache experiments; individual correctness gates |
+| [pi05-quant-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-quant-benchmark/README.md) | π0.5 | Historical B=1 LIBERO replay by device and precision; distinct from the newer FlashRT harness |
+| [streamvln-quant-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-quant-benchmark/README.md) | StreamVLN | B=1 full R2R / RxR replay by device and precision |
+| [kernel tuning](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/docs/proposals/0008-kernel-tuning.md) | Registry operators / π0.5 | Operator capture, numerical calibration, tuning and profiling; developer workflow |
 
 PI0.5 on Jetson AGX Thor and RTX 4090 against FlashRT, APXinf, Embodied.cpp and OpenPI, with a
 LIBERO closed-loop film, is on [PI0.5 on Thor and RTX 4090](pi05-performance.md).
@@ -33,6 +41,10 @@ ActiveVLN uses the existing `activevln` dependency group. In each directory,
 + CUDA Graph. Each README gives the exact run command.
 
 ## Recorded offline results
+
+**Historical aggregate:** the table below preserves the fixed September 7, 2026 report.
+It is not a current leaderboard. Later model baselines, native optimizations and
+quantization results are linked in the complete index above.
 
 <!-- offline-results:start -->
 The following measurements were taken on September 7, 2026, using a Jetson AGX
@@ -57,6 +69,27 @@ Per-directory READMEs include latency percentiles, output throughput, peak memor
 load and warmup time, and graph-replay status. The table compares the two platforms
 at B=1 with their respective Torch CUDA builds and drivers.
 <!-- offline-results:end -->
+
+<a id="coverage-gaps"></a>
+
+## Coverage gaps
+
+These experiments remain unmeasured or incomplete in the published reports.
+The README matrix and report index inventory available evidence; they do not
+mean these gaps were filled.
+
+| Area | Available evidence | Remaining work |
+|---|---|---|
+| GR00T / Thor | [RTX 4090 native optimization and historical Thor baseline](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md) | Retest the native optimization on Thor; device-specific precision experiments. |
+| OpenVLA-OFT / LingBot-VLA / Cosmos / DM0.5 | Historical Thor / RTX 4090 BF16 baselines in the model reports above | Optimized paths, applicable quantization profiles and matched reference-engine comparisons. |
+| VLA models other than π0.5 | Mainly Thor / RTX 4090, with some H200 mechanism / RL validation | Model-level measurements on AGX Orin, Orin NX and DGX Spark. |
+| StreamVLN | Recorded subsets on [Thor](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/thor/README.md), [RTX 4090](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/rtx-4090/README.md) and [NX](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/orin-nx/README.md) | Thor RxR and more closed-loop batch sizes; NX first frames; remaining quantization-suite profiles. |
+| ActiveVLN | [Benchmark index](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) and RLinf experiments below | NX first frames / RxR closed loop; Thor RxR / batched closed loops; RxR B=4 memory limits; full training, convergence and the pending logprob consistency check. |
+| Qwen R2R low / panoramic · NaViDA | Thor / RTX 4090 replay, 3B experiments and A800 DP/TP | Orin platforms, quantization and larger batches; the NaViDA graph path that fails its correctness gate is not an admitted optimization. |
+
+New models and deployment work are tracked in the [model roadmap](models.md#roadmap)
+and [EmbodiRun coverage and roadmap](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/en/support-matrix.md).
+Orin FP8 / FP4 and RTX 4090 FP4 are outside the current hardware profiles.
 
 ## Reproducing a result
 

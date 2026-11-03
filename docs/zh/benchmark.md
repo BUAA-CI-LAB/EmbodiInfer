@@ -7,13 +7,21 @@
 
 ## 选择基准测试
 
-| 目录 | 模型 | 默认数据 |
+| 目录 / 工作流 | 模型 | 工作负载与报告 |
 |---|---|---|
-| [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | R2R/RxR 各前 48 个 episode，全帧回放 |
-| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R/RxR 各前 48 个 episode，全帧回放；E2E 与完整 forward 计时 |
-| [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | PI0.5 | LIBERO-10，1,600 帧 |
-| [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | R2R/RxR 各前 48 个 episode，每段 4 帧 |
-| [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | 与 PI0.5 相同的 LIBERO-10，1,600 帧 |
+| [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | π0.5 | FlashRT 测速、Thor / 4090 预设与 LIBERO 闭环；保留历史回放 |
+| [gr00t-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md) | GR00T N1.7 | LIBERO-10，1,600 帧；4090 原生优化 / batch 与历史 Thor 基线 |
+| [openvla-oft-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/openvla-oft-benchmark/README.md) | OpenVLA-OFT | LIBERO-10，1,600 帧；categorical action-token 检查点 |
+| [lingbot-vla-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/lingbot-vla-benchmark/README.md) | LingBot-VLA | RoboTwin2.0，1,600 帧；三相机与双臂关节 |
+| [dm05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/dm05-benchmark/README.md) | DM0.5 | LIBERO-10，1,600 帧；独立 OpenDM 环境 |
+| [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | LIBERO-10，1,600 帧；动作生成 / 候选规划 |
+| [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | R2R / RxR 回放、固定 128 首帧与历史闭环报告 |
+| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R / RxR 回放、原生引擎对比、首帧与闭环报告 |
+| [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen R2R low / panoramic · NaViDA | R2R / RxR 前 48 集，每集 4 条录制帧 |
+| [3B-navigation](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/3B-navigation/README.md) | Qwen R2R low / panoramic · NaViDA | 真实图像的完整策略 / 算子 / 编译缓存测试；逐项精度门槛 |
+| [pi05-quant-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-quant-benchmark/README.md) | π0.5 | 按设备 / 精度保留的 B=1 LIBERO 历史回放，与新版 FlashRT 测速分开 |
+| [streamvln-quant-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-quant-benchmark/README.md) | StreamVLN | 按设备 / 精度记录的 B=1 R2R / RxR 全帧回放 |
+| [kernel tuning](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/docs/proposals/0008-kernel-tuning.md) | 注册算子 / π0.5 | 捕获算子、数值校准、调优与 profiling；开发者工作流 |
 
 PI0.5 在 Jetson AGX Thor 与 RTX 4090 上与 FlashRT、APXinf、Embodied.cpp、OpenPI 的对比，以及 LIBERO
 闭环视频，见 [PI0.5：Thor 与 RTX 4090 性能对比](pi05-performance.md)。
@@ -30,6 +38,9 @@ ActiveVLN 使用已有 `activevln` 依赖组。各目录的
 + CUDA Graph。每个 README 都给出确切的运行命令。
 
 ## 离线推理性能
+
+**历史总表：** 下表保留 2026-09-07 的固定报告，不是各模型的最新成绩榜。
+9 月 8 日后的其他模型基线、原生优化与量化结果，以本页上方的完整索引为准。
 
 <!-- offline-results:start -->
 以下结果于 2026 年 9 月 7 日在 Jetson AGX Thor 和 RTX 4090 上测得。
@@ -52,6 +63,25 @@ ActiveVLN 使用已有 `activevln` 依赖组。各目录的
 加载和预热时间，以及 graph 重放状态。该表比较了两个平台
 在 B=1 下各自使用的 Torch CUDA 构建和驱动。
 <!-- offline-results:end -->
+
+<a id="coverage-gaps"></a>
+
+## 测试覆盖缺口
+
+下表是现有报告尚未覆盖的实验；文档索引与 README 矩阵列出已有材料，不表示这些缺口已补测。
+
+| 范围 | 已有证据 | 待补 |
+|---|---|---|
+| GR00T / Thor | [4090 原生优化与 Thor 旧基线](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md) | 原生优化版本的 Thor 复测与设备专用精度实验。 |
+| OpenVLA-OFT / LingBot-VLA / Cosmos / DM0.5 | 上方各模型的 Thor / 4090 BF16 历史基线 | 优化版本、适用量化档及同条件竞品对照。 |
+| 除 π0.5 外的 VLA | 主要覆盖 Thor / 4090，部分有 H200 机制或 RL 验证 | AGX Orin、Orin NX、DGX Spark 的模型级测量。 |
+| StreamVLN | [Thor](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/thor/README.md)、[4090](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/rtx-4090/README.md)、[NX](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/orin-nx/README.md) 的已有子集 | Thor RxR 与更多 batch 闭环；NX 首帧；量化套件未覆盖的配置。 |
+| ActiveVLN | [基准索引](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md)与下方 RLinf 实验记录 | NX 首帧 / RxR 闭环，Thor RxR / 多 batch 闭环；RxR B=4 的显存限制；完整训练、收敛及待通过的 logprob 一致性验证。 |
+| Qwen R2R low / panoramic · NaViDA | Thor / 4090 离线回放、3B 专项及 A800 DP/TP | Orin 平台、量化与更多 batch 测量；NaViDA 未通过精度门槛的 graph 路径不计作已验收优化。 |
+
+新模型和部署工作见[模型路线图](models.md#roadmap)及
+[EmbodiRun 覆盖与规划](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/support-matrix.md)。
+Orin FP8 / FP4、RTX 4090 FP4 不计为当前硬件配置的待补档位。
 
 ## 复现结果
 
