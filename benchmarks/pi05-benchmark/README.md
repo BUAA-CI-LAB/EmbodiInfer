@@ -68,8 +68,11 @@ OpenPI 官方 `pi05_libero` 权重（转为 PyTorch）配合官方 `examples/lib
 | EmbodiInfer · `fp8-fp8` | 4，ρ = 1 | 489/500 · 97.8% | 14.21 ms | 70.4 Hz |
 
 延迟由 `libero/latency.py` 在空闲 GPU 上测得；同条件下 EmbodiInfer 10 步为 17.08 ms（58.5 Hz），OpenPI 在闭环中
-每次推理约 200 ms。各引擎同一 episode 的对比视频、标定细节和计时口径见
-[PI0.5 性能页](../../docs/zh/pi05-performance.md)。
+每次推理约 200 ms。标定细节和计时口径见 [PI0.5 性能页](../../docs/zh/pi05-performance.md)。
+
+![RTX 4090 上 OpenPI、FlashRT 与 EmbodiInfer 的 LIBERO 闭环对比](../../docs/assets/pi05/libero-4090-comparison.webp)
+
+任务 6、初始状态 2，三个引擎都用 10 步去噪、各自独占 GPU，按真实时间播放：每个控制步 50 ms，请求新动作块的步再加上推理时间。OpenPI BF16 每次推理 202.0 ms、8.89 s 完成，FlashRT FP8 23.6 ms、5.32 s，EmbodiInfer `fp8-fp8` 18.6 ms、5.17 s。原视频见 [libero-4090-comparison.mp4](../../docs/assets/pi05/libero-4090-comparison.mp4)。
 
 `libero/` 中的 `serve.py`、`calibrate.py`、`latency.py` 在 EmbodiInfer 环境中运行（另需 OpenPI 的
 `packages/openpi-client`），`observations.py`、`film.py` 在 OpenPI 的 LIBERO 客户端环境中运行。转换后的
