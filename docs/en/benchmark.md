@@ -3,8 +3,8 @@
 Find benchmark results and commands for offline inference, engine optimizations,
 and RL integration. Each section describes the workload and timing method.
 
-The latest π0.5 animations and two complete result tables are in the
-[README](https://github.com/BUAA-CI-LAB/EmbodiInfer#performance) and
+The latest π0.5 animations and engine comparison are in the
+[README](https://github.com/BUAA-CI-LAB/EmbodiInfer#benchmarks) and
 [π0.5 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
 Find detailed model reports and reproduction commands by workload below.
 

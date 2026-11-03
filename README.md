@@ -45,6 +45,7 @@ Use **EmbodiInfer** for model execution and optimization. Use **[EmbodiRun][run]
 
 **OpenPI BF16 · FlashRT NVFP4 · EmbodiInfer NVFP4**. LIBERO-spatial task 0, **2× playback**. The π0.5 timelines combine a 20 Hz control period with measured inference latency; each film shows one successful episode per engine. [Conditions & reproduction][pi05] · [EmbodiRun Recipe][so101]
 
+<a id="performance"></a>
 <a id="benchmarks"></a>
 
 ## Benchmarks
@@ -237,7 +238,7 @@ Apache-2.0. [License][license] · [Notice][notice] · [Third-party notices][thir
 [license]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/LICENSE
 [notice]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/NOTICE
 [third-party]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/THIRD_PARTY_NOTICES.md
-[benchmark-index]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/5f237690fee1f55d633c2961bf2e3d3c56829f7b/docs/en/benchmark.md
+[benchmark-index]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/docs/en/benchmark.md
 [parallelism]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/5f237690fee1f55d633c2961bf2e3d3c56829f7b/docs/en/parallelism.md
 [pi05-example]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/5f237690fee1f55d633c2961bf2e3d3c56829f7b/examples/pi05_inference.py
 [model-roadmap]: https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/5f237690fee1f55d633c2961bf2e3d3c56829f7b/docs/en/models.md#roadmap
