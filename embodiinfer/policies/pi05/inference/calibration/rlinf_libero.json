@@ -454,6 +454,232 @@
           }
         ]
       }
+    },
+    "4090": {
+      "prefix": {
+        "fp8": [
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 54.0,
+            "down_max": 284.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 18.375,
+            "down_max": 60.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 17.0,
+            "down_max": 55.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 31.125,
+            "down_max": 37.75
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 25.75,
+            "down_max": 31.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 24.0,
+            "down_max": 47.25
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 38.75,
+            "down_max": 33.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 39.0,
+            "down_max": 131.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 34.5,
+            "down_max": 31.75
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 37.5,
+            "down_max": 29.25
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 41.25,
+            "down_max": 81.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 38.5,
+            "down_max": 88.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 37.5,
+            "down_max": 103.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 35.5,
+            "down_max": 314.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 48.5,
+            "down_max": 480.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 69.5,
+            "down_max": 1200.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 71.5,
+            "down_max": 1200.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "bf16",
+            "gate_up_max": 73.5,
+            "down_max": 9728.0
+          }
+        ]
+      },
+      "action": {
+        "fp8": [
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 19.0625,
+            "down_max": 81.875
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 7.5,
+            "down_max": 40.0
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 8.6328,
+            "down_max": 16.3281
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 6.3281,
+            "down_max": 7.3047
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 4.9609,
+            "down_max": 16.25
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 5.4297,
+            "down_max": 13.5156
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 3.5156,
+            "down_max": 8.9453
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 3.3789,
+            "down_max": 22.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 3.8477,
+            "down_max": 15.8594
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 3.6133,
+            "down_max": 12.1094
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 4.3945,
+            "down_max": 13.5938
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 4.2578,
+            "down_max": 9.5703
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 5.3906,
+            "down_max": 16.7188
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 6.1719,
+            "down_max": 17.1094
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 5.9375,
+            "down_max": 29.0625
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 6.3281,
+            "down_max": 35.7812
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 6.9922,
+            "down_max": 92.5
+          },
+          {
+            "gate_up": "fp8",
+            "down": "fp8",
+            "gate_up_max": 24.2188,
+            "down_max": 89.375
+          }
+        ]
+      }
     }
   },
   "checkpoint_sha256": "4616e4c1966a5fb063b442ea5d69857f45e873222d839b794634d87d252ab9e7"

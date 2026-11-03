@@ -278,3 +278,274 @@ def test_thor_lookup_nvfp4_epilogue_preserves_separate_encoder_bytes():
     actual = LookupGeluMul(quantizer).plan(gate, 4, 0.002).encode(gate, up)
     assert torch.equal(actual.output, expected.output)
     assert torch.equal(actual.blocked.view(torch.uint8), expected.blocked.view(torch.uint8))
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("bits", [8, 16])
+def test_packed_geglu_epilogue_matches_separate_inputs(bits):
+    from embodiinfer.layers import OperatorRequest, gelu_mul_backends, quantization_backends
+
+    request = OperatorRequest("cuda", torch.bfloat16, cuda_graph=True)
+    quantizer = quantization_backends.get(
+        "cuda", OperatorRequest("cuda", torch.bfloat16, bits=8, cuda_graph=True)
+    )
+    fusion = gelu_mul_backends.get("cuda", request, backend=quantizer, approximate="none")
+    packed = torch.randn(32, 512, device="cuda", dtype=torch.bfloat16)
+    gate, up = packed[:, :256].contiguous(), packed[:, 256:].contiguous()
+    scale = 0.05 if bits == 8 else None
+    expected = fusion.plan(gate, bits, scale).encode(gate, up).output.clone()
+    actual = fusion.plan(gate, bits, scale).encode_packed(packed).output.clone()
+    assert torch.equal(actual.view(torch.uint8), expected.view(torch.uint8))
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_reduce_norm_and_norm_quant_match_reference_within_bf16_ulp(adaptive):
+    from embodiinfer.layers import (
+        OperatorRequest,
+        norm_quant_backends,
+        normalization_backends,
+        quantization_backends,
+    )
+
+    request = OperatorRequest("cuda", torch.bfloat16, cuda_graph=True)
+    q_req = OperatorRequest("cuda", torch.bfloat16, bits=8, cuda_graph=True)
+    ref_norm = normalization_backends.get("cuda_strict", request)
+    red_norm = normalization_backends.get("cuda_reduce", request)
+    quant = quantization_backends.get("cuda", q_req)
+    ref_nq = norm_quant_backends.get("cuda_strict", request, quantizer=quant, norm=ref_norm)
+    red_nq = (
+        norm_quant_backends.get("cuda_reduce", request, request_norm=red_norm)
+        if False
+        else norm_quant_backends.get("cuda_reduce", request, quantizer=quant, norm=red_norm)
+    )
+
+    x = torch.randn(1, 16, 256, device="cuda", dtype=torch.bfloat16)
+    upd = torch.randn(1, 16, 256, device="cuda", dtype=torch.bfloat16)
+    gate = torch.randn(1, 1, 256, device="cuda", dtype=torch.bfloat16) if adaptive else None
+    scale = None if adaptive else torch.randn(256, device="cuda", dtype=torch.float32)
+    mod = torch.randn(1, 768, device="cuda", dtype=torch.float32) if adaptive else None
+
+    r_res, r_out, _ = ref_norm.plan(x, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    d_res, d_out, _ = red_norm.plan(x, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    assert torch.equal(r_res, d_res)
+    assert torch.allclose(r_out.float(), d_out.float(), atol=2e-2, rtol=1e-2)
+
+    rq_res, rq_enc, _ = ref_nq.plan(x, bits=8, calibrated_scale=0.05, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    dq_res, dq_enc, _ = red_nq.plan(x, bits=8, calibrated_scale=0.05, adaptive=adaptive).residual_normalize(
+        x, upd, gate, scale=scale, modulation=mod
+    )
+    assert torch.equal(rq_res, dq_res)
+    assert torch.allclose(rq_enc.output.float(), dq_enc.output.float(), atol=8.0, rtol=2e-2)
+
+
+@pytest.mark.gpu
+def test_cutlass_prefix_geglu_rounds_reference_to_nearest():
+    from embodiinfer.backend.cuda import cutlass_geglu
+    from embodiinfer.backend.torch.nvfp4 import blocked_scales, quantization_thresholds, quantize_weight
+
+    if not cutlass_geglu.available(torch.device("cuda")):
+        pytest.skip("CUTLASS GeGLU requires EMBODIINFER_CUTLASS_DIR and Blackwell")
+    torch.manual_seed(0)
+    rows, depth, features = 300, 512, 256
+    thresholds = quantization_thresholds(torch.empty(1, device="cuda")).double()
+    table = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float64, device="cuda")
+
+    def codes_of(packed):
+        return torch.stack((packed & 15, packed >> 4), dim=-1).reshape(packed.shape[0], -1)
+
+    def dequantize(packed, scales):
+        codes = codes_of(packed)
+        values = torch.where(codes >= 8, -table[(codes & 7).long()], table[(codes & 7).long()])
+        return (values.reshape(packed.shape[0], -1, 16) * scales.double().unsqueeze(-1)).flatten(1)
+
+    (a, a_scale, a_global), (g, g_scale, g_global), (u, u_scale, u_global) = (
+        quantize_weight(torch.randn(n, depth, device="cuda") * s, thresholds.float())
+        for n, s in ((rows, 1.0), (features, depth**-0.5), (features, depth**-0.5))
+    )
+    a_blocked, g_blocked, u_blocked = (
+        blocked_scales(s.view(torch.uint8)).view(torch.float8_e4m3fn) for s in (a_scale, g_scale, u_scale)
+    )
+    x = dequantize(a, a_scale)
+    gate = x @ dequantize(g, g_scale).T * float(a_global * g_global)
+    up = x @ dequantize(u, u_scale).T * float(a_global * u_global)
+    inv = 0.9 * 448 * 6 / float((0.5 * gate * (1 + torch.erf(gate / 2**0.5)) * up).abs().amax())
+    target = 0.5 * gate * (1 + torch.erf(gate / 2**0.5)) * up * inv
+
+    out = torch.empty(rows, features // 2, dtype=torch.uint8, device="cuda")
+    padded = -(-rows // 128) * 128
+    out_blocked = torch.zeros(padded * (features // 16), dtype=torch.float8_e4m3fn, device="cuda")
+    scalars = [
+        torch.tensor([v], dtype=torch.float32, device="cuda")
+        for v in (float(a_global * g_global), float(a_global * u_global), inv)
+    ]
+    cutlass_geglu.cutlass_geglu_fp4(
+        a,
+        a_blocked,
+        *cutlass_geglu.interleave_gate_up(g, g_blocked, u, u_blocked),
+        *scalars,
+        out,
+        out_blocked,
+    )
+    torch.cuda.synchronize()
+
+    scales = out_blocked.view(torch.uint8).reshape(padded // 128, features // 64, 32, 4, 4)
+    scales = scales.permute(0, 3, 2, 1, 4).reshape(padded, features // 16)[:rows]
+    blocks = target.reshape(rows, -1, 16)
+    expected_scales = (blocks.abs().amax(-1) / 6).clamp(max=448).float().to(torch.float8_e4m3fn)
+    assert (scales == expected_scales.view(torch.uint8)).float().mean() >= 0.999
+    normalized = (blocks / scales.view(torch.float8_e4m3fn).double().unsqueeze(-1)).clamp(-6, 6).flatten(1)
+    expected = torch.bucketize(normalized.abs(), thresholds).to(torch.uint8) | (
+        (normalized < 0).to(torch.uint8) << 3
+    )
+    assert (codes_of(out) == expected).float().mean() >= 0.995
+    error = (dequantize(out, scales.view(torch.float8_e4m3fn)) - target).norm() / target.norm()
+    assert error < 0.1
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("batch,steps,keys", [(1, 10, 536), (2, 10, 300), (1, 2, 17)])
+def test_mqa_decode_attention_matches_reference_and_bhsd_fp4_encoding(batch, steps, keys):
+    import ctypes
+
+    from embodiinfer.backend.cuda.mqa_decode_attention import MqaDecodeAttention, supported
+    from embodiinfer.backend.cuda.native import build_library
+
+    torch.manual_seed(0)
+    heads, width, scale = 8, 256, 0.0625
+    q = (torch.randn(batch, steps, heads, width, device="cuda") * 2).bfloat16().transpose(1, 2)
+    k = (torch.randn(batch, 1, keys, width, device="cuda") * 2).bfloat16()
+    v = torch.randn(batch, 1, keys, width, device="cuda").bfloat16()
+    if not supported(q, k, v):
+        pytest.skip("split-key decode attention requires Blackwell")
+    plan = MqaDecodeAttention(q, k)
+    rows, columns = batch * steps, heads * width
+    out = torch.empty(rows, columns, device="cuda", dtype=torch.bfloat16)
+    plan(q, k, v, scale, output=out)
+    folded = q.transpose(1, 2).reshape(batch, steps * heads, width).double()
+    expected = (folded @ k[:, 0].double().transpose(1, 2) * scale).softmax(-1) @ v[:, 0].double()
+    error = (out.view(batch, steps * heads, width).double() - expected).norm() / expected.norm()
+    assert error < 3e-3
+
+    fp4 = torch.empty(rows, columns // 2, device="cuda", dtype=torch.uint8)
+    blocked = torch.zeros(-(-rows // 128) * 128 * (columns // 16), device="cuda", dtype=torch.uint8)
+    plan(q, k, v, scale, fp4=fp4, blocked=blocked, g_scale=0.01)
+    library = build_library("norm_quant", strict=True, specific=True, native_fp4=True).library
+    library.cc_bhsd_fp4.argtypes = (
+        [ctypes.c_void_p] * 3
+        + [ctypes.c_float]
+        + [ctypes.c_int64] * 3
+        + [ctypes.c_int] * 4
+        + [ctypes.c_void_p]
+    )
+    library.cc_bhsd_fp4.restype = ctypes.c_int
+    bhsd = out.view(batch, steps, heads, width).transpose(1, 2)
+    reference = torch.empty_like(fp4)
+    reference_blocked = torch.zeros_like(blocked)
+    assert (
+        library.cc_bhsd_fp4(
+            bhsd.data_ptr(),
+            reference.data_ptr(),
+            reference_blocked.data_ptr(),
+            0.01,
+            *bhsd.stride()[:3],
+            batch,
+            heads,
+            steps,
+            width,
+            torch.cuda.current_stream().cuda_stream,
+        )
+        == 0
+    )
+    torch.cuda.synchronize()
+    assert torch.equal(fp4, reference)
+    assert torch.equal(blocked, reference_blocked)
+
+
+@pytest.mark.gpu
+def test_action_bridge_matches_separate_projections_and_euler_step():
+    from embodiinfer.backend.cuda.action_bridge import ActionBridge
+
+    torch.manual_seed(0)
+    in_proj, out_proj = torch.nn.Linear(32, 1024).cuda(), torch.nn.Linear(1024, 32).cuda()
+    hidden = torch.randn(1, 10, 1024, device="cuda").bfloat16()
+    x = torch.randn(1, 10, 32, device="cuda")
+    assert ActionBridge.supports(in_proj, out_proj, x)
+    bridge = ActionBridge(in_proj, out_proj)
+    x_next, embeds = bridge(hidden, x, -0.1, last=False)
+    with torch.no_grad():
+        expected = x + out_proj(hidden.float()) * -0.1
+        expected_embeds = in_proj(expected).bfloat16()
+    torch.testing.assert_close(x_next, expected, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(embeds.float(), expected_embeds.float(), rtol=1e-2, atol=1e-2)
+    x_last, none = bridge(hidden, x, -0.1, last=True)
+    assert none is None and torch.equal(x_last, x_next)
+
+
+@pytest.mark.gpu
+def test_fa4_prefix_attention_matches_reference_when_configured():
+    from embodiinfer.backend.cuda import fa4
+
+    torch.manual_seed(0)
+    q = (torch.randn(1, 8, 526, 256, device="cuda") * 2).bfloat16()
+    k = (torch.randn(1, 1, 526, 256, device="cuda") * 2).bfloat16()
+    v = torch.randn(1, 1, 526, 256, device="cuda").bfloat16()
+    if not fa4.supported(q, k, v):
+        pytest.skip("FlashAttention-4 is not configured (EMBODIINFER_FA4_DIR)")
+    out = fa4.attend(q, k, v, 0.0625)
+    expected = (q.double() @ k.double().transpose(-1, -2) * 0.0625).softmax(-1) @ v.double()
+    assert out.shape == q.shape
+    assert float((out.double() - expected).norm() / expected.norm()) < 3e-3
+
+
+@pytest.mark.gpu
+def test_camera_frame_normalization_rounds_like_host_float32():
+    import numpy as np
+
+    from embodiinfer.backend.cuda.camera_frames import normalize_frames
+
+    frames = (
+        torch.arange(3 * 9 * 11 * 3, dtype=torch.int64).remainder(256).to(torch.uint8).reshape(3, 9, 11, 3)
+    )
+    images = torch.empty(3, 3, 9, 11, device="cuda")
+    normalize_frames(frames.cuda(), images)
+    host = frames.numpy().astype(np.float32) / np.float32(255) * np.float32(2) - np.float32(1)
+    torch.cuda.synchronize()
+    assert torch.equal(images.cpu(), torch.from_numpy(host).permute(0, 3, 1, 2))
+    with pytest.raises(ValueError, match="uint8"):
+        normalize_frames(frames.cuda().float(), images)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("source", [(256, 256), (480, 640), (128, 96), (224, 300)])
+def test_frame_resize_matches_pillow_resize_with_pad(source):
+    import numpy as np
+    from PIL import Image
+
+    from embodiinfer.backend.cuda.camera_frames import FrameResize
+
+    def resize_with_pad(image, size=224):
+        original = Image.fromarray(image)
+        width, height = original.size
+        ratio = max(width / size, height / size)
+        resized = original.resize((int(width / ratio), int(height / ratio)), Image.Resampling.BILINEAR)
+        padded = Image.new(original.mode, (size, size), 0)
+        padded.paste(resized, ((size - resized.width) // 2, (size - resized.height) // 2))
+        return np.asarray(padded)
+
+    frames = torch.randint(
+        0, 256, (2, *source, 3), dtype=torch.uint8, generator=torch.Generator().manual_seed(0)
+    )
+    resize = FrameResize(source, (224, 224), torch.device("cuda"))
+    images = torch.empty(2, 3, 224, 224, device="cuda")
+    resize(frames.cuda(), resize.rows_buffer(2, torch.device("cuda")), images)
+    resized = np.stack([resize_with_pad(frame) for frame in frames.numpy()])
+    host = resized.astype(np.float32) / np.float32(255) * np.float32(2) - np.float32(1)
+    torch.cuda.synchronize()
+    assert torch.equal(images.cpu(), torch.from_numpy(host).permute(0, 3, 1, 2))

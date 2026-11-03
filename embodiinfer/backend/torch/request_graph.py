@@ -116,15 +116,24 @@ class CapturedRequest:
     def run(self, update_inputs: Callable[[], None]) -> torch.Tensor:
         """Update inputs and replay atomically; the returned tensor never aliases the graph."""
         with self._lock, torch.cuda.device(self.device):
-            if self._closed:
-                raise RuntimeError("CapturedRequest is closed")
-            if torch.cuda.current_stream(self.device).cuda_stream != self.stream.cuda_stream:
-                raise RuntimeError("CapturedRequest must replay on its owning stream")
-            if cuda_execution_signature() != self._signature:
-                raise RuntimeError("CapturedRequest precision/determinism mode changed; recapture required")
+            self._check_replayable()
             update_inputs()
             self.graph.replay()
             return self.output.clone()
+
+    def replay(self) -> None:
+        """Replay a forward that stages its own inputs and outputs; the caller synchronizes."""
+        with self._lock, torch.cuda.device(self.device):
+            self._check_replayable()
+            self.graph.replay()
+
+    def _check_replayable(self) -> None:
+        if self._closed:
+            raise RuntimeError("CapturedRequest is closed")
+        if torch.cuda.current_stream(self.device).cuda_stream != self.stream.cuda_stream:
+            raise RuntimeError("CapturedRequest must replay on its owning stream")
+        if cuda_execution_signature() != self._signature:
+            raise RuntimeError("CapturedRequest precision/determinism mode changed; recapture required")
 
     def close(self, *, synchronize: bool = True) -> None:
         """Invalidate the capture and free adapter workspaces after pending work completes.

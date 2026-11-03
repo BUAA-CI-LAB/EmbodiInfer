@@ -69,10 +69,23 @@ __global__ void norm_reduce(
     __nv_bfloat16* residual, __nv_bfloat16* output, __nv_bfloat16* output_gate,
     int columns, int tokens) {
     __shared__ float partials[THREADS];
-    int64_t base = int64_t(blockIdx.x) * columns;
+    int row = blockIdx.x;
+    int batch = row / tokens;
+    bool write_gate = (output_gate != nullptr) && (row == batch * tokens);
+    int64_t base = int64_t(row) * columns;
+    int64_t gate_base = int64_t(batch) * columns;
+    int64_t mod_base = int64_t(batch) * 3 * columns;
     float sum = 0.0f;
     for (int column = threadIdx.x; column < columns; column += THREADS) {
-        float value = residual_value(inputs, update, gate, base + column, columns, tokens);
+        float value = __bfloat162float(inputs[base + column]);
+        if (update != nullptr) {
+            float delta = __bfloat162float(update[base + column]);
+            if (gate != nullptr) {
+                float factor = __bfloat162float(gate[gate_base + column]);
+                delta = __bfloat162float(__float2bfloat16_rn(__fmul_rn(delta, factor)));
+            }
+            value = __bfloat162float(__float2bfloat16_rn(__fadd_rn(value, delta)));
+        }
         sum = __fadd_rn(sum, __fmul_rn(value, value));
         if (residual != nullptr) residual[base + column] = __float2bfloat16_rn(value);
     }
@@ -84,14 +97,20 @@ __global__ void norm_reduce(
         __syncthreads();
     }
     float inverse = rsqrtf(__fadd_rn(__fmul_rn(partials[0], 1.0f / columns), 1.0e-6f));
+    const __nv_bfloat16* src = (residual != nullptr) ? residual : inputs;
     for (int column = threadIdx.x; column < columns; column += THREADS) {
-        float value = residual_value(inputs, update, gate, base + column, columns, tokens);
-        output[base + column] = __float2bfloat16_rn(affine_value(
-            value, inverse, scale, modulation, base + column, columns, tokens));
-        if (output_gate != nullptr && blockIdx.x % tokens == 0) {
-            int batch = blockIdx.x / tokens;
-            output_gate[int64_t(batch) * columns + column] = __float2bfloat16_rn(
-                modulation[int64_t(batch) * 3 * columns + 2 * columns + column]);
+        float value = __bfloat162float(src[base + column]);
+        float normalized = __fmul_rn(value, inverse);
+        if (modulation != nullptr) {
+            normalized = __fmul_rn(normalized, __fadd_rn(1.0f, modulation[mod_base + column]));
+            normalized = __fadd_rn(normalized, modulation[mod_base + columns + column]);
+        } else {
+            normalized = __fmul_rn(normalized, __fadd_rn(1.0f, scale[column]));
+        }
+        output[base + column] = __float2bfloat16_rn(normalized);
+        if (write_gate) {
+            output_gate[gate_base + column] = __float2bfloat16_rn(
+                modulation[mod_base + 2 * columns + column]);
         }
     }
 }

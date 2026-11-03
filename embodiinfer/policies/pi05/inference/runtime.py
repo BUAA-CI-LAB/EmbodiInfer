@@ -7,6 +7,7 @@ projections and compact camera/text layouts remain local to this policy.
 from __future__ import annotations
 
 import threading
+import weakref
 from collections import OrderedDict
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from ..modeling_pi05 import Pi05Policy, Pi05Prefix
 
 
-def _compact_layout(batch: Pi05Batch) -> tuple[Pi05Batch, bool]:
+def _compact_layout(batch: Pi05Batch) -> tuple[Pi05Batch, bool, list[list[bool]], bool]:
     """Remove only globally masked cameras and trailing language padding.
 
     Mixed-camera batches retain a view whenever any row uses it. Token order,
@@ -50,18 +51,16 @@ def _compact_layout(batch: Pi05Batch) -> tuple[Pi05Batch, bool]:
             raise ValueError(
                 "PI0.5 camera tensors must be [batch, channels, height, width] with [batch] masks"
             )
-    # One small transfer replaces a synchronization for each individual mask.
-    host_masks = torch.cat([m[:, None] for m in batch.img_masks] + [batch.masks], dim=1).detach().cpu()
-    cameras = host_masks[:, : len(batch.images)]
-    cpu_mask = host_masks[:, len(batch.images) :]
-    active = [i for i in range(len(batch.images)) if bool(cameras[:, i].any())]
+    # One small transfer replaces a synchronization for each individual mask; the few host
+    # decisions below then run on plain lists rather than per-op CPU tensors.
+    rows = torch.cat([m[:, None] for m in batch.img_masks] + [batch.masks], dim=1).cpu().tolist()
+    cameras = len(batch.images)
+    active = [i for i in range(cameras) if any(row[i] for row in rows)]
     if not active:
         raise ValueError("PI0.5 requires at least one active camera in the batch")
-    visible = host_masks.any(dim=1)
-    if not bool(visible.all()):
+    if not all(any(row) for row in rows):
         raise ValueError("every PI0.5 observation must contain at least one valid prefix token")
-    positions = torch.arange(1, cpu_mask.shape[1] + 1)
-    length = int((cpu_mask * positions).max())
+    length = max(max((j + 1 for j, valid in enumerate(row[cameras:]) if valid), default=0) for row in rows)
     bucket = next((n for n in (16, 32, 48, 64, 96, 128, 160, 200) if n >= length), batch.tokens.shape[1])
     bucket = min(bucket, batch.tokens.shape[1])
     compacted = Pi05Batch(
@@ -71,8 +70,10 @@ def _compact_layout(batch: Pi05Batch) -> tuple[Pi05Batch, bool]:
         batch.masks[:, :bucket].contiguous(),
         batch.request_ids,
     )
-    all_valid = bool(cameras[:, active].all()) and bool(cpu_mask[:, :bucket].all())
-    return compacted, all_valid
+    token_mask = [row[cameras : cameras + bucket] for row in rows]
+    cameras_valid = all(row[i] for row in rows for i in active)
+    all_valid = cameras_valid and all(all(row) for row in token_mask)
+    return compacted, all_valid, token_mask, cameras_valid
 
 
 def compact_batch(batch: Pi05Batch) -> Pi05Batch:
@@ -234,16 +235,17 @@ class _RequestGraph:
         )
 
     def run(self, batch: Pi05Batch, state: torch.Tensor) -> torch.Tensor:
-        def update() -> None:
-            for dst, src in zip(
-                self.batch.images + self.batch.img_masks, batch.images + batch.img_masks, strict=True
-            ):
-                dst.copy_(src)
-            self.batch.tokens.copy_(batch.tokens)
-            self.batch.masks.copy_(batch.masks)
-            self.state.copy_(state)
-
-        return self.captured.run(update)
+        destinations = [
+            *self.batch.images,
+            *self.batch.img_masks,
+            self.batch.tokens,
+            self.batch.masks,
+            self.state,
+        ]
+        sources = [*batch.images, *batch.img_masks, batch.tokens, batch.masks, state]
+        if len(destinations) != len(sources):
+            raise ValueError("Pi05 request inputs differ from the captured layout")
+        return self.captured.run(lambda: torch._foreach_copy_(destinations, sources))
 
     def close(self, *, synchronize: bool = True) -> None:
         self.captured.close(synchronize=synchronize)
@@ -273,12 +275,17 @@ class Pi05Runtime:
         self.loop_graphs: OrderedDict[tuple, _LoopGraph] = OrderedDict()
         self.request_graphs: OrderedDict[tuple, _RequestGraph] = OrderedDict()
         self.schedules: OrderedDict[tuple, Any] = OrderedDict()
+        # Caller-owned Pi05StaticRequest graphs; they read the same derived weights.
+        self.static_requests: weakref.WeakSet = weakref.WeakSet()
         self.lock = threading.RLock()
         self.capture_count = 0
 
     def clear(self) -> None:
         """Discard weight-derived schedules and graphs after refit or migration."""
         with self.lock:
+            for request in list(self.static_requests):
+                request.close()
+            self.static_requests.clear()
             operators = getattr(self.policy, "_fused_ops", None)
             graphs = (*self.prefix_graphs.values(), *self.loop_graphs.values(), *self.request_graphs.values())
             devices = {graph.device for graph in graphs}
@@ -305,22 +312,26 @@ class Pi05Runtime:
 
     def _prepare_batch(self, batch: Pi05Batch, return_hidden: bool = False) -> tuple[Pi05Batch, bool]:
         """Use the same camera/token compaction for separate and combined execution."""
-        batch, all_valid = _compact_layout(batch)
+        batch, all_valid, host_mask, cameras_valid = _compact_layout(batch)
         config = getattr(self.policy, "_optimization_config", None)
         if (
             config is not None
             and (config.compact_prefix or config.attention == "folded_flash")
             and not return_hidden
         ):
-            columns = batch.masks.any(dim=0).nonzero().flatten()
-            batch = Pi05Batch(
-                batch.images,
-                batch.img_masks,
-                batch.tokens.index_select(1, columns),
-                batch.masks.index_select(1, columns),
-                batch.request_ids,
-            )
-            all_valid = bool(batch.masks.all()) and all(bool(mask.all()) for mask in batch.img_masks)
+            # The host mask copy already taken by _compact_layout answers every question below, so
+            # the request issues no further blocking device reads before its graph launch.
+            columns = [j for j in range(len(host_mask[0])) if any(row[j] for row in host_mask)]
+            count = len(columns)
+            if columns == list(range(count)):
+                tokens = batch.tokens[:, :count].contiguous()
+                masks = batch.masks[:, :count].contiguous()
+            else:
+                index = torch.tensor(columns).pin_memory().to(batch.tokens.device, non_blocking=True)
+                tokens = batch.tokens.index_select(1, index)
+                masks = batch.masks.index_select(1, index)
+            batch = Pi05Batch(batch.images, batch.img_masks, tokens, masks, batch.request_ids)
+            all_valid = all(row[j] for row in host_mask for j in columns) and cameras_valid
             if config.attention == "folded_flash" and not all_valid:
                 raise ValueError("Folded FlashAttention requires all-valid compact prefix masks")
         return batch, all_valid
@@ -373,7 +384,7 @@ class Pi05Runtime:
             for time, dt in policy.flow_schedule(steps):
                 t = torch.full((state.shape[0],), time, device=state.device, dtype=state.dtype)
                 condition = policy._time_condition(t)
-                rows.append((t, dt, tuple(norm.dense(condition) for norm in norms)))
+                rows.append((t, dt, tuple(norm.dense(condition).float().contiguous() for norm in norms)))
             cached = self._remember(self.schedules, key, tuple(rows))
         return cached
 
@@ -384,12 +395,18 @@ class Pi05Runtime:
         if operators is not None:
             operators.validate_request(state.shape[0], steps)
         context = nullcontext() if operators is None else operators.decode_context(prefix)
-        x = state
+        x, embeds = state, None
         device_context = torch.cuda.device(state.device) if state.is_cuda else nullcontext()
         with device_context, context:
-            for t, dt, modulations in self.schedule(state, steps):
-                velocity = self.policy._denoise_step_impl(x, t, prefix, modulations)
-                x = euler_step(x, velocity, dt)
+            bridge = None if operators is None else operators.action_bridge(state)
+            schedule = self.schedule(state, steps)
+            for index, (t, dt, modulations) in enumerate(schedule):
+                if bridge is None:
+                    velocity = self.policy._denoise_step_impl(x, t, prefix, modulations)
+                    x = euler_step(x, velocity, dt)
+                else:
+                    hidden = self.policy._denoise_hidden(x, t, prefix, modulations, embeds)
+                    x, embeds = bridge(hidden, x, dt, last=index == len(schedule) - 1)
         return x
 
     def decode(self, state: torch.Tensor, prefix: Pi05Prefix, steps: int, use_graph: bool) -> torch.Tensor:
