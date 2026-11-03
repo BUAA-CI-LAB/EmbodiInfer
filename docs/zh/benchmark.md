@@ -12,6 +12,9 @@
 | [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | R2R/RxR 各前 48 个 episode，每段 4 帧 |
 | [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | 与 PI0.5 相同的 LIBERO-10，1,600 帧 |
 
+PI0.5 在 Jetson AGX Thor 与 RTX 4090 上与 FlashRT、APXinf、Embodied.cpp、OpenPI 的对比，以及 LIBERO
+闭环视频，见 [PI0.5：Thor 与 RTX 4090 性能对比](pi05-performance.md)。
+
 ## 测试数据与计时范围
 
 各测试均使用离线回放，采样数量可配置。统一计时包括预处理、推理和结果输出到 CPU，

@@ -13,6 +13,9 @@ and RL integration. Each section describes the workload and timing method.
 | [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | First 48 episodes each of R2R/RxR, 4 frames per segment |
 | [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | The same LIBERO-10 as PI0.5, 1,600 frames |
 
+PI0.5 on Jetson AGX Thor and RTX 4090 against FlashRT, APXinf, Embodied.cpp and OpenPI, with a
+LIBERO closed-loop film, is on [PI0.5 on Thor and RTX 4090](pi05-performance.md).
+
 ## Workloads and timing
 
 Sample counts are configurable. The shared timing covers preprocessing, inference,

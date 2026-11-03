@@ -92,7 +92,7 @@ actions = postprocessor(normalized_actions)
 和完整去噪循环 CUDA graph。直接创建策略时，可用 `native_embeddings=True` 选择相同的嵌入实现，
 默认仍使用原有实现。CUDA 上的 `EngineConfig(dtype="auto")` 保留检查点中各张量原有的数据类型，
 输入和解码器状态使用策略的 `execution_dtype`。显式指定 dtype 时统一转换，CPU 使用 FP32。
-参见 [AGX 对比](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md#agx-orin-mixed-precision-2026-09-17)
+参见 [AGX 对比](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md#其他平台与早期结果)
 了解延迟、输出一致性，以及将权重卸载到 CPU 后的内存与性能取舍。
 
 ## 生成 RL rollout {#generating-rl-rollouts}

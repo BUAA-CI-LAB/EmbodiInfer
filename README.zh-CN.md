@@ -85,7 +85,7 @@
 
 | 策略 | 优化前 | 优化后 | 优化后吞吐 |
 |---|---:|---:|---:|
-| [π0.5](benchmarks/pi05-benchmark/README.md#pi05-原生优化2026-09-09) | 74.33 ms | **38.89 ms** | **25.71 observations/s** |
+| [π0.5](benchmarks/pi05-benchmark/README.md#其他平台与早期结果) | 74.33 ms | **38.89 ms** | **25.71 observations/s** |
 | [GR00T N1.7](benchmarks/gr00t-benchmark/README.md#4090-原生优化2026-09-09) | 45.51 ms | **31.30 ms** | **31.95 observations/s** |
 
 测量日期为 2026 年 9 月 9 日，使用 RTX 4090、BF16、batch size 1，每个模型回放 1,600 条 LIBERO-10 观测。

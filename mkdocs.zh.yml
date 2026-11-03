@@ -60,7 +60,9 @@ nav:
   - 推理部署:
       - 部署推理服务: serving.md
       - 多 GPU 并行推理: parallelism.md
-  - 性能测试: benchmark.md
+  - 性能测试:
+      - 性能测试与复现: benchmark.md
+      - PI0.5：Thor 与 RTX 4090: pi05-performance.md
   - 引擎设计:
       - 推理引擎架构: architecture.md
   - 参考:
