@@ -16,6 +16,15 @@ PI0.5 的推理性能与数值核验结果。
 
 Thor 的两个 FP4 引擎在另一次交替运行中测得，同样 3 轮、同一套设置。Thor 上 8 次固定种子调用的动作与 OpenPI 参考的余弦相似度（平均 / 最差）：`nvfp4-nvfp4` 0.997182 / 0.995833，`fp8-fp8` 0.999785 / 0.999716，`bf16` 0.999995 / 0.999993。RTX 4090 的 `bf16` 与 `fp8-fp8` 在 RLinf LIBERO 验证集（10 个观测 × 5 个噪声种子）上与 strict BF16 预设的动作余弦相似度为 0.999997 与 0.99996。
 
+Thor 的 `nvfp4-nvfp4` 延迟可以一条命令复现：脚本在 FlashRT v0.2.0 的 `examples/thor/pi05.py` 测速流程中换入 EmbodiInfer（[`flashrt_harness.py`](flashrt_harness.py)），独立运行 3 次，每次预热 200 次、计时 1,000 次，最后打印每次的 P50 和平均值；`PRESET=fp8-fp8` 或 `PRESET=bf16` 测其余两档。
+
+```bash
+FLASHRT_ROOT=/path/to/FlashRT CHECKPOINT=/path/to/RLinf-Pi05-LIBERO-SFT \
+NORM_STATS=/path/to/physical-intelligence/libero/norm_stats.json \
+EMBODIINFER_CUTLASS_DIR=/path/to/cutlass EMBODIINFER_FA4_DIR=/path/to/fa4 \
+bash benchmarks/pi05-benchmark/thor_fp4.sh
+```
+
 Thor 上 LIBERO-spatial 任务 0 的闭环：同一初始状态和输入帧，每个控制步重新决策，控制周期 50 ms，三个引擎都完成任务。
 
 | 引擎 | 决策次数 | 策略延迟 P50（ms） | 频率 | 完成用时 |
