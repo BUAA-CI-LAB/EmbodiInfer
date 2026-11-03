@@ -359,12 +359,17 @@ class Pi05Runtime:
                 self.capture_count += 1
             return graph.run(batch)
 
+    def _rho(self) -> float:
+        """The policy's flow-schedule power; graphs and schedules are cached per value."""
+        return float(getattr(self.policy, "flow_schedule_rho", 1.0))
+
     def schedule(self, state: torch.Tensor, steps: int) -> tuple:
         """Cache the exact per-step, per-batch time projections used by eager."""
         if steps < 1:
             raise ValueError("PI0.5 requires a positive number of denoise steps")
         key = (
             steps,
+            self._rho(),
             state.shape[0],
             state.dtype,
             state.device,
@@ -417,6 +422,7 @@ class Pi05Runtime:
             key = (
                 _tensor_key(state),
                 steps,
+                self._rho(),
                 _tensor_key(prefix.prefix_pad_masks),
                 prefix.all_valid,
                 _stream_key(state.device),
@@ -457,6 +463,7 @@ class Pi05Runtime:
                 _tensor_key(state),
                 all_valid,
                 steps,
+                self._rho(),
                 self.policy.policy_version,
                 _stream_key(state.device),
                 cuda_execution_signature(),

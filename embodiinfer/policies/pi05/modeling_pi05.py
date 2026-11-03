@@ -1154,9 +1154,21 @@ class Pi05Policy(FlowVLAPolicy):
         return hidden, collected
 
     # ---- pi0.5 integrates t: 1 -> 0 with dt = -1/N ---------------------------
+    # ``flow_schedule_rho`` != 1 integrates the same weights on the power grid
+    # t_i = (1 - i/N) ** rho instead; rho > 1 takes the smaller steps near the
+    # data end (t = 0), like EDM's power schedules. Schedules and captured
+    # graphs are cached per rho.
+    flow_schedule_rho: float = 1.0
+
     def flow_schedule(self, num_steps: int) -> list[tuple[float, float]]:
-        dt = -1.0 / num_steps
-        return [(1.0 + i * dt, dt) for i in range(num_steps)]
+        rho = float(self.flow_schedule_rho)
+        if not rho > 0:
+            raise ValueError("PI0.5 flow_schedule_rho must be positive")
+        if rho == 1.0:
+            dt = -1.0 / num_steps
+            return [(1.0 + i * dt, dt) for i in range(num_steps)]
+        times = [(1.0 - i / num_steps) ** rho for i in range(num_steps + 1)]
+        return [(times[i], times[i + 1] - times[i]) for i in range(num_steps)]
 
     # ---- stage 1: encode prefix (once) --------------------------------------
     def encode_prefix(self, batch: Pi05Batch, return_hidden: bool = False) -> Pi05Prefix:
@@ -1452,9 +1464,10 @@ class Pi05Policy(FlowVLAPolicy):
         return Pi05Prefix(kv, pad)
 
     def cuda_graph_variant(self, prefix: Pi05Prefix) -> object | None:
+        # Full-loop graphs bake the time grid, so its rho is part of the key.
         if self.native_inference:
-            return prefix.prefix_pad_masks.shape[1], prefix.all_valid
-        return prefix.all_valid
+            return prefix.prefix_pad_masks.shape[1], prefix.all_valid, float(self.flow_schedule_rho)
+        return prefix.all_valid, float(self.flow_schedule_rho)
 
     def allocate_static_prefix_from_live(
         self,
@@ -1482,11 +1495,13 @@ class Pi05Policy(FlowVLAPolicy):
         dtype: torch.dtype,
         variant: object | None,
     ) -> Pi05Prefix:
-        if self.native_inference and isinstance(variant, tuple):
-            length, all_valid = variant
+        if self.native_inference and isinstance(variant, tuple) and len(variant) == 3:
+            length, all_valid, _ = variant
             if self._cached_prefix_meta is None or length != self._cached_prefix_meta[0]:
                 raise ValueError("PI0.5 graph layout requires its live prefix")
             variant = all_valid
+        elif isinstance(variant, tuple):
+            variant = variant[0]
         prefix = self.allocate_static_prefix(batch_size, device, dtype)
         prefix.all_valid = bool(variant)
         return prefix

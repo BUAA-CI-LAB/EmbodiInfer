@@ -115,6 +115,21 @@ class OpenPiConfig:
         )
 
 
+PALIGEMMA_EMBEDDING = "paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"
+PALIGEMMA_HEAD = "paligemma_with_expert.paligemma.lm_head.weight"
+
+
+def restore_tied_embedding(tensors: dict[str, Any]) -> dict[str, Any]:
+    """Name PaliGemma's token embedding when an export kept only its tied output head.
+
+    OpenPI's convert_jax_model_to_pytorch.py saves the tied embedding/LM-head tensor once, under
+    the head's name; the head itself is dropped below, the embedding is required.
+    """
+    if PALIGEMMA_EMBEDDING not in tensors and PALIGEMMA_HEAD in tensors:
+        tensors[PALIGEMMA_EMBEDDING] = tensors[PALIGEMMA_HEAD]
+    return tensors
+
+
 def load_openpi_checkpoint(
     root: Path,
     *,
@@ -152,15 +167,20 @@ def load_openpi_checkpoint(
     import torch
     from safetensors.torch import load_file
 
+    config = recipe.native_config()
     if low_cpu_mem_usage:
+        # PI05Policy moves itself to config.device while it is built; keep that on meta too.
+        config.device = "meta"
         with torch.device("meta"):
-            model = PI05Policy(recipe.native_config())
+            model = PI05Policy(config)
+        config.device = "cpu"
     else:
-        model = PI05Policy(recipe.native_config())
+        model = PI05Policy(config)
     tensors = load_file(str(weights), device="cpu")
     # OpenPI saves the inner model, LeRobot normally prefixes these with model.
     if tensors and all(key.startswith("model.") for key in tensors):
         tensors = {key.removeprefix("model."): tensor for key, tensor in tensors.items()}
+    restore_tied_embedding(tensors)
     # These vocabulary output heads are not used by Pi0.5's flow decoder.
     # OpenPI Orbax contains neither; do not invent random missing parameters.
     # The prefix input embedding remains required and is checked strictly.
