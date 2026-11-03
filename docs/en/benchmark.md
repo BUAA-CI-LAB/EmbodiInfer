@@ -3,9 +3,10 @@
 Find benchmark results and commands for offline inference, engine optimizations,
 and RL integration. Each section describes the workload and timing method.
 
-See the [README model × hardware matrix](https://github.com/BUAA-CI-LAB/EmbodiInfer#model--hardware-benchmark-coverage)
-for reported, partial / historical and unmeasured combinations. Each report
-retains its own workload and validation scope.
+The latest π0.5 animations and two complete result tables are in the
+[README](https://github.com/BUAA-CI-LAB/EmbodiInfer#performance) and
+[π0.5 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
+Find detailed model reports and reproduction commands by workload below.
 
 ## Entry points
 

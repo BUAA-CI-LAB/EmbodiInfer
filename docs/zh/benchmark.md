@@ -2,8 +2,9 @@
 
 本页汇总离线推理、引擎优化和强化学习集成的性能结果，并提供测试配置与复现入口。
 
-模型 × 硬件覆盖盘点见 [README 大表](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/README.zh-CN.md#模型--硬件测试覆盖)，
-包括已有记录、历史 / 局部和暂无结果的组合。各报告保留自己的工作负载与验证范围。
+最新 π0.5 动图与两组完整性能表见 [README](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/README.zh-CN.md#性能)及
+[π0.5 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md)。
+下方按工作负载提供各模型的详细报告与复现入口。
 
 ## 选择基准测试
 
