@@ -122,7 +122,7 @@ The bundled `nvfp4-nvfp4` calibration of `RLinf-Pi05-LIBERO-SFT` keeps every MLP
 towers in NVFP4 and changes two things relative to round-to-nearest packing of the checkpoint
 weights:
 
-- **SmoothQuant gate/up.** Every MLP packs its gate/up weights as W·s, with
+- **[SmoothQuant](https://proceedings.mlr.press/v202/xiao23c.html) gate/up.** Every MLP packs its gate/up weights as W·s, with
   s<sub>j</sub> = (a<sub>j</sub> / mean(a))<sup>0.5</sup> clamped to [0.25, 4], where a<sub>j</sub>
   is input channel j's range over 40 recorded LIBERO-spatial frames (tasks 0–3, initial state 10).
   The preceding norm divides its output by s, through the RMSNorm scale in the prefix and the AdaRMS

@@ -18,7 +18,17 @@ EmbodiInfer 可以运行视觉—语言—动作策略、世界动作模型和�
 通过 Python 与网络接口提供模型加载、批处理执行、CUDA graph 加速和有状态会话管理。
 可用的优化和 rollout 能力取决于所选策略。
 
-它可独立使用，也可配合 [EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun) 部署到机器人或仿真器。
+**从 EmbodiInfer 开始**选择模型、查看性能并运行推理；需要部署到机器人或仿真器时，
+使用 [EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun) 的一键案例、Recipe 与部署框架。
+
+## 演示、性能与部署
+
+| 内容 | 入口 |
+|---|---|
+| VLA · Thor / 4090 上的 π0.5 | [多引擎性能表、LIBERO 动图与成功率](pi05-performance.md) |
+| VLN · ActiveVLN / StreamVLN | [基准索引](benchmark.md) · [三引擎闭环录像](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/demos/activevln-engines.md) |
+| 一键部署案例与 Recipe | [EmbodiRun 场景与部署矩阵](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/README.zh-CN.md) |
+| 模型能力与路线图 | [支持矩阵](models.md#capabilities-and-installation) · [路线图](models.md#roadmap) |
 
 ## 从这里开始
 

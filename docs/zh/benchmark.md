@@ -2,6 +2,9 @@
 
 本页汇总离线推理、引擎优化和强化学习集成的性能结果，并提供测试配置与复现入口。
 
+模型 × 硬件覆盖盘点见 [README 大表](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/README.zh-CN.md#模型--硬件测试覆盖)，
+包括已有记录、历史 / 局部和暂无结果的组合。各报告保留自己的工作负载与验证范围。
+
 ## 选择基准测试
 
 | 目录 | 模型 | 默认数据 |
@@ -72,6 +75,59 @@ graph 执行下的表现。CPU 回退会走软件路径。若要测量模型吞�
 
 双 GPU 数据并行和张量并行的对比见
 [并行](parallelism.md) 页面。
+
+<a id="activevln-rlinf-integration"></a>
+
+## ActiveVLN / RLinf 集成
+
+**每训练步的 8 次批量推理调用合计（秒）**
+
+| 硬件 | Batch | SGLang（s） | EmbodiInfer（s） | 加速比 |
+|---|---:|---:|---:|---:|
+| 2× RTX 4090 | 2 | 2.255 | 0.872 | 2.59× |
+| 2× RTX 4090 | 4 | 3.148 | 1.259 | 2.50× |
+| 2× RTX 4090 | 8 | 4.789 | 2.057 | 2.33× |
+| 2× H20 | 2 | 1.654 | 0.639 | 2.59× |
+| 2× H20 | 4 | 2.358 | 1.043 | 2.26× |
+| 2× H20 | 8 | 4.125 | 1.916 | 2.15× |
+
+**完整 rollout（秒 / 训练步）**
+
+| 硬件 | Batch | SGLang（s） | EmbodiInfer（s） | 加速比 |
+|---|---:|---:|---:|---:|
+| 2× RTX 4090 | 2 | 5.001 | 3.484 | 1.44× |
+| 2× RTX 4090 | 4 | 6.690 | 4.944 | 1.35× |
+| 2× RTX 4090 | 8 | 10.878 | 7.987 | 1.36× |
+| 2× H20 | 2 | 3.392 | 2.322 | 1.46× |
+| 2× H20 | 4 | 5.292 | 3.707 | 1.43× |
+| 2× H20 | 8 | 9.404 | 7.576 | 1.24× |
+
+来源：[RLinf #1789](https://github.com/RLinf/RLinf/pull/1789)，下游提交
+[`d909549`](https://github.com/RLinf/RLinf/commit/d9095497b4f1eb2b5419a9ee63e725ca03df53f2)。
+`Arvil/Qwen2.5-VL-3B_rl_r2r_4000`、BF16，重复运行 R2R episode 1；
+一张 GPU 承担 actor / rollout，一张 GPU 负责 Habitat-Sim 渲染。
+预热后测量 5 个训练步并取均值；第一张表是每步 8 次调用合计，**不是单次请求延迟**。
+推理包括预处理、生成、输出打包和待应用权重；完整 rollout 另含环境交互与轨迹传输。
+收益包含运行时和下游集成的共同优化。
+
+该下游 PR 尚未合入；完整 HabitatLab 训练与收敛未验证，BF16 增量 / 全历史 logprob
+最大差 0.119415，超过 0.02 的验证门槛。
+
+### A800 · 独立的 GRPO 集成验证
+
+[EmbodiInfer #16](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/16) 记录了另一套工作负载：
+2×A800-SXM4-80GB，一卡 actor / rollout、另一卡 HabitatSim；BF16、同一 R2R 检查点，
+episode 1、2 环境、group size 2、8 turns、global batch 16、microbatch 1。
+每个后端 6 个 iteration，丢弃首个，统计后 5 个。
+
+| HF actor / rollout | 训练 iteration 均值 ± 样本标准差 | Rollout 阶段 | Actor 阶段 |
+|---|---:|---:|---:|
+| HF / SGLang | 20.64 ± 0.15 s | 15.27 s | 4.63 s |
+| HF / EmbodiInfer | 19.73 ± 0.41 s | 14.77 s | 4.43 s |
+
+使用外部 HabitatSim HTTP 验证桥，并非完整官方 HabitatLab/Ray 服务；轨迹不同，
+这些阶段耗时不证明 SR/SPL 或训练收敛等价。运行时版本 `f20e92e`。
+它与上面的 4090 / H20 表是独立实验。[完整配置与验证范围](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/16)。
 
 ## 各项优化与强化学习集成结果
 

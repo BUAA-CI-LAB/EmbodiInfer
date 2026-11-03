@@ -3,6 +3,10 @@
 Find benchmark results and commands for offline inference, engine optimizations,
 and RL integration. Each section describes the workload and timing method.
 
+See the [README model × hardware matrix](https://github.com/BUAA-CI-LAB/EmbodiInfer#model--hardware-benchmark-coverage)
+for reported, partial / historical and unmeasured combinations. Each report
+retains its own workload and validation scope.
+
 ## Entry points
 
 | Directory | Model | Default data |
@@ -91,6 +95,65 @@ For Qwen2.5-VL-3B and NaViDA CUDA-graph comparisons, see
 
 The two-GPU data-parallel and tensor-parallel comparison is on the
 [parallelism](parallelism.md) page.
+
+<a id="activevln-rlinf-integration"></a>
+
+## ActiveVLN / RLinf integration
+
+**Sum of 8 batched inference calls per training step (seconds)**
+
+| Hardware | Batch | SGLang (s) | EmbodiInfer (s) | Speedup |
+|---|---:|---:|---:|---:|
+| 2× RTX 4090 | 2 | 2.255 | 0.872 | 2.59× |
+| 2× RTX 4090 | 4 | 3.148 | 1.259 | 2.50× |
+| 2× RTX 4090 | 8 | 4.789 | 2.057 | 2.33× |
+| 2× H20 | 2 | 1.654 | 0.639 | 2.59× |
+| 2× H20 | 4 | 2.358 | 1.043 | 2.26× |
+| 2× H20 | 8 | 4.125 | 1.916 | 2.15× |
+
+**Full rollout (seconds per training step)**
+
+| Hardware | Batch | SGLang (s) | EmbodiInfer (s) | Speedup |
+|---|---:|---:|---:|---:|
+| 2× RTX 4090 | 2 | 5.001 | 3.484 | 1.44× |
+| 2× RTX 4090 | 4 | 6.690 | 4.944 | 1.35× |
+| 2× RTX 4090 | 8 | 10.878 | 7.987 | 1.36× |
+| 2× H20 | 2 | 3.392 | 2.322 | 1.46× |
+| 2× H20 | 4 | 5.292 | 3.707 | 1.43× |
+| 2× H20 | 8 | 9.404 | 7.576 | 1.24× |
+
+Source: [RLinf #1789](https://github.com/RLinf/RLinf/pull/1789), downstream snapshot
+[`d909549`](https://github.com/RLinf/RLinf/commit/d9095497b4f1eb2b5419a9ee63e725ca03df53f2).
+`Arvil/Qwen2.5-VL-3B_rl_r2r_4000`, BF16, repeated R2R episode 1;
+one GPU handles actor / rollout, the other Habitat-Sim rendering.
+Means over 5 measured training steps after warmup. The first table sums 8 calls
+per step; **it is not single-request latency**. Inference includes preprocessing,
+generation, output packing and pending weight application; full rollout also
+includes environment interaction and trajectory transfer. Gains include both
+runtime and downstream integration optimizations.
+
+The downstream PR remains unmerged. Full HabitatLab training and convergence
+are unvalidated; the BF16 incremental / full-history logprob check has maximum
+difference 0.119415, exceeding its 0.02 tolerance.
+
+### A800 · Separate GRPO integration validation
+
+[EmbodiInfer #16](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/16) records another workload:
+2×A800-SXM4-80GB, one GPU for actor / rollout and the other for HabitatSim, BF16,
+the same R2R checkpoint, episode 1, 2 environments, group size 2, 8 turns,
+global batch 16 and microbatch 1. Six iterations per backend, the first excluded,
+with statistics over the remaining five.
+
+| HF actor / rollout | Training iteration mean ± sample SD | Rollout phase | Actor phase |
+|---|---:|---:|---:|
+| HF / SGLang | 20.64 ± 0.15 s | 15.27 s | 4.63 s |
+| HF / EmbodiInfer | 19.73 ± 0.41 s | 14.77 s | 4.43 s |
+
+This uses an external HabitatSim HTTP validation bridge, rather than the complete
+official HabitatLab/Ray service. Trajectories differ; these stage times do not
+establish SR/SPL or convergence parity. Measured runtime: `f20e92e`.
+It is separate from the RTX 4090 / H20 experiment above.
+[Full configuration and validation scope](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/16).
 
 ## Engine mechanism and RL integration results
 
