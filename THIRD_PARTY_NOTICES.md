@@ -43,6 +43,30 @@ The Marlin-derived implementation retains Copyright (C) Marlin.2024 Elias Franta
 follows [IST-DASLab/Marlin](https://github.com/IST-DASLab/marlin); calibrated
 codes are loaded from external artifacts and never regenerated at deployment.
 
+## Quantization and benchmark references
+
+The Thor Pi05 NVFP4 calibration adapts the channel-scaling method of
+Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth and Song Han,
+[SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models](https://proceedings.mlr.press/v202/xiao23c.html),
+ICML 2023. The [upstream implementation](https://github.com/mit-han-lab/smoothquant)
+is a method reference; EmbodiInfer's NVFP4 packing and BF16 outlier-channel bypass
+are described in its Pi05 performance report.
+
+The Pi05 multi-engine comparison uses the external
+[FlashRT](https://github.com/flashrt-project/FlashRT) v0.2.0 benchmark
+`examples/thor/pi05.py`. EmbodiInfer's `flashrt_harness.py` imports the user's
+separate FlashRT checkout and substitutes loading and per-call inference.
+The benchmark's inputs, seeded noise, timing loop and reporting follow FlashRT.
+We thank FlashRT and the comparison projects
+[APXinf](https://github.com/infinigence/ApxInf),
+[Embodied.cpp](https://github.com/SEU-PAISys/Embodied.cpp),
+[OpenPI](https://github.com/Physical-Intelligence/openpi),
+[LeRobot](https://github.com/huggingface/lerobot),
+[SGLang](https://github.com/sgl-project/sglang) and
+[vLLM](https://github.com/vllm-project/vllm).
+Their code, checkpoints and datasets retain their upstream licenses; the report
+records the measured versions and settings.
+
 ## Kernel tuning workflow references
 
 The operator tuning workflow in `scripts/kernel_tuning/` and its evaluator in

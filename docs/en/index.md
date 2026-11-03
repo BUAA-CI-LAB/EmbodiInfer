@@ -20,8 +20,18 @@ CUDA graph acceleration, and recurrent state management through Python and
 network interfaces. Available optimizations and rollout features depend on the
 selected policy.
 
-It is the sibling of [EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun), the
-deployment and execution runtime, and can also be used on its own.
+**Start with EmbodiInfer** to choose a model, inspect measurements and run inference.
+Use [EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun) for one-command examples,
+Recipes and deployment to robots or simulators.
+
+## Demos, measurements and deployment
+
+| Content | Start here |
+|---|---|
+| VLA · π0.5 on Thor / RTX 4090 | [Engine comparison, LIBERO animations and success rates](pi05-performance.md) |
+| VLN · ActiveVLN / StreamVLN | [Benchmark index](benchmark.md) · [Three-engine closed-loop film](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/en/demos/activevln-engines.md) |
+| One-command examples and Recipes | [EmbodiRun scenarios and deployment matrix](https://github.com/BUAA-CI-LAB/EmbodiRun) |
+| Model coverage and roadmap | [Capability matrix](models.md#capabilities-and-installation) · [Roadmap](models.md#roadmap) |
 
 ## Choose a path
 

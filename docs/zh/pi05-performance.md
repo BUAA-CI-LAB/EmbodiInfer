@@ -115,7 +115,7 @@ the plate"），每次从同一初始状态出发，每个控制步都重新决�
 内置的 `RLinf-Pi05-LIBERO-SFT` `nvfp4-nvfp4` 校准让两个塔的所有 MLP 投影都保持 NVFP4，相比直接对
 checkpoint 权重做就近舍入打包，改动有两处：
 
-- **gate/up 的 SmoothQuant。** 每个 MLP 的 gate/up 权重按 W·s 打包，
+- **gate/up 的 [SmoothQuant](https://proceedings.mlr.press/v202/xiao23c.html)。** 每个 MLP 的 gate/up 权重按 W·s 打包，
   s<sub>j</sub> = (a<sub>j</sub> / mean(a))<sup>0.5</sup> 并截断到 [0.25, 4]，a<sub>j</sub> 是输入通道 j
   在 40 帧 LIBERO-spatial 录制画面（任务 0–3、初始状态 10）上的取值范围。前一层 norm 的输出相应除以
   s：prefix 通过 RMSNorm 的 scale，action expert 通过 AdaRMS 投影。只改变打包后的权重，kernel 不变。

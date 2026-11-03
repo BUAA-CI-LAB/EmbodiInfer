@@ -7,7 +7,9 @@
   <a href="https://embodiinfer.readthedocs.io/zh-cn/latest/">文档</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#支持的模型">模型</a> ·
+  <a href="#演示">演示</a> ·
   <a href="#性能">性能</a> ·
+  <a href="#部署与-recipe">部署 / Recipe</a> ·
   <a href="README.md">English</a>
 </p>
 
@@ -20,11 +22,153 @@
 **EmbodiInfer 是面向具身模型的推理与 RL rollout 引擎。** 通过统一 Python 接口运行操作策略、世界动作模型和有状态导航策略，
 结合模型专用优化与共享的批处理、会话和多 GPU 执行能力。
 
-它可以嵌入应用或训练器，也可以向 [EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun) 提供预测，由后者负责机器人部署与执行。
+**从 EmbodiInfer 开始：** 查看模型、性能与 Python / 服务接口；需要连接机器人或仿真器时，
+使用 [EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/README.zh-CN.md) 的一键部署案例、Recipe 与部署框架。
 
-![应用、RL 训练器和 EmbodiRun 通过共享引擎调用各模型的策略适配器](docs/assets/engine-overview.svg)
+## 演示
+
+### π0.5 · Jetson AGX Thor
+
+[![Thor 上 OpenPI、FlashRT 与 EmbodiInfer 的 LIBERO 闭环对比](docs/assets/pi05/libero-thor-comparison.webp)](benchmarks/pi05-benchmark/README.md)
+
+OpenPI BF16、FlashRT NVFP4 与 EmbodiInfer `nvfp4-nvfp4`，LIBERO-spatial 任务 0。
+**2× 播放**，画面计时为真实时间；三个引擎均完成该次任务。
+[原视频与测试条件](benchmarks/pi05-benchmark/README.md)。
+
+### π0.5 · RTX 4090
+
+[![4090 上 OpenPI、FlashRT 与 EmbodiInfer 的 LIBERO 闭环对比](docs/assets/pi05/libero-4090-comparison.webp)](benchmarks/pi05-benchmark/README.md)
+
+OpenPI BF16、FlashRT FP8 与 EmbodiInfer `fp8-fp8`，任务 6 / 初始状态 2，
+均为 10 步去噪、各自独占 GPU。**1× 原速**；三个引擎均完成该次任务。
+[原视频与测试条件](benchmarks/pi05-benchmark/README.md)。
+
+## 性能
+
+### π0.5 · Thor / RTX 4090 多引擎对比
+
+| 设备 | 精度档 | EmbodiInfer 预设 | EmbodiInfer | FlashRT | APXinf | Embodied.cpp | OpenPI |
+|---|---|---|---:|---:|---:|---:|---:|
+| Jetson AGX Thor | FP4 | `nvfp4-nvfp4` | **20.04**（49.9 Hz） | 21.07 | — | — | — |
+| Jetson AGX Thor | FP8 | `fp8-fp8` | **33.60**（29.8 Hz） | 40.70 | 40.88 | — | — |
+| Jetson AGX Thor | 16 位 | `bf16` | **61.63**（16.2 Hz） | 69.24（FP16） | 67.12 | 223.97 | 261.18 |
+| RTX 4090 | 8 位 | `fp8-fp8` | **17.06**（58.6 Hz） | 22.06 | 40.62（INT8） | — | — |
+| RTX 4090 | 16 位 | `bf16` | **30.08**（33.2 Hz） | 31.93（FP16） | 32.06 | 57.48 | — |
+
+单位 **ms**，括号内为 EmbodiInfer 的推理频率。使用 FlashRT v0.2.0 的
+`examples/thor/pi05.py`，同一 `RLinf-Pi05-LIBERO-SFT` 权重、
+B=1、双路 224×224 相机、10 步去噪、动作长度 10。
+每轮预热 200 次、计时 1,000 次，取 **3 轮交替运行的 P50 平均值**；
+Thor FP4 为另一次同设置的交替运行。Thor 使用 MAXN 并锁频，4090 使用默认频率。
+[完整配置与复现](benchmarks/pi05-benchmark/README.md)。
+
+### π0.5 · RTX 4090 LIBERO-spatial 官方评测
+
+| 配置 | 去噪步数 | 成功率 | 延迟 P50 | 频率 |
+|---|---|---:|---:|---:|
+| OpenPI · PyTorch BF16 | 10 | 494/500 · 98.8% | — | — |
+| **EmbodiInfer · `fp8-fp8`** | **2，ρ = 3** | **495/500 · 99.0%** | **13.34 ms** | **75.0 Hz** |
+| EmbodiInfer · `fp8-fp8` | 3，ρ = 1 | 495/500 · 99.0% | 13.79 ms | 72.5 Hz |
+| EmbodiInfer · `fp8-fp8` | 2，ρ = 1 | 491/500 · 98.2% | 13.33 ms | 75.0 Hz |
+| EmbodiInfer · `fp8-fp8` | 3，ρ = 2 | 490/500 · 98.0% | 13.80 ms | 72.5 Hz |
+| EmbodiInfer · `fp8-fp8` | 4，ρ = 1 | 489/500 · 97.8% | 14.21 ms | 70.4 Hz |
+
+使用 OpenPI 官方 `pi05_libero` 权重与未修改的官方评测入口，
+**10 个任务 × 50 次，共 500 次**，每次执行动作块的前 5 步。
+ρ 为 flow 时间网格参数；少步配置沿用训练好的权重。
+本表使用该权重自己的 FP8 标定，与上表的 RLinf 权重分开记录；
+延迟由空闲 GPU 上的 `libero/latency.py` 测得，上面的录像均为 10 步去噪。
+[评测、标定与完整结果](benchmarks/pi05-benchmark/README.md)。
+
+Thor NVFP4 的通道缩放借鉴 [SmoothQuant](https://proceedings.mlr.press/v202/xiao23c.html)；
+30 次任务 0 评测成功 25/30，FlashRT NVFP4 为 26/30。
+[Thor 校准与评测](docs/zh/pi05-performance.md)。
+
+## 支持的模型
+
+✓ 已实现 · ◐ 实验性 · ○ 计划支持；具体检查点与验证范围见[模型参考](docs/zh/models.md)。
+
+| 类别 | 模型 | Python 推理 | HTTP / WirelessComm | 能力与限制 |
+|---|---|---|---|---|
+| VLA | π0.5 | ✓ | ✓ | 跨会话批处理；BF16 / 设备专用量化预设；RL decoder。 |
+| VLA | GR00T N1.7 | ✓ | — | 批处理与 RL decoder；使用基准专用环境。 |
+| VLA | OpenVLA-OFT | ✓ | — | 单次 forward 动作解码与 RL decoder。 |
+| VLA | LingBot-VLA | ✓ | — | Flow matching 与 RL decoder。 |
+| VLA | DM0.5 | ✓ | ✓ | 需独立 OpenDM 环境；网络服务保持 B=1。 |
+| VLN | StreamVLN | ✓ | ✓ | 循环历史；专用张量批处理；通用网络服务保持 B=1。 |
+| VLN | Qwen R2R low / panoramic · NaViDA | ✓ | — | 显式循环会话与策略专用解码。 |
+| VLN | ActiveVLN | ◐ | — | 专用循环 / 张量批处理 API；通用服务适配仍待合入，真实权重 GPU parity 待完成。 |
+| 世界动作 | Cosmos Policy | ✓ | — | 扩散动作生成与候选规划；不提供通用 RL decoder。 |
+| 计划 | SmolVLA · OpenVLA 基础模型 | ○ | ○ | 模型适配、输入处理与服务接入待实现。 |
+
+`—` 表示无通用网络适配器；部署案例的专用服务不等同于通用服务支持。
+[完整能力、依赖与安装矩阵](docs/zh/models.md#capabilities-and-installation) ·
+[模型路线图](docs/zh/models.md#roadmap)。
+
+## 快速开始
+
+### 无需权重的首次运行
+
+使用 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/) 0.12.x：
+
+```bash
+git clone https://github.com/BUAA-CI-LAB/EmbodiInfer.git
+cd EmbodiInfer
+uv sync --frozen
+uv run python examples/quickstart.py
+```
+
+示例可在 CPU 上运行，使用合成策略演示单条和批量请求，并打印动作形状，无需下载模型权重。
+Linux lock 包含 CUDA 版 Torch，CPU 主机的安装下载量也可能较大。
+
+### 加载 π0.5
+
+使用 CUDA GPU 和 π0.5 专用 profile：
+
+```bash
+uv sync --python 3.12 --frozen --no-dev --group pi05
+uv run --no-sync python examples/pi05_inference.py \
+  --ckpt lerobot/pi05_base --envs 1
+```
+
+该示例加载真实权重，但输入仍为合成观测，用来演示引擎 API。
+真实图像与状态接入见[服务教程](docs/zh/serving.md#send-your-first-observation)。
+
+### 选择接入方式
+
+| 用途 | 接口 | 入口 |
+|---|---|---|
+| 在应用内推理 | `EmbodiInfer.act(observation)` 或 `EmbodiInfer.act(observations)` | [Python API](docs/zh/api.md) |
+| 为机器人运行时提供网络推理 | HTTP / WirelessComm 会话 | [服务与首次观测请求](docs/zh/serving.md) |
+| RL rollout 与权重更新 | Rollout / refit 接口 | [RL 集成](docs/zh/api.md#generating-rl-rollouts) |
+| 多 GPU 执行 | 数据并行 / 张量并行 | [并行指南](docs/zh/parallelism.md) |
+
+多个客户端共享 π0.5 服务时，为 HTTP 或 WirelessComm 启动器添加
+`--max-batch 3 --max-wait-ms 5`。独立会话的请求可组成最多三个请求的批次；
+5 ms 收集窗口结束时，未满批次也会执行。该窗口不包括排队和推理时间。
+配置步骤见[服务指南](docs/zh/serving.md#多客户端批处理-share-one-service-across-clients)。
+
+发行包名为 `embodiinfer`；Python import、`embodiinfer-*` 命令行入口与 `embodiinfer.policy.*` 通信 schema 统一使用同一命名。
+
+## 部署与 Recipe
+
+[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/README.zh-CN.md) 提供一键案例入口与部署框架。
+按 Recipe 准备检查点、场景或硬件后，使用统一的 `embodirun example` 命令完成配置、检查、启动与停止。
+
+| 场景 | 部署入口 | 当前状态 |
+|---|---|---|
+| VLA · SO-101 / π0.5 | [抓取 Recipe](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/examples/so101_grasping.md) · [多后端对比](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/examples/engine_comparison/README.md) | 已有真机录像；按检查点与硬件配置。 |
+| VLN · MicroDuck / MuJoCo | [导航 Recipe](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/examples/microduck_vln/README.md) | 专用仿真 Recipe，需准备场景、模型与 GPU。 |
+| VLN · Habitat / 三引擎 | [录像与配置](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/demos/activevln-engines.md) | 实验性；可复用 vLLM 封装入口的 GPU 验证待完成。 |
+| VLN · Go2 / ActiveVLN | [真机演示](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/demos/go2-activevln.md) | 已有录像；适配实现仍在 [Run #13](https://github.com/BUAA-CI-LAB/EmbodiRun/pull/13)。 |
+| Agent · XLeRobot | [移动抓取 Recipe](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/examples/xlerobot_snack_delivery/README.md) | 软件演练与监督下硬件流程。 |
+
+[完整覆盖矩阵与路线图](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/support-matrix.md) ·
+[全部 Recipe](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/examples/README.md)。
 
 ## 为什么选择 EmbodiInfer？
+
+![应用、RL 训练器和 EmbodiRun 通过共享引擎调用各模型的策略适配器](docs/assets/engine-overview.svg)
 
 优化模型执行路径，让机器人推理与 RL rollout 共用一套引擎。
 
@@ -76,124 +220,7 @@
 根据策略与硬件在[能力参考](docs/zh/models.md#capabilities-and-installation)中选择配置。
 适配器负责模型专用优化，共享调度器保持模型无关。
 
-**Agent 调优 kernel：** 由 coding agent 针对特定 GPU 和软件栈调优算子 kernel。在 Jetson AGX Orin 上，其他条件相同时，
-`orin_pi05_r2` profile 将 π0.5 的延迟从手写 kernel 的 396.6 ms 降到 **302.0 ms**（BF16，batch size 1；
-[测量条件](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16)、[示例](examples/pi05_inference.py)）。
-[调优工作流](docs/proposals/0008-kernel-tuning.md)目前是面向开发者的工具，已接入 π0.5，后续将支持用户针对自己的硬件和环境调优。其设计借鉴了
-[NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda)（[致谢说明](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)）。
-
-## 性能
-
-### 单张 RTX 4090 上的延迟优化
-
-与原有 EmbodiInfer 路径相比，原生推理优化将 **π0.5 的平均端到端延迟降低 47.7%**，
-将 **GR00T N1.7 的平均端到端延迟降低 31.2%**：
-
-| 策略 | 优化前 | 优化后 | 优化后吞吐 |
-|---|---:|---:|---:|
-| [π0.5](benchmarks/pi05-benchmark/README.md#其他平台与早期结果) | 74.33 ms | **38.89 ms** | **25.71 observations/s** |
-| [GR00T N1.7](benchmarks/gr00t-benchmark/README.md#4090-原生优化2026-09-09) | 45.51 ms | **31.30 ms** | **31.95 observations/s** |
-
-测量日期为 2026 年 9 月 9 日，使用 RTX 4090、BF16、batch size 1，每个模型回放 1,600 条 LIBERO-10 观测。
-π0.5 使用 `pi05_libero_finetuned_v044_gitcode` 和 10 步去噪；GR00T 使用 `nvidia/GR00T-N1.7-LIBERO` 和 4 步去噪。
-优化前后均开启 Inductor 和去噪 CUDA graph。基线使用 SDPA；优化路径增加原生推理与 prefix graph，
-π0.5 的 prefix 与去噪 attention 使用 Triton，GR00T 使用 SDPA。
-
-使用 10 条跨任务观测预热后，计时从已解码 CPU 观测到 CPU 动作输出。上面的报告包含权重详情、环境、命令、数值检查及 batch 扫描。
-在同一 GPU 上，优化后的 GR00T 在 **batch size 32** 时达到 **59.33 observations/s**。
-
-更多结果：[导航与世界动作模型](docs/zh/benchmark.md)、[π0.5 量化](benchmarks/pi05-quant-benchmark/README.md)、
-[StreamVLN 量化](benchmarks/streamvln-quant-benchmark/README.md)、[多 GPU](docs/zh/parallelism.md)。
-
-[ActiveVLN 的 EmbodiInfer/vLLM 对比](benchmarks/activevln-benchmark/README.md#feature-matched-embodiinfer-and-vllm-comparison)
-覆盖 R2R/RxR、batch=1/2/4，分别列出 E2E、完整 forward 与均摊耗时。
-闭环导航结果按 [RTX 4090](benchmarks/activevln-benchmark/rtx-4090/README.md) 和
-[Orin NX](benchmarks/activevln-benchmark/orin-nx/README.md) 整理。
-
-## 支持的模型
-
-✓ **已实现** · ◐ **实验性** · ○ **计划支持**
-
-<table>
-<tr>
-<th align="left">🦾 操作策略</th>
-<th align="left">🧭 导航策略</th>
-<th align="left">🌐 世界动作模型</th>
-</tr>
-<tr>
-<td valign="top">
-<p>✓ <b>π0.5</b><br>✓ <b>GR00T N1.7</b><br>✓ <b>OpenVLA-OFT</b><br>✓ <b>LingBot-VLA</b><br>✓ <b>DM0.5</b></p>
-<p>操作任务的动作预测<br>与 RL decoder 接口。</p>
-</td>
-<td valign="top">
-<p>✓ <b>StreamVLN</b><br>✓ <b>Qwen R2R</b> · low / panoramic<br>✓ <b>NaViDA</b><br>◐ ActiveVLN</p>
-<p>Episode 历史管理<br>与有状态推理。</p>
-</td>
-<td valign="top">
-<p>✓ <b>Cosmos Policy</b></p>
-<p>基于扩散的动作生成<br>与候选规划。</p>
-</td>
-</tr>
-</table>
-
-**网络服务：** π0.5、DM0.5、StreamVLN 支持 HTTP / WirelessComm。
-π0.5 支持通过 `--max-batch` 开启跨会话批处理，默认值为 1；
-DM0.5 与 StreamVLN 当前逐请求执行，须保持 `--max-batch 1`。
-各类模型均提供 Python 入口。[能力参考](docs/zh/models.md#capabilities-and-installation)列出批处理、CUDA graph、
-RL 接口和环境要求。ActiveVLN 真实检查点的 GPU parity 仍待验证。
-
-### 计划支持的模型
-
-- [ ] **SmolVLA** — 模型适配、输入处理与网络服务接入。
-- [ ] **OpenVLA** — 原始模型推理，与 OpenVLA-OFT 分开实现。
-
-实现步骤见[模型路线图](docs/zh/models.md#roadmap)，机器人和仿真器接入见
-[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/zh/support-matrix.md)。
-
-## 快速开始
-
-### 无需权重的首次运行
-
-使用 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/) 0.12.x：
-
-```bash
-git clone https://github.com/BUAA-CI-LAB/EmbodiInfer.git
-cd EmbodiInfer
-uv sync --frozen
-uv run python examples/quickstart.py
-```
-
-示例可在 CPU 上运行，使用合成策略演示单条和批量请求，并打印动作形状，无需下载模型权重。
-Linux lock 包含 CUDA 版 Torch，CPU 主机的安装下载量也可能较大。
-
-### 加载 π0.5
-
-使用 CUDA GPU 和 π0.5 专用 profile：
-
-```bash
-uv sync --python 3.12 --frozen --no-dev --group pi05
-uv run --no-sync python examples/pi05_inference.py \
-  --ckpt lerobot/pi05_base --envs 1
-```
-
-该示例加载真实权重，但输入仍为合成观测，用来演示引擎 API。
-真实图像与状态接入见[服务教程](docs/zh/serving.md#send-your-first-observation)。
-
-### 选择接入方式
-
-| 用途 | 接口 | 入口 |
-|---|---|---|
-| 在应用内推理 | `EmbodiInfer.act(observation)` 或 `EmbodiInfer.act(observations)` | [Python API](docs/zh/api.md) |
-| 为机器人运行时提供网络推理 | HTTP / WirelessComm 会话 | [服务与首次观测请求](docs/zh/serving.md) |
-| RL rollout 与权重更新 | Rollout / refit 接口 | [RL 集成](docs/zh/api.md#generating-rl-rollouts) |
-| 多 GPU 执行 | 数据并行 / 张量并行 | [并行指南](docs/zh/parallelism.md) |
-
-多个客户端共享 π0.5 服务时，为 HTTP 或 WirelessComm 启动器添加
-`--max-batch 3 --max-wait-ms 5`。独立会话的请求可组成最多三个请求的批次；
-5 ms 收集窗口结束时，未满批次也会执行。该窗口不包括排队和推理时间。
-配置步骤见[服务指南](docs/zh/serving.md#多客户端批处理-share-one-service-across-clients)。
-
-发行包名为 `embodiinfer`；Python import、`embodiinfer-*` 命令行入口与 `embodiinfer.policy.*` 通信 schema 统一使用同一命名。
+**Agent 调优 kernel：** [π0.5 开发者工作流](docs/proposals/0008-kernel-tuning.md)支持算子捕获、校准与调优，设计借鉴 [NVIDIA KDA](https://github.com/NVlabs/kda)。面向用户的自动硬件 / 环境调优仍在规划中。
 
 ## 文档
 
@@ -207,11 +234,48 @@ uv run --no-sync python examples/pi05_inference.py \
 | 了解模型能力 | [模型](docs/zh/models.md) |
 | 评估性能 | [基准](docs/zh/benchmark.md) |
 
+### 路线图
+
+| 方向 | 状态与后续工作 |
+|---|---|
+| 原生推理与设备预设 | π0.5 Thor / 4090 与 LIBERO 评测已合入；其他模型与平台按基准逐项扩展。 |
+| ActiveVLN 通用服务 | [#19](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/19) / [#20](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/20) 仍为 Draft，通用服务待合入；专用 API 与录像可查阅。 |
+| 新模型 | SmolVLA、OpenVLA 基础模型的适配与数值验证。 |
+| Agent 算子调优 | 已有 π0.5 开发者工作流；面向用户的自动硬件 / 环境调优待实现。 |
+| 部署案例 | 在 EmbodiRun 完善 Go2 等 Recipe、独立部署验证与扩展性测量。 |
+
 ## 参与贡献
 
 开发流程、模型接入与数值验证要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 问题与建议请提交 [GitHub issue](https://github.com/BUAA-CI-LAB/EmbodiInfer/issues)，
 漏洞请按 [SECURITY.md](SECURITY.md) 私下报告。社区遵循[行为准则](CODE_OF_CONDUCT.md)。
+
+## 致谢与引用
+
+- **量化方法：** 感谢 Guangxuan Xiao 等人的
+  [SmoothQuant（ICML 2023）](https://proceedings.mlr.press/v202/xiao23c.html) 与
+  [开源实现](https://github.com/mit-han-lab/smoothquant)。Thor NVFP4 校准借鉴其通道缩放方法，
+  并结合本项目的 NVFP4 打包与 BF16 离群通道旁路；[实现与测量](docs/zh/pi05-performance.md)分别说明。
+- **基准与参考引擎：** 感谢 [FlashRT](https://github.com/flashrt-project/FlashRT)
+  提供开源 VLA 推理与 PI0.5 测速流程；本项目多引擎表使用其 v0.2.0 harness。
+  感谢 [APXinf](https://github.com/infinigence/ApxInf)、
+  [Embodied.cpp](https://github.com/SEU-PAISys/Embodied.cpp)、
+  [OpenPI](https://github.com/Physical-Intelligence/openpi)、
+  [LeRobot](https://github.com/huggingface/lerobot)、
+  [SGLang](https://github.com/sgl-project/sglang) 与 [vLLM](https://github.com/vllm-project/vllm)
+  提供模型参考与对照实现。
+- **模型、数据与算子生态：** 感谢上游模型作者、
+  [LIBERO](https://github.com/Lifelong-Robot-Learning/LIBERO)、
+  [Habitat](https://github.com/facebookresearch/habitat-lab)、
+  [RLinf](https://github.com/RLinf/RLinf)、
+  [PyTorch](https://github.com/pytorch/pytorch)、[Triton](https://github.com/triton-lang/triton)、
+  [CUTLASS](https://github.com/NVIDIA/cutlass)、
+  [FlashAttention](https://github.com/Dao-AILab/flash-attention)、
+  [FlashInfer](https://github.com/flashinfer-ai/flashinfer) 与
+  [NVIDIA KDA](https://github.com/NVlabs/kda)。
+
+各项目具体用途、派生代码与许可证归属见[第三方声明](THIRD_PARTY_NOTICES.md)；
+性能比较对应表中固定版本与配置。
 
 ## 许可证
 

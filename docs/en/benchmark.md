@@ -3,15 +3,28 @@
 Find benchmark results and commands for offline inference, engine optimizations,
 and RL integration. Each section describes the workload and timing method.
 
+The latest π0.5 animations and two complete result tables are in the
+[README](https://github.com/BUAA-CI-LAB/EmbodiInfer#performance) and
+[π0.5 benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md).
+Find detailed model reports and reproduction commands by workload below.
+
 ## Entry points
 
-| Directory | Model | Default data |
+| Directory / workflow | Model | Workload and reports |
 |---|---|---|
-| [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | First 48 episodes each of R2R/RxR, full-frame replay |
-| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | First 48 episodes each of R2R/RxR, full-frame replay; E2E and model-forward timing |
-| [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | PI0.5 | LIBERO-10, 1,600 frames |
-| [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen low / panoramic / NaViDA | First 48 episodes each of R2R/RxR, 4 frames per segment |
-| [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | The same LIBERO-10 as PI0.5, 1,600 frames |
+| [pi05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md) | π0.5 | FlashRT harness, Thor / RTX 4090 presets and LIBERO closed loop; historical replay retained |
+| [gr00t-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md) | GR00T N1.7 | LIBERO-10, 1,600 observations; RTX 4090 native optimization / batching and historical Thor baseline |
+| [openvla-oft-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/openvla-oft-benchmark/README.md) | OpenVLA-OFT | LIBERO-10, 1,600 observations; categorical action-token checkpoint |
+| [lingbot-vla-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/lingbot-vla-benchmark/README.md) | LingBot-VLA | RoboTwin2.0, 1,600 observations; three cameras and dual-arm joints |
+| [dm05-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/dm05-benchmark/README.md) | DM0.5 | LIBERO-10, 1,600 observations; separately prepared OpenDM environment |
+| [cosmos-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/cosmos-benchmark/README.md) | Cosmos Policy | LIBERO-10, 1,600 observations; action generation / candidate planning |
+| [streamvln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/README.md) | StreamVLN | R2R / RxR replay, fixed 128 first frames and retained closed-loop reports |
+| [activevln-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) | ActiveVLN | R2R / RxR replay, native engine comparisons, first frames and closed-loop reports |
+| [qwenvl-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/qwenvl-benchmark/README.md) | Qwen R2R low / panoramic · NaViDA | First 48 R2R / RxR episodes, 4 recorded frames per episode |
+| [3B-navigation](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/3B-navigation/README.md) | Qwen R2R low / panoramic · NaViDA | Real-image full-policy / kernel / compile-cache experiments; individual correctness gates |
+| [pi05-quant-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-quant-benchmark/README.md) | π0.5 | Historical B=1 LIBERO replay by device and precision; distinct from the newer FlashRT harness |
+| [streamvln-quant-benchmark](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-quant-benchmark/README.md) | StreamVLN | B=1 full R2R / RxR replay by device and precision |
+| [kernel tuning](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/docs/proposals/0008-kernel-tuning.md) | Registry operators / π0.5 | Operator capture, numerical calibration, tuning and profiling; developer workflow |
 
 PI0.5 on Jetson AGX Thor and RTX 4090 against FlashRT, APXinf, Embodied.cpp and OpenPI, with a
 LIBERO closed-loop film, is on [PI0.5 on Thor and RTX 4090](pi05-performance.md).
@@ -29,6 +42,10 @@ ActiveVLN uses the existing `activevln` dependency group. In each directory,
 + CUDA Graph. Each README gives the exact run command.
 
 ## Recorded offline results
+
+**Historical aggregate:** the table below preserves the fixed September 7, 2026 report.
+It is not a current leaderboard. Later model baselines, native optimizations and
+quantization results are linked in the complete index above.
 
 <!-- offline-results:start -->
 The following measurements were taken on September 7, 2026, using a Jetson AGX
@@ -53,6 +70,27 @@ Per-directory READMEs include latency percentiles, output throughput, peak memor
 load and warmup time, and graph-replay status. The table compares the two platforms
 at B=1 with their respective Torch CUDA builds and drivers.
 <!-- offline-results:end -->
+
+<a id="coverage-gaps"></a>
+
+## Coverage gaps
+
+These experiments remain unmeasured or incomplete in the published reports.
+The README matrix and report index inventory available evidence; they do not
+mean these gaps were filled.
+
+| Area | Available evidence | Remaining work |
+|---|---|---|
+| GR00T / Thor | [RTX 4090 native optimization and historical Thor baseline](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/gr00t-benchmark/README.md) | Retest the native optimization on Thor; device-specific precision experiments. |
+| OpenVLA-OFT / LingBot-VLA / Cosmos / DM0.5 | Historical Thor / RTX 4090 BF16 baselines in the model reports above | Optimized paths, applicable quantization profiles and matched reference-engine comparisons. |
+| VLA models other than π0.5 | Mainly Thor / RTX 4090, with some H200 mechanism / RL validation | Model-level measurements on AGX Orin, Orin NX and DGX Spark. |
+| StreamVLN | Recorded subsets on [Thor](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/thor/README.md), [RTX 4090](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/rtx-4090/README.md) and [NX](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/streamvln-benchmark/orin-nx/README.md) | Thor RxR and more closed-loop batch sizes; NX first frames; remaining quantization-suite profiles. |
+| ActiveVLN | [Benchmark index](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/activevln-benchmark/README.md) and RLinf experiments below | NX first frames / RxR closed loop; Thor RxR / batched closed loops; RxR B=4 memory limits; full training, convergence and the pending logprob consistency check. |
+| Qwen R2R low / panoramic · NaViDA | Thor / RTX 4090 replay, 3B experiments and A800 DP/TP | Orin platforms, quantization and larger batches; the NaViDA graph path that fails its correctness gate is not an admitted optimization. |
+
+New models and deployment work are tracked in the [model roadmap](models.md#roadmap)
+and [EmbodiRun coverage and roadmap](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/en/support-matrix.md).
+Orin FP8 / FP4 and RTX 4090 FP4 are outside the current hardware profiles.
 
 ## Reproducing a result
 
@@ -91,6 +129,65 @@ For Qwen2.5-VL-3B and NaViDA CUDA-graph comparisons, see
 
 The two-GPU data-parallel and tensor-parallel comparison is on the
 [parallelism](parallelism.md) page.
+
+<a id="activevln-rlinf-integration"></a>
+
+## ActiveVLN / RLinf integration
+
+**Sum of 8 batched inference calls per training step (seconds)**
+
+| Hardware | Batch | SGLang (s) | EmbodiInfer (s) | Speedup |
+|---|---:|---:|---:|---:|
+| 2× RTX 4090 | 2 | 2.255 | 0.872 | 2.59× |
+| 2× RTX 4090 | 4 | 3.148 | 1.259 | 2.50× |
+| 2× RTX 4090 | 8 | 4.789 | 2.057 | 2.33× |
+| 2× H20 | 2 | 1.654 | 0.639 | 2.59× |
+| 2× H20 | 4 | 2.358 | 1.043 | 2.26× |
+| 2× H20 | 8 | 4.125 | 1.916 | 2.15× |
+
+**Full rollout (seconds per training step)**
+
+| Hardware | Batch | SGLang (s) | EmbodiInfer (s) | Speedup |
+|---|---:|---:|---:|---:|
+| 2× RTX 4090 | 2 | 5.001 | 3.484 | 1.44× |
+| 2× RTX 4090 | 4 | 6.690 | 4.944 | 1.35× |
+| 2× RTX 4090 | 8 | 10.878 | 7.987 | 1.36× |
+| 2× H20 | 2 | 3.392 | 2.322 | 1.46× |
+| 2× H20 | 4 | 5.292 | 3.707 | 1.43× |
+| 2× H20 | 8 | 9.404 | 7.576 | 1.24× |
+
+Source: [RLinf #1789](https://github.com/RLinf/RLinf/pull/1789), downstream snapshot
+[`d909549`](https://github.com/RLinf/RLinf/commit/d9095497b4f1eb2b5419a9ee63e725ca03df53f2).
+`Arvil/Qwen2.5-VL-3B_rl_r2r_4000`, BF16, repeated R2R episode 1;
+one GPU handles actor / rollout, the other Habitat-Sim rendering.
+Means over 5 measured training steps after warmup. The first table sums 8 calls
+per step; **it is not single-request latency**. Inference includes preprocessing,
+generation, output packing and pending weight application; full rollout also
+includes environment interaction and trajectory transfer. Gains include both
+runtime and downstream integration optimizations.
+
+The downstream PR remains unmerged. Full HabitatLab training and convergence
+are unvalidated; the BF16 incremental / full-history logprob check has maximum
+difference 0.119415, exceeding its 0.02 tolerance.
+
+### A800 · Separate GRPO integration validation
+
+[EmbodiInfer #16](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/16) records another workload:
+2×A800-SXM4-80GB, one GPU for actor / rollout and the other for HabitatSim, BF16,
+the same R2R checkpoint, episode 1, 2 environments, group size 2, 8 turns,
+global batch 16 and microbatch 1. Six iterations per backend, the first excluded,
+with statistics over the remaining five.
+
+| HF actor / rollout | Training iteration mean ± sample SD | Rollout phase | Actor phase |
+|---|---:|---:|---:|
+| HF / SGLang | 20.64 ± 0.15 s | 15.27 s | 4.63 s |
+| HF / EmbodiInfer | 19.73 ± 0.41 s | 14.77 s | 4.43 s |
+
+This uses an external HabitatSim HTTP validation bridge, rather than the complete
+official HabitatLab/Ray service. Trajectories differ; these stage times do not
+establish SR/SPL or convergence parity. Measured runtime: `f20e92e`.
+It is separate from the RTX 4090 / H20 experiment above.
+[Full configuration and validation scope](https://github.com/BUAA-CI-LAB/EmbodiInfer/pull/16).
 
 ## Engine mechanism and RL integration results
 
