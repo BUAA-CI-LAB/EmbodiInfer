@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Optional repository-only Humanize2 kernel tuning environment"
 requires-python = ">=3.12"
 dependencies = [
-    "hmz @ https://github.com/humanfia/humanize/archive/b70d4427f11308442aef20f9b2233dfbbc34a39e.zip",
+    "hmz @ https://github.com/humanfia/humanize/archive/58dd43a419b9d1967c8028f3b999192b040b7b60.zip",
     "pyyaml>=6.0.3,<7",
 ]
 

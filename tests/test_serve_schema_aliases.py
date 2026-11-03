@@ -1,19 +1,19 @@
 """Both spellings of the serving wire schema are accepted.
 
-The serving API was renamed from ``vvla`` to ``embodiinfer``, and the two
-first-party deployments ended up on opposite sides of the rename: this engine's
-own examples and tests send ``vvla.policy.*``, while the EmbodiRun deployment
-runtime sends ``embodiinfer.policy.*``. Before this alias was added, a real
+The serving API was renamed from ``vvla`` to ``embodiinfer``. While the two
+first-party deployments still sat on opposite sides of the rename, a real
 EmbodiRun process could not open a session against this server at all — the
 mismatch is invisible to either repository's tests, because each one only ever
-talks to itself. It was found by running the two processes against each other.
+talks to itself. It was found by running the two processes against each other,
+so input aliases were added first and the emission flip was left deliberate.
 
-These tests pin both directions of the compatibility decision:
+The vvla purge flipped that emission: ``embodiinfer`` is now the canonical,
+emitted spelling. These tests pin the resulting contract:
 
-* both spellings are *accepted* on input, so neither client has to change;
-* responses still carry the **legacy** spelling, because a client asserting on it
-  exists in-tree. Flipping emission is a deliberate migration, not a side effect
-  of accepting an alias.
+* both spellings are still *accepted* on input, so legacy ``vvla.*`` clients
+  keep working during the deployment migration;
+* responses carry the canonical ``embodiinfer.*`` spelling — flipped
+  deliberately as part of the purge, never as a side effect of an alias.
 """
 
 from __future__ import annotations
@@ -106,8 +106,8 @@ def test_structured_step_rejects_an_unknown_spelling():
     assert excinfo.value.code == "unsupported_schema"
 
 
-def test_responses_keep_emitting_the_legacy_spelling():
-    """Pins the no-emission-change decision so a future rename is deliberate."""
+def test_responses_emit_the_canonical_spelling():
+    """Pins the flipped emission: responses carry the ``embodiinfer`` name."""
     service = PolicyService(_StubAdapter())
     opened = _open(service, NEW_SESSION_SCHEMA)
     assert opened["schema"] == SESSION_SCHEMA
@@ -119,7 +119,7 @@ def test_responses_keep_emitting_the_legacy_spelling():
             }
         )
     )
-    assert response["schema"].startswith("vvla.")
+    assert response["schema"].startswith("embodiinfer.")
 
 
 def test_a_new_spelling_client_round_trips_a_step():

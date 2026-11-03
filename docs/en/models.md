@@ -382,9 +382,9 @@ episodes without changing attention values or the recurrent KV cache; it is not
 a limit on total inference memory.
 
 ```python
-from embodiinfer import Vvla
+from embodiinfer import EmbodiInfer
 
-model = Vvla(
+model = EmbodiInfer(
     "streamvln",
     checkpoint="/models/streamvln",
     dtype="bfloat16",

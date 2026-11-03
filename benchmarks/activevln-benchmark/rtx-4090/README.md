@@ -1,6 +1,77 @@
 # ActiveVLN · RTX 4090 24 GB
 
-## 首帧性能
+## R2R 首帧：原生引擎对比（2026-11-02）
+
+整批 mean / P95，单位 ms；吞吐量为 `1000 × batch / mean`。
+
+| Batch | EmbodiInfer | SGLang SRT | vLLM |
+| ---: | ---: | ---: | ---: |
+| 1 | 55.39 / 57.88 | 177.22 / 218.77 | 117.26 / 131.11 |
+| 2 | 73.60 / 77.25 | 214.48 / 252.51 | 152.81 / 163.19 |
+| 4 | 112.02 / 113.83 | 280.95 / 319.75 | 223.69 / 232.43 |
+| 8 | 220.13 / 290.67 | 364.19 / 407.99 | 315.69 / 323.11 |
+
+### 首个正式批次与后续批次
+
+从上表同一次测量的逐批记录拆分，未重跑。首批指完整预热后的第一个正式 batch；后续批次仍是其他 episode 的独立首帧。batch=1/2/4/8 的后续部分分别包含 127/63/31/15 批、127/126/124/120 个观测；所有配置统一按这个规则拆分，不再筛除任何批次。上表仍保留完整 128 帧结果。
+
+FPS 为完整观测/s：首批按 `1000 × batch / 首批整批耗时(ms)` 计算；后续按剩余观测总数除以剩余批次总耗时计算。
+
+| 引擎 | Batch | 首批 FPS | 后续 FPS | 全量 FPS |
+| --- | ---: | ---: | ---: | ---: |
+| EmbodiInfer | 1 | 17.78 | 18.06 | 18.06 |
+| EmbodiInfer | 2 | 27.69 | 27.17 | 27.18 |
+| EmbodiInfer | 4 | 35.05 | 35.73 | 35.71 |
+| EmbodiInfer | 8 | 14.21 | 40.55 | 36.34 |
+| SGLang SRT | 1 | 5.99 | 5.64 | 5.64 |
+| SGLang SRT | 2 | 10.16 | 9.31 | 9.32 |
+| SGLang SRT | 4 | 13.45 | 14.26 | 14.24 |
+| SGLang SRT | 8 | 24.79 | 21.80 | 21.97 |
+| vLLM | 1 | 7.86 | 8.53 | 8.53 |
+| vLLM | 2 | 12.49 | 13.10 | 13.09 |
+| vLLM | 4 | 18.32 | 17.87 | 17.88 |
+| vLLM | 8 | 25.42 | 25.34 | 25.34 |
+
+后续批次含不同输入，仅用于展示分布；首批尖峰原因尚未定位。
+
+### 场景与配置
+
+单张 RTX 4090 24 GB、BF16，R2R val-unseen、seed=42 的冻结 256 集清单前 128 集，各取首帧；batch=1/2/4/8 分别计时 128/64/32/16 个请求批次，直到整批最后一个输出返回；原生引擎保留自己的动态调度。128 帧完整预热一遍后测一遍，每批清空历史、内容缓存和已学习的投机候选，保留图与编译结果；EmbodiInfer 配置 `firstframe.reset_speculative_prior=true`。计时从 CPU RGB 到完整 CPU actions，包含预处理；SGLang 包含本机 SRT 进程通信，不含磁盘、加载、预热、重置、HTTP 和渲染。
+
+三侧使用 `Arvil/Qwen2.5-VL-3B_rl_r2r_4000@1609873`，相同输入、prompt、greedy 解码、max new tokens=512。repetition penalty 统一为 1.0，避免引擎对输入前缀是否参与惩罚的语义差异；每帧 88 个图像 tokens；每组均有 128 个有效输出、2,688 个生成 tokens。下方历史首帧数据与此前“16 集 × 前 8 帧”的历史回放采用不同协议，不混用。
+
+| 引擎 | 本次启用的优化 |
+| --- | --- |
+| EmbodiInfer | 语法树投机（budget=31）、GPU 预处理、CUDA Graph、融合算子、GQA、packed prefill；图回退为 0 |
+| SGLang SRT | 原生 NGRAM（12 draft tokens）、torch.compile、full prefill / target-verify 图、ViT 图、FlashInfer 文本注意力、GPU 图像处理与 CUDA IPC、overlap 调度 |
+| vLLM | 原生 NGRAM_GPU（16 draft tokens）、optimization level=3、torch.compile、文本 FULL_AND_PIECEWISE / 视觉图、GPU 归一化、FlashAttention；沿用已验证的同步调度配置（async_scheduling=False） |
+
+驱动 580.82.07，450 W，CPU 线程数 4。EmbodiInfer 基于 `2a3f053`，Torch 2.10.0 / CUDA 12.8 / Transformers 4.51.3 / Triton 3.6.0。SGLang 使用 [2351c4d](https://github.com/yufoo1/SGLang-for-RLinf/tree/2351c4d3593f56ff11b7dab7219816aa0ec70750) 的原生 SRT Qwen2.5-VL 路径，未调用训练 actor；Torch 2.14.1 / CUDA 13.0 / Transformers 5.19.0 / Triton 3.8.0。vLLM 0.30.0，Torch 2.13.0 / Transformers 5.17.0 / Triton 3.7.1。三者使用各自独立的兼容环境。
+
+EmbodiInfer batch=8 的首个正式批次为 563.03 ms，其余 15 批为 194.2–199.9 ms；统计保留全部批次，未剔除异常值。按 batch=1/2/4/8，与 EmbodiInfer 动作序列一致的帧数为 SGLang 99/100/100/102、vLLM 108/113/110/110（各 128 帧）；这是输出核验，不是导航精度。只比较性能，不计算 SR/SPL。
+
+### 复现
+
+在仓库根目录执行。`VLN_CONFIGS`、`VLN_INPUTS`、`VLN_RESULTS` 分别指向仓库外的配置、固定输入和输出目录；先修改配置中的权重与清单路径。`EMBODI_PYTHON`、`VLLM_PYTHON`、`SGLANG_PYTHON` 分别指向已配置上述依赖和源码路径的独立环境 Python；SGLang 另需 `torch-memory-saver==0.0.10`、`sglang-kernel==0.4.10` 和 `flashinfer-python==0.7.2`。配置、逐帧输出和启动日志保留在实验目录，不提交到仓库。
+
+```bash
+export CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD" OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4
+export VLLM_ENABLE_V1_MULTIPROCESSING=0
+for B in 1 2 4 8; do
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.7 \
+  "$EMBODI_PYTHON" benchmarks/vln_firstframe.py \
+    --config "$VLN_CONFIGS/rtx4090-activevln-bf16-r2r-rep1-freshprior-b$B.json" \
+    --inputs "$VLN_INPUTS" --output "$VLN_RESULTS/embodi-active-b$B"
+  "$VLLM_PYTHON" benchmarks/vln_firstframe_reference.py --engine vllm \
+    --config "$VLN_CONFIGS/rtx4090-activevln-bf16-r2r-rep1-b$B.json" \
+    --inputs "$VLN_INPUTS" --output "$VLN_RESULTS/vllm-active-b$B"
+  "$SGLANG_PYTHON" benchmarks/vln_firstframe_reference.py --engine sglang \
+    --config "$VLN_CONFIGS/rtx4090-activevln-bf16-r2r-rep1-b$B.json" \
+    --inputs "$VLN_INPUTS" --output "$VLN_RESULTS/sglang-active-b$B"
+done
+```
+
+## 首帧性能（历史数据，2026-11-01）
 
 | 数据集 | 精度 | Batch | 批调用数 | 整批 mean / P95 (ms) | 摊销 ms/观测 | 观测/s | 峰值 allocated (GiB) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |

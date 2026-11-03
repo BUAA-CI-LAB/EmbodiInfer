@@ -16,7 +16,7 @@ What we own (touching only the loaded weight modules):
   * the split into ``encode_prefix`` (build the prefix KV once) and
     ``denoise_step`` (expert attends cached prefix KV + its own suffix KV).
 
-With ``native_embeddings=True``, VVLA also owns per-camera SigLIP, token/time
+With ``native_embeddings=True``, EmbodiInfer also owns per-camera SigLIP, token/time
 embeddings, default RoPE and masks. The default keeps the existing embedding
 path and optimized batched-camera/compiled routes. Native embeddings preserve
 per-camera execution order, including for SDPA comparisons.
@@ -61,6 +61,7 @@ from .embeddings import (
     time_embedding,
 )
 from .inference import Pi05OptimizationConfig
+from .inference.config import _resolve_kernel_profile
 from .processor_pi05 import Pi05Batch
 
 if TYPE_CHECKING:
@@ -266,14 +267,14 @@ def _fused_linear_pair(
         packed = _packed_quantized_projection(
             (first, second),
             first,
-            "_vvla_fused_pair_quantized",
+            "_embodiinfer_fused_pair_quantized",
         )
         fused = packed(x)
         return fused.split((first.out_features, second.out_features), dim=-1)
-    weight = getattr(first, "_vvla_fused_pair_weight", None)
+    weight = getattr(first, "_embodiinfer_fused_pair_weight", None)
     if weight is None or weight.device != first.weight.device or weight.dtype != first.weight.dtype:
         weight = torch.cat((first.weight, second.weight), dim=0).contiguous()
-        first._vvla_fused_pair_weight = weight
+        first._embodiinfer_fused_pair_weight = weight
     fused = _op(kernels, "linear", False)(x, weight)
     return fused.split((first.out_features, second.out_features), dim=-1)
 
@@ -289,18 +290,18 @@ def _fused_qkv(attn: Any, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
         packed = _packed_quantized_projection(
             projections,
             attn.q_proj,
-            "_vvla_fused_qkv_quantized",
+            "_embodiinfer_fused_qkv_quantized",
         )
         fused = packed(x)
         return fused.split(tuple(projection.out_features for projection in projections), dim=-1)
-    weight = getattr(attn.q_proj, "_vvla_fused_qkv_weight", None)
+    weight = getattr(attn.q_proj, "_embodiinfer_fused_qkv_weight", None)
     if (
         weight is None
         or weight.device != attn.q_proj.weight.device
         or weight.dtype != attn.q_proj.weight.dtype
     ):
         weight = torch.cat((attn.q_proj.weight, attn.k_proj.weight, attn.v_proj.weight), dim=0).contiguous()
-        attn.q_proj._vvla_fused_qkv_weight = weight
+        attn.q_proj._embodiinfer_fused_qkv_weight = weight
     fused = F.linear(x, weight)
     return fused.split(
         (
@@ -320,12 +321,12 @@ def _prepare_fused_projection_weights(tower: Any) -> None:
             _packed_quantized_projection(
                 attention_projections,
                 attn.q_proj,
-                "_vvla_fused_qkv_quantized",
+                "_embodiinfer_fused_qkv_quantized",
             )
         elif not any(isinstance(projection, QuantizedLinear) for projection in attention_projections) and (
-            getattr(attn.q_proj, "_vvla_fused_qkv_weight", None) is None
+            getattr(attn.q_proj, "_embodiinfer_fused_qkv_weight", None) is None
         ):
-            attn.q_proj._vvla_fused_qkv_weight = torch.cat(
+            attn.q_proj._embodiinfer_fused_qkv_weight = torch.cat(
                 (attn.q_proj.weight, attn.k_proj.weight, attn.v_proj.weight), dim=0
             ).contiguous()
         mlp = layer.mlp
@@ -334,12 +335,12 @@ def _prepare_fused_projection_weights(tower: Any) -> None:
             _packed_quantized_projection(
                 mlp_projections,
                 mlp.gate_proj,
-                "_vvla_fused_pair_quantized",
+                "_embodiinfer_fused_pair_quantized",
             )
         elif not any(isinstance(projection, QuantizedLinear) for projection in mlp_projections) and (
-            getattr(mlp.gate_proj, "_vvla_fused_pair_weight", None) is None
+            getattr(mlp.gate_proj, "_embodiinfer_fused_pair_weight", None) is None
         ):
-            mlp.gate_proj._vvla_fused_pair_weight = torch.cat(
+            mlp.gate_proj._embodiinfer_fused_pair_weight = torch.cat(
                 (mlp.gate_proj.weight, mlp.up_proj.weight), dim=0
             ).contiguous()
 
@@ -511,6 +512,17 @@ class Pi05Policy(FlowVLAPolicy):
         tensor_parallel_group=None,
     ):
         super().__init__(config)
+        if not isinstance(kernel_profile, str):
+            raise TypeError(
+                "PI0.5 kernel_profile must be a profile name, 'flashinfer', 'auto', 'torch' or 'none'"
+            )
+        optimizations = _resolve_kernel_profile(kernel_profile, optimizations)
+        if kernel_profile == "flashinfer":
+            native_inference = True
+            native_embeddings = native_embeddings or optimizations.numerics == "openpi_rlinf"
+            # Prepared FA2 owns both Gemma attention stages. Keep the ordinary
+            # SDPA reference available and bypass the separate Triton shortcuts.
+            attention = denoise_attention = prefix_attention = "sdpa"
         if optimizations is not None:
             if not isinstance(optimizations, Pi05OptimizationConfig):
                 raise TypeError("optimizations must be a Pi05OptimizationConfig")
@@ -551,8 +563,6 @@ class Pi05Policy(FlowVLAPolicy):
         self.request_cuda_graph = request_cuda_graph
         self.denoise_attention = denoise_attention
         self.prefix_attention = prefix_attention
-        if not isinstance(kernel_profile, str):
-            raise TypeError("PI0.5 kernel_profile must be a profile name, 'auto', 'torch' or 'none'")
         self.kernel_profile = kernel_profile
         self._kernel_selection: KernelSelection | None = None
         self.attention = attention
@@ -649,7 +659,7 @@ class Pi05Policy(FlowVLAPolicy):
         return self._m.action_in_proj.weight.dtype
 
     def _embed_image(self, image: torch.Tensor) -> torch.Tensor:
-        """VVLA SigLIP forward over loaded weights, without HF model forwards."""
+        """EmbodiInfer SigLIP forward over loaded weights, without HF model forwards."""
         operators = self._get_optimizations()
         if operators is not None and operators.config.numerics == "openpi_rlinf":
             return operators.embed_image(image)
@@ -779,6 +789,10 @@ class Pi05Policy(FlowVLAPolicy):
         if config is None:
             return None
         if not self._native_enabled():
+            if getattr(self, "kernel_profile", "none") == "flashinfer":
+                raise RuntimeError(
+                    "kernel_profile='flashinfer' requires CUDA native inference in eval/no-grad mode"
+                )
             if config.numerics == "openpi_rlinf":
                 raise RuntimeError("openpi_rlinf numerics require CUDA native inference in eval/no-grad mode")
             return None
@@ -813,10 +827,10 @@ class Pi05Policy(FlowVLAPolicy):
             _COMPILED_IMAGE_ENCODERS.pop(id(model), None)
         for module in self.modules():
             for name in (
-                "_vvla_fused_qkv_weight",
-                "_vvla_fused_pair_weight",
-                "_vvla_fused_qkv_quantized",
-                "_vvla_fused_pair_quantized",
+                "_embodiinfer_fused_qkv_weight",
+                "_embodiinfer_fused_pair_weight",
+                "_embodiinfer_fused_qkv_quantized",
+                "_embodiinfer_fused_pair_quantized",
             ):
                 module.__dict__.pop(name, None)
 
@@ -1568,7 +1582,7 @@ def _build_pi05(
     quantization: str | Mapping[str, Any] | QuantizationConfig | None = None,
     **overrides,
 ) -> VLAPolicy:
-    """Build Pi05, expanding deployment presets into their required policy options."""
+    """Build Pi05 with preset options or one-click ``kernel_profile='flashinfer'``."""
     if checkpoint is None:
         raise ValueError("pi0.5 needs a checkpoint, e.g. make_policy('pi05', checkpoint='lerobot/pi05_base')")
     if preset is not None:
@@ -1589,6 +1603,11 @@ def _build_pi05(
                 if key in overrides and overrides[key] != 10:
                     raise ValueError(f"Optimized Pi05 presets require {key}=10")
                 overrides.setdefault(key, 10)
+    # Resolve after preset scheduling so changing a kernel profile does not
+    # change a preset's horizon or denoise-step contract.
+    optimizations = _resolve_kernel_profile(kernel_profile, optimizations)
+    if kernel_profile == "flashinfer":
+        native_inference = True
     if prefix_cuda_graph is None:
         prefix_cuda_graph = optimizations is not None
     tensor_parallel_size = overrides.pop("tensor_parallel_size", 1)

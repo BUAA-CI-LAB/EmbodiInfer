@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
 from ....layers.config import OperatorBackends
+from ....layers.ops import KernelSelection
 from ....layers.quantization import Precision
 
 
@@ -76,7 +77,9 @@ class Pi05OptimizationConfig:
     norm_fusion: bool = True
     kv_workspace: bool = True
     fused_mlp: bool = False
-    attention: Literal["reference", "query_major", "folded_flash", "rotary_strict"] = "reference"
+    attention: Literal["reference", "query_major", "folded_flash", "rotary_strict", "flashinfer_fa2"] = (
+        "reference"
+    )
     action_layers: tuple[MlpLayerPrecision, ...] = ()
     checkpoint_sha256: str | None = None
     activation: Literal["gelu_pytorch_tanh", "gelu_pytorch_exact"] = "gelu_pytorch_tanh"
@@ -118,7 +121,13 @@ class Pi05OptimizationConfig:
             )
         ):
             raise ValueError("Pi05 optimization switches must be booleans")
-        if self.attention not in ("reference", "query_major", "folded_flash", "rotary_strict"):
+        if self.attention not in (
+            "reference",
+            "query_major",
+            "folded_flash",
+            "rotary_strict",
+            "flashinfer_fa2",
+        ):
             raise ValueError("Unknown optimized attention implementation")
         if self.attention == "rotary_strict" and self.numerics != "openpi_rlinf":
             raise ValueError("Strict rotary attention requires openpi_rlinf numerics")
@@ -135,8 +144,14 @@ class Pi05OptimizationConfig:
                 raise ValueError(f"{name} must be a tuple of MlpLayerPrecision values")
         if any(layer.outliers is not None for layer in self.action_layers):
             raise ValueError("BF16 outlier channels apply to prefix MLPs only")
+        if (self.has_quantized_mlp or self.mlp_weights is not None) and (
+            (self.norm_fusion and self.operators.normalization == "flashinfer")
+            or self.operators.projection == "flashinfer_cublaslt"
+        ):
+            raise ValueError("FlashInfer norm/projection integration requires unquantized BF16 MLPs")
         if self.prefix_gelu_fusion and (
-            self.numerics != "lerobot"
+            self.operators.projection != "torch"
+            or self.numerics != "lerobot"
             or self.has_quantized_mlp
             or self.fused_mlp
             or self.mlp_weights is not None
@@ -220,3 +235,34 @@ class Pi05OptimizationConfig:
     def to_json(self, path: str | Path) -> None:
         """Export deployment settings without benchmark or calibration dependencies."""
         Path(path).write_text(json.dumps(asdict(self), indent=2, allow_nan=False) + "\n")
+
+
+def _resolve_kernel_profile(
+    kernel_profile: str, optimizations: Pi05OptimizationConfig | None
+) -> Pi05OptimizationConfig | None:
+    """Bind the built-in FlashInfer profile to Pi05's prepared operator placement.
+
+    The profile owns its three backend choices and enables their execution paths.
+    Existing numerics, shapes, calibration identity and unrelated options remain
+    unchanged. Quantized recipes are rejected instead of converted to BF16.
+    Other profiles preserve the existing tensor-operator dispatch behavior.
+    """
+    if kernel_profile != "flashinfer":
+        return optimizations
+    if optimizations is not None and not isinstance(optimizations, Pi05OptimizationConfig):
+        raise TypeError("optimizations must be a Pi05OptimizationConfig")
+    config = Pi05OptimizationConfig() if optimizations is None else optimizations
+    if config.has_quantized_mlp or config.mlp_weights is not None:
+        raise ValueError("kernel_profile='flashinfer' requires unquantized BF16 MLPs")
+    selection = KernelSelection(kernel_profile)
+    return replace(
+        config,
+        norm_fusion=True,
+        fused_mlp=False,
+        attention=selection.resolve_backend("attention", config.attention),
+        operators=replace(
+            config.operators,
+            normalization=selection.resolve_backend("normalization", config.operators.normalization),
+            projection=selection.resolve_backend("projection", config.operators.projection),
+        ),
+    )

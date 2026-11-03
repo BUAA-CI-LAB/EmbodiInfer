@@ -80,6 +80,16 @@ Optimize the model path. Reuse the engine from robot inference to RL rollout.
 Choose features by policy and hardware in the [capability reference](docs/en/models.md#capabilities-and-installation).
 Adapters own model-specific optimizations; the shared scheduler stays model-independent.
 
+**Agent-tuned kernels:** coding agents tune operator kernels for a specific GPU and
+software stack. On Jetson AGX Orin, with all else equal, the `orin_pi05_r2` profile reduces
+π0.5 latency from 396.6 ms with hand-written kernels to **302.0 ms** (BF16, batch size 1;
+[conditions](docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16),
+[example](examples/pi05_inference.py)). The [workflow](docs/proposals/0008-kernel-tuning.md)
+is a developer tool for π0.5 today; user-facing tuning for your own hardware and
+environment is planned. It draws on
+[NVIDIA Kernel Design Agents (KDA)](https://github.com/NVlabs/kda)
+([acknowledgments](THIRD_PARTY_NOTICES.md#kernel-tuning-workflow-references)).
+
 ## Performance
 
 ### Lower latency on a single RTX 4090
@@ -148,8 +158,10 @@ follow the first-frame tables.
 </tr>
 </table>
 
-**Network serving:** π0.5, DM0.5, and StreamVLN through HTTP / WirelessComm,
-at batch size 1. All model families have Python entry points.
+**Network serving:** π0.5, DM0.5, and StreamVLN use HTTP / WirelessComm.
+π0.5 supports cross-session batching with `--max-batch`; the default is 1.
+DM0.5 and StreamVLN currently execute one request at a time and require
+`--max-batch 1`. All model families have Python entry points.
 The [capability reference](docs/en/models.md#capabilities-and-installation) covers
 batching, CUDA graphs, RL interfaces, and installation profiles.
 ActiveVLN's real-checkpoint GPU parity is pending.
@@ -161,7 +173,7 @@ ActiveVLN's real-checkpoint GPU parity is pending.
 
 See the [model roadmap](docs/en/models.md#roadmap) for the implementation steps.
 Robot and simulator integrations live in
-[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun#support-at-a-glance).
+[EmbodiRun](https://github.com/BUAA-CI-LAB/EmbodiRun/blob/main/docs/en/support-matrix.md).
 
 ## Quick start
 
@@ -201,17 +213,19 @@ mapping to a checkpoint.
 
 | Workflow | Interface | Start here |
 |---|---|---|
-| Inference inside an application | `Vvla.act(observation)` or `Vvla.act(observations)` | [Python API](docs/en/api.md) |
+| Inference inside an application | `EmbodiInfer.act(observation)` or `EmbodiInfer.act(observations)` | [Python API](docs/en/api.md) |
 | Network inference for a robot runtime | HTTP / WirelessComm sessions | [Serve and send your first observation](docs/en/serving.md) |
 | RL rollout and weight updates | Rollout / refit interfaces | [RL integration](docs/en/api.md#generating-rl-rollouts) |
 | Multi-GPU execution | Data parallelism / tensor parallelism | [Parallelism](docs/en/parallelism.md) |
 
-The network launchers support π0.5, DM0.5, and StreamVLN at batch size 1.
-Other policies use the Python API. See the
-[capability table](docs/en/models.md#capabilities-and-installation) for policy-specific support.
+To share a π0.5 service across clients, add `--max-batch 3 --max-wait-ms 5`
+to the HTTP or WirelessComm launcher. Requests from independent sessions share
+batches of up to three; a partially filled batch runs when the 5 ms collection
+window expires. This window excludes queueing and inference time. See the
+[serving guide](docs/en/serving.md#share-one-service-across-clients) for setup.
 
-The distribution is named `embodiinfer`; Python imports remain under `embodiinfer`.
-Existing `vvla-*` command aliases and `vvla.policy.*` wire schemas remain supported.
+The distribution is named `embodiinfer`; Python imports, the `embodiinfer-*` command-line
+entry points, and the `embodiinfer.policy.*` wire schemas all use the same name.
 
 ## Documentation
 

@@ -134,11 +134,11 @@ def parallelize_qwen25_vl(model: nn.Module, context: TensorParallelContext) -> n
     """Apply in-place Qwen2.5-VL tensor parallelism and return the model."""
     if not context.enabled:
         return model
-    if getattr(model, "_vvla_tensor_parallel", None) is not None:
+    if getattr(model, "_embodiinfer_tensor_parallel", None) is not None:
         raise RuntimeError("Qwen2.5-VL model is already tensor-parallel")
     _parallelize_vision(model, context)
     _parallelize_language(model, context)
-    model._vvla_tensor_parallel = context
+    model._embodiinfer_tensor_parallel = context
     return model
 
 

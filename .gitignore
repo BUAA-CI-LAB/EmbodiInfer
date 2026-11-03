@@ -25,7 +25,7 @@ CLAUDE.md
 # logo working files: only the main logo is tracked (mark/favicon/dark variant
 # and codex concept renders stay local)
 assets/*
-!assets/vvla-logo.svg
+!assets/embodiinfer-logo.svg
 
 # Documentation build output
 site/
@@ -33,6 +33,9 @@ site-zh/
 
 # Task-local engineering artifacts and validation logs.
 devlocal/
+
+# Optional tuning skills linked locally from pinned submodules or other skill directories.
+scripts/kernel_tuning/flow/skills/
 
 # Thor benchmark configurations and measurements stay in the local experiment workspace.
 benchmarks/activevln-benchmark/thor/**/*.json

@@ -28,7 +28,7 @@ body:
         - embodiinfer/layers (operator contracts)
         - embodiinfer/backend (Torch/Triton kernels)
         - embodiinfer/engine (core, sessions, async, CUDA graph)
-        - embodiinfer/engine/parallel or vvla/engine/rollout
+        - embodiinfer/engine/parallel or embodiinfer/engine/rollout
         - embodiinfer/engine/serve (HTTP/websocket frontends)
         - tests, benchmarks, or examples
         - install, dependency groups, or lock file

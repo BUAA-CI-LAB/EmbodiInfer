@@ -71,13 +71,16 @@ def fake_coder(store: RunStore, candidate: dict, latencies: list[Any]):
     return fakes.FakeAgentDriver(reply=answer)
 
 
-def run_fake(store: RunStore, coder, *, resume: bool = False) -> dict:
-    """Exercise hmz journaling/session behavior; no real harness is constructed."""
+def run_fake(store: RunStore, coder, *, second=None, resume: bool = False) -> dict:
+    """Exercise hmz journaling/session behavior; no real harness is constructed.
+
+    One fake drives both chasers unless ``second`` gives the second chaser its own.
+    """
     return asyncio.run(
         fakes.run_fake(
             kernel_tuning,
             "test only",
-            agents={"coder": coder},
+            agents={"first_chaser": coder, "second_chaser": second or coder},
             local=fakes.FakeEnvDriver(workdir=(store.root / "workspace").as_posix()),
             params={"run_dir": str(store.root)},
             journal=store.root / "fake-hmz.jsonl",
@@ -92,6 +95,8 @@ def test_full_loop_promotes_then_preserves_failures_and_exports(store, candidate
     assert result["status"] == "completed"
     assert result["best"] == "0001"
     assert [a["status"] for a in result["attempts"]] == ["promoted", "failed", "rejected"]
+    # The worker's own exception reaches the feedback, not only a log path.
+    assert "RuntimeError: simulated compilation failure" in result["attempts"][1]["decision"]["reasons"][0]
     assert len(coder.prompts) == 6
     assert coder.peak == 1
     assert coder.live == 0
@@ -136,6 +141,71 @@ def test_rejected_source_is_available_to_the_next_planning_turn(store, candidate
     assert result["best"] == "0002"
 
 
+def test_diagnostic_failures_and_full_history_reach_the_next_agent(store, candidate):
+    run_fake(store, fake_coder(store, candidate, ["crash", 8, 9]))
+    saved = RunStore(store.root)
+    first = read_json(saved.root / "candidates/0001/diagnostics.json")
+    assert "simulated compilation failure" in first["logs"]["evaluation/stderr.log"]
+    feedback = read_json(saved.root / "workspace/0002/feedback.json")
+    assert feedback[0]["diagnostics"] == first
+    history = read_json(saved.root / "workspace/0003/history.json")
+    assert [row["id"] for row in history["attempts"]] == ["0001", "0002"]
+    assert "no performance calibration" in (saved.root / "workspace/0003/HARDWARE.md").read_text()
+
+
+def test_profile_log_feedback_keeps_the_latest_failure_with_a_bound(tmp_path):
+    from scripts.kernel_tuning.feedback import diagnostics
+
+    for index in range(6):
+        path = tmp_path / "profile/candidate" / str(index) / "worker.log"
+        path.parent.mkdir(parents=True)
+        path.write_text(str(index) * 8000, encoding="utf-8")
+        os.utime(path, ns=(index * 1_000_000_000, index * 1_000_000_000))
+    logs = diagnostics(tmp_path)["logs"]
+    assert "profile/candidate/5/worker.log" in logs
+    assert "profile/candidate/0/worker.log" not in logs
+    assert len(logs) == 4 and all(len(value) <= 4000 for value in logs.values())
+
+
+def test_modified_nonwinning_diagnostics_are_refused_before_reuse(store, candidate):
+    from scripts.kernel_tuning.feedback import verified_diagnostics
+
+    run_fake(store, fake_coder(store, candidate, [12, 8, 9]))
+    saved = RunStore(store.root)
+    archive = saved.root / "candidates/0001"
+    atomic_json(archive / "diagnostics.json", {"forged": True})
+    with pytest.raises(ContractError, match="diagnostic evidence changed"):
+        verified_diagnostics(archive, saved.manifest["attempts"][0])
+
+
+def test_minimum_exploration_attempts_delay_patience(task_dir, candidate, tmp_path):
+    import yaml
+    from scripts.kernel_tuning.contracts import TaskPackage
+
+    config = yaml.safe_load((task_dir / "tuning.yaml").read_text())
+    config["search"].update(max_candidates=6, min_candidates=4, patience=2)
+    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    search = RunStore.create(TaskPackage.load(task_dir), tmp_path / "exploration", "claude/fake:low")
+    result = run_fake(search, fake_coder(search, candidate, [12, 12, 12, 12]))
+    assert len(result["attempts"]) == 4
+    assert result["stop_reason"] == "patience"
+
+
+def test_profile_error_is_feedback_and_does_not_change_promotion(task_dir, candidate, tmp_path):
+    import yaml
+    from scripts.kernel_tuning.contracts import TaskPackage
+
+    config = yaml.safe_load((task_dir / "tuning.yaml").read_text())
+    config["profile"] = True  # The fake benchmark deliberately has no profiler.
+    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    search = RunStore.create(TaskPackage.load(task_dir), tmp_path / "profile-run", "claude/fake:low")
+    result = run_fake(search, fake_coder(search, candidate, [8, 9, 9]))
+    assert result["best"] == "0001"
+    feedback = read_json(search.root / "workspace/0002/feedback.json")[0]
+    assert "profile" in feedback["diagnostics"]["profile"]["error"]
+    assert feedback["diagnostics"]["measurement"]["rounds"]
+
+
 def test_resume_counts_interrupted_attempt_and_keeps_elapsed_budget(store, candidate) -> None:
     coder = fake_coder(store, candidate, [8, asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):
@@ -172,6 +242,27 @@ def test_worker_timeout_is_failure_and_cleanup_finishes(store, candidate) -> Non
     with pytest.raises(ContractError, match="timed out"):
         asyncio.run(evaluate(store, store.root / "timeout", candidate=path, timeout=1))
     assert not list((store.root / "timeout").glob("result.json"))
+    assert read_json(store.root / "timeout/command.json")["device_lock_wait_seconds"] >= 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the device lock is a POSIX flock")
+def test_evaluator_workers_take_turns_on_the_device() -> None:
+    """Concurrent runs overlap only agent turns: a second worker starts once the first is done."""
+    from scripts.kernel_tuning.runner import device_lock
+
+    order = []
+
+    async def hold(name: str) -> None:
+        async with device_lock("cuda:test-lock", poll=0.01):
+            order.append(f"{name} start")
+            await asyncio.sleep(0.2)
+            order.append(f"{name} end")
+
+    async def both() -> None:
+        await asyncio.gather(hold("a"), hold("b"))
+
+    asyncio.run(both())
+    assert order in (["a start", "a end", "b start", "b end"], ["b start", "b end", "a start", "a end"])
 
 
 def test_environment_change_refuses_measurement_before_agent_turn(store, candidate) -> None:
@@ -211,7 +302,7 @@ def test_export_stays_available_after_tool_update(store, candidate, tmp_path: Pa
     with pytest.raises(ContractError, match="source changed"):
         saved.verify()
     exported = saved.export(tmp_path / "export")
-    assert (exported / "tool/scripts/kernel_tuning/flow.py").is_file()
+    assert (exported / "tool/scripts/kernel_tuning/flow/__init__.py").is_file()
 
 
 def test_crash_during_attempt_preparation_remains_counted(store, monkeypatch) -> None:
@@ -229,6 +320,85 @@ def test_crash_during_attempt_preparation_remains_counted(store, monkeypatch) ->
     assert resumed.manifest["streak"] == 1
 
 
+def test_chasers_take_alternate_attempts_and_say_so(store, candidate) -> None:
+    """Attempt n belongs to CHASERS[(n - 1) % 2]; each plan prompt names its chaser."""
+    first = fake_coder(store, candidate, [8, 9])
+    second = fake_coder(store, candidate, [9])
+    result = run_fake(store, first, second=second)
+    assert [a["chaser"] for a in result["attempts"]] == ["first_chaser", "second_chaser", "first_chaser"]
+    assert len(first.prompts) == 4
+    assert len(second.prompts) == 2
+    assert "You are the second_chaser" in second.prompts[0]
+    assert "You are the first_chaser" in first.prompts[2]
+
+
+def test_prompts_state_the_turn_deadline(store) -> None:
+    """A turn stopped before its deliverable exists fails, so each prompt says when that is."""
+    from scripts.kernel_tuning.prompts import implementation_prompt, plan_prompt
+
+    minutes = f"{store.task.settings.search.agent_timeout_seconds / 60:g} minutes"
+    assert minutes in plan_prompt(store.task) and "before PLAN.md" in plan_prompt(store.task)
+    assert minutes in implementation_prompt(store.task)
+    assert "before solution.json" in implementation_prompt(store.task)
+
+
+def test_turn_stopped_after_its_deliverable_still_counts(store, candidate) -> None:
+    """A stopped turn whose deliverable exists goes on in a fresh session; without one it fails."""
+
+    def answer(prompt: str, **kwargs: Any) -> str:
+        scratch = Path(str(kwargs["session"].placement.workdir))
+        if "Write PLAN.md" in prompt:
+            if scratch.name != "0002":
+                (scratch / "PLAN.md").write_text("Fewer launches.", encoding="utf-8")
+        else:
+            solution = copy.deepcopy(candidate)
+            solution["name"] += "_" + scratch.name
+            solution["description"] = "8"
+            atomic_json(scratch / "solution.json", solution)
+        raise TimeoutError
+
+    coder = fakes.FakeAgentDriver(reply=answer)
+    result = run_fake(store, coder)
+    assert [a["status"] for a in result["attempts"]] == ["promoted", "failed", "rejected"]
+    assert result["attempts"][1]["decision"]["reasons"][0].startswith("TimeoutError")
+    reply = (store.root / "candidates/0001/plan-reply.txt").read_text(encoding="utf-8")
+    assert reply.startswith("Turn stopped") and "PLAN.md written" in reply
+    # Attempts 1 and 3 continue in a second session after each stopped plan turn.
+    assert len(coder.sessions) == 5
+
+
+def test_chaser_agents_accept_one_or_two_specs() -> None:
+    from scripts.kernel_tuning.__main__ import chaser_agents
+
+    assert chaser_agents("codex/m:high") == {"first_chaser": "codex/m:high", "second_chaser": "codex/m:high"}
+    assert chaser_agents("claude@gw/m:high, codex@gw/m:high") == {
+        "first_chaser": "claude@gw/m:high",
+        "second_chaser": "codex@gw/m:high",
+    }
+    for bad in ("a/m,b/m,c/m", "a/m,", ""):
+        with pytest.raises(ContractError, match="comma"):
+            chaser_agents(bad)
+
+
+def test_profiles_of_incumbent_and_previous_attempt_are_lent(store) -> None:
+    """Agents read NCU evidence copies; request/response records stay in the archive."""
+    baseline = store.profile_path()
+    baseline.mkdir(parents=True)
+    (baseline / "details.txt").write_text("baseline counters", encoding="utf-8")
+    (baseline / "request.json").write_text("{}", encoding="utf-8")
+    _, _, scratch = store.begin_attempt()
+    assert (scratch / "profiles/incumbent/details.txt").read_text(encoding="utf-8") == "baseline counters"
+    assert not (scratch / "profiles/incumbent/request.json").exists()
+    assert not (scratch / "profiles/previous").exists()
+    store.finish_attempt("0001", status="failed", decision={"promoted": False, "reasons": ["x"]})
+    previous = store.profile_path("0001")
+    previous.mkdir(parents=True)
+    (previous / "error.json").write_text('{"error": "compile"}', encoding="utf-8")
+    _, _, scratch = store.begin_attempt()
+    assert (scratch / "profiles/incumbent/details.txt").is_file()
+    assert (scratch / "profiles/previous/error.json").is_file()
+
+
 @pytest.mark.parametrize("unfenced", [False, True])
 def test_sessions_run_under_the_recorded_fence(store, candidate, unfenced: bool) -> None:
     """Fenced runs keep hmz's default grant; only a recorded --unfenced run widens it."""
@@ -241,3 +411,68 @@ def test_sessions_run_under_the_recorded_fence(store, candidate, unfenced: bool)
     assert coder.sessions
     expected = UNFENCED if unfenced else FENCED
     assert all(session.permission == expected for session in coder.sessions)
+
+
+def profiled_store(task_dir: Path, tmp_path: Path, *, available: bool = True) -> RunStore:
+    """Freeze a CPU profile adapter before starting either chaser."""
+    import yaml
+    from scripts.kernel_tuning.contracts import TaskPackage
+
+    config = yaml.safe_load((task_dir / "tuning.yaml").read_text(encoding="utf-8"))
+    config["profile"] = True
+    (task_dir / "tuning.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    if available:
+        path = task_dir / "benchmark.py"
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + """
+def profile(self, solutions, output):
+    (output / "details.txt").write_text(solutions["candidate"]["name"])
+    return {"details": str(output / "details.txt")}
+Adapter.profile = profile
+""",
+            encoding="utf-8",
+        )
+    return RunStore.create(TaskPackage.load(task_dir), tmp_path / "profile-runs", "claude/fake:low")
+
+
+def test_baseline_and_every_candidate_profiles_reach_chasers(task_dir, tmp_path, candidate) -> None:
+    store = profiled_store(task_dir, tmp_path)
+    result = run_fake(store, fake_coder(store, candidate, [8, 9, 9]))
+    for label in (None, "0001", "0002", "0003"):
+        assert (store.profile_path(label) / "result.json").is_file()
+    baseline = read_json(store.solution_path())["name"]
+    assert (store.root / "workspace/0001/profiles/incumbent/details.txt").read_text() == baseline
+    assert (store.root / "workspace/0003/profiles/previous/details.txt").read_text().endswith("_0002")
+    assert result["best"] == "0001"
+    RunStore(store.root).verify()
+
+
+def test_profile_failure_preserves_promotion_and_reaches_next_agent(task_dir, tmp_path, candidate) -> None:
+    store = profiled_store(task_dir, tmp_path, available=False)
+    result = run_fake(store, fake_coder(store, candidate, [8, 9, 9]))
+    assert result["best"] == "0001"
+    for label in (None, "0001", "0002", "0003"):
+        assert "does not implement" in read_json(store.profile_path(label) / "error.json")["error"]
+    assert (store.root / "workspace/0002/profiles/incumbent/error.json").is_file()
+    RunStore(store.root).verify()
+
+
+def test_interrupted_baseline_profile_retries_on_resume(task_dir, tmp_path, candidate, monkeypatch) -> None:
+    store = profiled_store(task_dir, tmp_path)
+    interrupted = False
+
+    async def cancel_once(*args, **kwargs):
+        nonlocal interrupted
+        if kwargs.get("operation") == "profile" and not interrupted:
+            interrupted = True
+            raise asyncio.CancelledError()
+        return await evaluate(*args, **kwargs)
+
+    monkeypatch.setattr("scripts.kernel_tuning.flow.evaluate", cancel_once)
+    with pytest.raises(asyncio.CancelledError):
+        run_fake(store, fake_coder(store, candidate, []))
+    resumed = RunStore(store.root)
+    result = run_fake(resumed, fake_coder(resumed, candidate, [8, 9, 9]), resume=True)
+    assert (store.profile_path() / "result.json").is_file()
+    assert result["best"] == "0001"

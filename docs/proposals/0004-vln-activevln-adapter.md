@@ -1,6 +1,6 @@
 # 0004 — ActiveVLN（Qwen2.5-VL）作为第一个 VLN / 自回归 policy，经 verl 对齐；引入 `MemoryState` + `AutoregressiveDecoder` 两个扩展点
 
-- 状态：Draft → **Rev E：以可重复的 native-vs-VVLA 自造 observation-stream A/B 作为首版合入门；正式 val-unseen/FSDP 与 padded-ragged 转为后续扩展**
+- 状态：Draft → **Rev E：以可重复的 native-vs-EmbodiInfer 自造 observation-stream A/B 作为首版合入门；正式 val-unseen/FSDP 与 padded-ragged 转为后续扩展**
 - 日期：2026-07-14；Rev A/Rev B 2026-07-15；Rev C 2026-07-16
 
 > 实现状态（2026-08-28）：EmbodiInfer 只保留通用 policy、generation、logprob 与
@@ -156,7 +156,7 @@ action mask 和权重同步映射到 EmbodiInfer 的通用 generation/logprob/re
 ## 8. 测试计划
 
 - **CI（CPU）**：`test_memory_state`（recurrent 槽 + episode 复位 + 非 recurrent 零差异，mock）；`test_autoregressive_decoder`（增量 decode == 全量前向，mock/小 Qwen）；`test_activevln_registered`（注册 + 缺 checkpoint 抛错，不依赖权重）；现有 CPU 全套回归绿。
-- **box（mark）**：pi0.5/GR00T/OFT parity 回归（Stage 0）；`test_activevln_parity`（Stage 1，门控 `VVLA_ACTIVEVLN_CKPT`）；verl E2E（Stage 2/3）。
+- **box（mark）**：pi0.5/GR00T/OFT parity 回归（Stage 0）；`test_activevln_parity`（Stage 1，门控 `EMBODIINFER_ACTIVEVLN_CKPT`）；verl E2E（Stage 2/3）。
 - **跨环境 reference**：native ActiveVLN 生成器（其 vLLM/verl env）预跑存 reference（tokens/logprob/actions + 固定 RNG + 固定 obs 序列）；EmbodiInfer env 侧读取比对（同 GR00T/OFT 方法学，注入 obs 隔离图像变换差异）。
 
 ## 9. 基准计划
@@ -274,7 +274,7 @@ TrajectoryRecord:
 ### 13.7 RL 曲线与 SR/SPL 无系统性退化
 
 - **机制**：ratio-at-θ0 先行（§6 Stage 2，PPO/GRPO 实际消费量对齐）；再短跑对照。
-- **判据**：同 config 仅换 `rollout.name` 的短跑 GRPO，reward/SR 曲线在 native run-to-run 方差带内；同 checkpoint 的 val eval SR/SPL 差异 ≤ native 自身 seed 方差。参照 rlinf-vvla-integration 的三级验收先例（动作 → logprob → 训练曲线）。
+- **判据**：同 config 仅换 `rollout.name` 的短跑 GRPO，reward/SR 曲线在 native run-to-run 方差带内；同 checkpoint 的 val eval SR/SPL 差异 ≤ native 自身 seed 方差。参照 rlinf-embodiinfer-integration 的三级验收先例（动作 → logprob → 训练曲线）。
 
 ### 13.8 端到端 episode 吞吐口径
 

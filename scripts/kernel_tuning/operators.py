@@ -2,7 +2,7 @@
 
 Each entry states only what a person must decide: the mathematical reference, the
 production kernel call used as the baseline, model-derived workload shapes, and
-the numerical contract. ``generate.py`` turns an entry into a complete KDA task.
+the numerical contract. ``generate.py`` turns an entry into a complete tuning task.
 
 The ``workloads`` here are estimates from model configurations. Shapes captured
 from real runs (``benchmarks/kernel_tuning/captures/*.jsonl``, see

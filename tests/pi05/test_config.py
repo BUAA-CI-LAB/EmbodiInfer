@@ -9,7 +9,11 @@ import torch
 
 from embodiinfer.layers import OperatorBackends
 from embodiinfer.policies.config import VLAPolicyConfig
-from embodiinfer.policies.pi05.inference.config import MlpLayerPrecision, Pi05OptimizationConfig
+from embodiinfer.policies.pi05.inference.config import (
+    MlpLayerPrecision,
+    Pi05OptimizationConfig,
+    _resolve_kernel_profile,
+)
 from embodiinfer.policies.pi05.modeling_pi05 import Pi05Policy
 
 
@@ -27,6 +31,17 @@ def test_prefix_gelu_opt_in_roundtrips_without_quantization(tmp_path):
     path = tmp_path / "recipe.json"
     config.to_json(path)
     assert Pi05OptimizationConfig.from_json(path) == config
+
+
+@pytest.mark.parametrize("projection", ["flashinfer_cublaslt", "torch_matmul"])
+def test_prefix_gelu_rejects_replacement_projection_backend(projection):
+    with pytest.raises(ValueError, match="original GEMMs"):
+        Pi05OptimizationConfig(prefix_gelu_fusion=True, operators=OperatorBackends(projection=projection))
+
+
+def test_flashinfer_profile_rejects_prefix_gelu_before_loading_kernels():
+    with pytest.raises(ValueError, match="original GEMMs"):
+        _resolve_kernel_profile("flashinfer", Pi05OptimizationConfig(prefix_gelu_fusion=True))
 
 
 @pytest.mark.parametrize(

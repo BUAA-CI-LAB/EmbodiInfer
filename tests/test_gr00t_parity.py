@@ -38,8 +38,8 @@ Two cross-version subtleties the ground-truth check surfaced, both fixed in
     falls back to sequential 1D positions (wrong vision RoPE), so ``encode_prefix``
     computes the positions explicitly to match gr00t (tf4.57).
 
-Gating: ``VVLA_GR00T_CKPT`` (GR00T-N1.7-3B dir), ``VVLA_COSMOS_PATH``
-(Cosmos-Reason2-2B dir), ``VVLA_GR00T_REF`` (the reference dump), and CUDA.
+Gating: ``EMBODIINFER_GR00T_CKPT`` (GR00T-N1.7-3B dir), ``EMBODIINFER_COSMOS_PATH``
+(Cosmos-Reason2-2B dir), ``EMBODIINFER_GR00T_REF`` (the reference dump), and CUDA.
 ``test_gr00t_registered`` runs in CI (no weights).
 """
 
@@ -61,12 +61,12 @@ def test_gr00t_registered():
         make_policy("gr00t", checkpoint="/nonexistent")  # no cosmos_path
 
 
-CKPT = os.environ.get("VVLA_GR00T_CKPT")
-COSMOS = os.environ.get("VVLA_COSMOS_PATH")
-REF = os.environ.get("VVLA_GR00T_REF")
+CKPT = os.environ.get("EMBODIINFER_GR00T_CKPT")
+COSMOS = os.environ.get("EMBODIINFER_COSMOS_PATH")
+REF = os.environ.get("EMBODIINFER_GR00T_REF")
 _skip = pytest.mark.skipif(
     not (CKPT and COSMOS and REF and torch.cuda.is_available()),
-    reason="set VVLA_GR00T_CKPT + VVLA_COSMOS_PATH + VVLA_GR00T_REF and run on CUDA",
+    reason="set EMBODIINFER_GR00T_CKPT + EMBODIINFER_COSMOS_PATH + EMBODIINFER_GR00T_REF and run on CUDA",
 )
 
 _BACKBONE_KEYS = ("input_ids", "attention_mask", "pixel_values", "image_grid_thw")

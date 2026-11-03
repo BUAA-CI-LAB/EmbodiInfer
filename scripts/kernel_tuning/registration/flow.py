@@ -134,7 +134,7 @@ async def operator_registration(
                     if remaining() <= 0:
                         raise TimeoutError("Registration duration exhausted")
                     if session is None:
-                        session = await coder.spawn(env=work_env)
+                        session = await coder.spawn()
                     previous_feedback = run.manifest.get("feedback")
                     instruction = prompt(run, stage, previous_feedback)
                     (archive / f"{stage}-prompt.txt").write_text(instruction, encoding="utf-8")
@@ -143,6 +143,7 @@ async def operator_registration(
                         coder.run(
                             instruction,
                             session=session,
+                            env=work_env,
                             budget=Budget(duration=timedelta(seconds=seconds), graceful=False),
                         ),
                         timeout=seconds,

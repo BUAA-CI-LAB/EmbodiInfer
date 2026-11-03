@@ -40,6 +40,59 @@ keyed by source, toolchain and device. Common calibrated projections live in
 `backend/torch/projection.py`. Paired-GEMM tile and tail choices belong to Triton;
 model dimensions and per-layer precision choices belong to Pi05.
 
+Optional FlashInfer implementations live together under `backend/flashinfer/`.
+They register lazily as attention `flashinfer_fa2`, normalization `flashinfer`,
+and projection `flashinfer_cublaslt`. They require Linux/CUDA SM80+ and the
+`flashinfer` extra pinned to `flashinfer-python==0.7.2.post1`; importing the
+registries or selecting existing defaults never imports this dependency.
+The public entry point is `make_policy("pi05", checkpoint=...,
+kernel_profile="flashinfer")`. This is an experimental built-in backend profile,
+not a verified hardware tuning profile. `KernelSelection.resolve_backend`
+maps the three generic operator families to existing lazy registry names without
+importing FlashInfer. Pi05 binds those names to its prepared execution plans,
+enables native inference/norm execution, disables paired-MLP fusion, and bypasses
+the separate Triton attention shortcuts so the profile reaches all three operators.
+The existing `none`, `torch`, `auto` and named tuned-profile behavior is preserved;
+uncovered operators keep their original implementation preferences.
+
+The profile takes precedence over the three corresponding explicit backend
+selections and Gemma attention switches. Other optimization settings and
+numerical conventions remain intact; preset horizon/step defaults are resolved
+before the profile changes operator placement. Quantized recipes are rejected,
+not converted. CUDA eval/no-grad execution remains mandatory. Individual operator
+ablations can still use `kernel_profile="none"` with `Pi05OptimizationConfig`.
+
+FA2 uses `BatchPrefillWithRaggedKVCacheWrapper(backend="fa2")` for both prefix
+and multi-token action attention. BHSD inputs become NHD without repeating KV
+heads. Plans own staging/output tensors and 32 MiB float scratch, plus the
+wrapper's integer/host scratch. Boolean masks are repacked on every execution,
+with byte alignment per request and zero outputs for fully masked query rows.
+Shapes, scale, mask presence and graph/stream ownership key each plan. Widths
+64/128/256 are admitted; SigLIP's width 72, additive bias and dropout are rejected.
+`ScopedAttentionBackend` extends the existing registry with optional scope binding,
+release and clear operations. The Pi05 controller uses that protocol without
+importing a concrete FlashInfer implementation.
+
+Gemma RMSNorm accepts BF16 activations and checkpoint FP32 scales only when the
+scale can be represented exactly in BF16, as required by FlashInfer's weight
+dtype contract. Scale conversion is validated outside capture and tied to the
+parameter identity/version. All weights are immutable until graph invalidation.
+The normalization protocol advertises adaptive support; Pi05 keeps AdaRMS on its
+reference path when the selected backend only implements ordinary Gemma RMSNorm.
+Residual addition is rounded before the norm call. FlashInfer's fused-add API
+was rejected because it changes this rounding boundary.
+
+Selecting a nondefault projection backend now routes the unfused MLP through
+`ProjectionPlan` without requiring a paired-GEMM kernel. FlashInfer handles
+unquantized BF16 gate/up/down weights, preserving the native or Torch GELU/product
+selection. Attention projections, vision and FP32 action/time projections keep
+their existing routes. The adapter calls the pinned cuBLASLt runner with private
+32 MiB scratch per device/execution scope, shared by sequential MLP projections.
+Each projection owns aligned input/output storage and a warmed algorithm runner
+per row count/scope. The public `mm_bf16` API was rejected here because its
+process-global workspace can alias independent graphs. These copies and scratch
+allocations are explicit costs to measure before any later Orin tuning.
+
 CUDA operator instances bind to their construction device. Plans reject inputs
 from another device, and each native launch selects that device and its current
 Torch stream, restoring the caller's device afterwards.
@@ -68,8 +121,10 @@ fixed-layout plans with ephemeral BF16 output; it constructs no quantizer.
 SM80 or newer and warmup before capture. Pi05 owns plans per layer, layout and
 graph/stream scope, releasing them after graph teardown and on refit or migration.
 Action-expert activations and existing numerical/precision recipes retain their
-paths. Combining this option with quantized, paired-GEMM or `openpi_rlinf` recipes
-fails explicitly. No preset enables it and it does not select a horizon or solver.
+paths. Combining this option with quantized, paired-GEMM or `openpi_rlinf` recipes,
+or a replacement projection backend (including `kernel_profile="flashinfer"`),
+fails explicitly: prefix GELU fusion requires the original GEMMs. No preset
+enables it and it does not select a horizon or solver.
 
 The `openpi_rlinf` numerical contract follows RLinf's inference implementation:
 exact GELU, BF16 vision encoder/projector with FP32
@@ -206,6 +261,19 @@ formats; this does not imply equivalence to BF16. Exact-GELU scales must not be
 reused for the default tanh-GELU profile. Protected FP8 recipes and uniform
 quantization are separate configurations with different error behavior.
 
+FlashInfer is numerically equivalent in operation, not bit-exact in accumulation
+order. Component acceptance in `tests/test_flashinfer_backend.py` uses BF16
+inputs with fixed seeds and no dropout. FA2 is compared with FP32 Torch SDPA
+using identical GQA heads, noncausal Boolean masks and scale (`rtol=2e-2`,
+`atol=2e-3`); norm is compared with FP32 Torch statistics and offset affine
+(`rtol=1e-2`, `atol=1e-2`); GEMM is compared with BF16 `F.linear`
+(`rtol=1e-2`, `atol=2e-2`). These are fixed component limits for the included
+random workloads, allowing BF16 rounding and different FP32 reduction trees;
+they do not establish a whole-policy action error budget. The tiny-policy graph
+test requires bit equality to eager execution of the same FlashInfer recipe,
+with identical noise and ten denoise steps. Real-checkpoint velocity/action
+comparisons against the selected unmodified numerical profile are still required.
+
 ## 7. Implementation plan
 
 Add operator contracts, concrete backends, configuration and an instance-local
@@ -225,6 +293,14 @@ changed inputs. Eviction, capture failure and refit tests check storage lifetime
 Model-independent fusion checks live in `tests/test_fused_operators.py`.
 Small graph fixtures use the public policy constructor and clean up after each test.
 Torch reference operators exercise the same buffer and rounding contracts.
+
+`tests/test_flashinfer_backend.py` contains CUDA kernel checks at Gemma shapes,
+including B2, head width 256, P576/P672, and T10/T50. It checks dynamic mask
+replay and separate graph workspaces. `tests/pi05/test_flashinfer.py` covers
+one-click profile selection, complete ten-step graph replay and refit/eviction.
+These GPU tests are retained for execution on the target device; they skip when
+CUDA or the pinned optional
+dependency is absent. No new CPU tests are included for this integration.
 
 Real-weight validation uses recorded RLinf-Pi05-LIBERO-SFT observations and fixed
 noise in isolated environments. Thor/Spark checks cover BF16, protected action
@@ -265,3 +341,12 @@ recomputation.
 Numerical drift and task quality require separate evaluation. Measured gains
 include vision precision and execution-profile changes as well as kernel fusion;
 the original-numerics comparison reports the narrower operator-only benefit.
+
+FlashInfer SM87 admission is a capability policy, not an AGX Orin validation
+claim. Installation, JIT compilation with the target toolkit, component parity,
+real-checkpoint action drift and performance still require testing on the device.
+The repository's CUDA 13 lock must not replace a working JetPack/CUDA 12 stack.
+The pinned upstream [prefill wrapper](https://github.com/flashinfer-ai/flashinfer/blob/v0.7.2.post1/flashinfer/prefill.py)
+and [cuBLASLt runner](https://github.com/flashinfer-ai/flashinfer/blob/v0.7.2.post1/flashinfer/gemm/gemm_base.py)
+are the integration contracts; upgrading that pin requires rechecking mask
+packing, workspace ownership and graph-safe algorithm preparation.

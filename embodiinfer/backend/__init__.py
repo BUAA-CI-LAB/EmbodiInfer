@@ -1,1 +1,1 @@
-"""VVLA-owned inference backends and kernels."""
+"""EmbodiInfer-owned inference backends and kernels."""

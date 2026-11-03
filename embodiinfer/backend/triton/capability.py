@@ -1,4 +1,4 @@
-"""Import-safe capability probing shared by VVLA Triton kernels."""
+"""Import-safe capability probing shared by EmbodiInfer Triton kernels."""
 
 from __future__ import annotations
 

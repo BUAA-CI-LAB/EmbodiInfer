@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gc
 import hashlib
 import importlib.util
@@ -196,8 +197,17 @@ def main() -> None:
             )
         load_s = time.monotonic() - started
         progress("warming", load_s=load_s)
+        # Native reference engines flush their draft corpus with content caches.
+        # A fresh-first-frame comparison must likewise retain only public grammar
+        # seeds, never candidate statistics learned from these same warmup images.
+        reset_prior = config.get("firstframe", {}).get("reset_speculative_prior", False)
+        prior_attribute = "drafter" if model == "streamvln" else "grammar_drafter"
+        prior_seed = copy.deepcopy(getattr(runtime, prior_attribute)) if reset_prior else None
 
         def call(index, phase):
+            if reset_prior:
+                setattr(runtime, prior_attribute, copy.deepcopy(prior_seed))
+                assert getattr(runtime, prior_attribute).observed == 0
             selected = samples[index : index + batch]
             assert len(selected) == batch and not adapter.memories
             requests = []
@@ -327,6 +337,7 @@ def main() -> None:
             config_sha256=digest(args.config),
             driver_sha256=digest(__file__),
             accuracy_evaluated=False,
+            speculative_prior_reset_per_batch=reset_prior,
             timing_scope="Decoded CPU RGB through preprocessing, full action generation and CPU actions; excludes PNG decoding, disk, warmup, transport and simulator.",
             limitation="First frame with empty history; long-history KV reuse and history-feature reuse are not exercised.",
         )

@@ -14,8 +14,8 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 import numpy as np
-from PIL import Image
 import torch
+from PIL import Image
 
 from embodiinfer.models.qwen25_vl.history_image_cache import (
     HistoryImageCache,
@@ -24,19 +24,22 @@ from embodiinfer.models.qwen25_vl.history_image_cache import (
 from embodiinfer.policies.qwen_r2r_low.contract import (
     LOW_LEVEL_IMAGE_SIZE,
     LOW_LEVEL_SYSTEM_PROMPT_SHA256,
-    R2R_PREPROCESSOR_SHA256 as LOW_PROCESSOR_SHA256,
     QwenR2RLowMemory,
+)
+from embodiinfer.policies.qwen_r2r_low.contract import (
+    R2R_PREPROCESSOR_SHA256 as LOW_PROCESSOR_SHA256,
 )
 from embodiinfer.policies.qwen_r2r_low.runner import QwenR2RLowRunner
 from embodiinfer.policies.qwen_r2r_panoramic.contract import (
     PANORAMIC_IMAGE_SIZE,
     PANORAMIC_SYSTEM_PROMPT_SHA256,
-    R2R_PREPROCESSOR_SHA256 as PANORAMIC_PROCESSOR_SHA256,
     QwenR2RPanoramicMemory,
+)
+from embodiinfer.policies.qwen_r2r_panoramic.contract import (
+    R2R_PREPROCESSOR_SHA256 as PANORAMIC_PROCESSOR_SHA256,
 )
 from embodiinfer.policies.qwen_r2r_panoramic.runner import QwenR2RPanoramicRunner
 from embodiinfer.types import Observation
-
 
 Profile = Literal["low", "panoramic"]
 Mode = Literal["none", "rgb_bytes"]
@@ -67,9 +70,7 @@ def _summary(values: list[float]) -> dict[str, float]:
         "mean_ms": statistics.fmean(values),
         "p50_ms": _percentile(values, 0.50),
         "p95_ms": _percentile(values, 0.95),
-        "steps_per_second": (
-            len(values) / total_seconds if total_seconds else 0.0
-        ),
+        "steps_per_second": (len(values) / total_seconds if total_seconds else 0.0),
     }
 
 
@@ -108,25 +109,17 @@ def _load_visuals(
         if profile == "panoramic":
             values = step.get("candidates")
             if not isinstance(values, list) or not values:
-                raise ValueError(
-                    f"panoramic step {index} needs non-empty candidates"
-                )
+                raise ValueError(f"panoramic step {index} needs non-empty candidates")
             for candidate_index, value in enumerate(values):
-                if not isinstance(value, dict) or not isinstance(
-                    value.get("image"), str
-                ):
-                    raise ValueError(
-                        f"step {index} candidate {candidate_index} needs image"
-                    )
+                if not isinstance(value, dict) or not isinstance(value.get("image"), str):
+                    raise ValueError(f"step {index} candidate {candidate_index} needs image")
                 angle = float(value.get("relative_angle"))
                 distance = float(value.get("distance"))
                 if not np.isfinite(angle) or not np.isfinite(distance):
                     raise ValueError("candidate geometry must be finite")
                 candidates.append(
                     {
-                        "image": _image_tensor(
-                            _resolve(value["image"], root)
-                        ),
+                        "image": _image_tensor(_resolve(value["image"], root)),
                         "relative_angle": angle,
                         "distance": distance,
                     }
@@ -137,9 +130,7 @@ def _load_visuals(
                 "candidates": tuple(candidates),
                 "instruction": str(step.get("instruction", "")),
                 "response": str(step.get("response", "")),
-                "distance_traveled": float(
-                    step.get("distance_traveled", 0.0)
-                ),
+                "distance_traveled": float(step.get("distance_traveled", 0.0)),
                 "move_possible": bool(step.get("move_possible", True)),
             }
         )
@@ -158,9 +149,9 @@ def _load_verified_processor(
 ):
     from transformers import (
         AutoTokenizer,
+        Qwen2_5_VLProcessor,
         Qwen2VLImageProcessor,
         Qwen2VLVideoProcessor,
-        Qwen2_5_VLProcessor,
     )
 
     expected_processor_hash, expected_prompt_hash = _contract_values(profile)
@@ -170,9 +161,7 @@ def _load_verified_processor(
     processor_bytes = processor_path.read_bytes()
     actual_processor_hash = _sha256(processor_bytes)
     if actual_processor_hash != expected_processor_hash:
-        raise ValueError(
-            f"unexpected official processor config: {processor_path}"
-        )
+        raise ValueError(f"unexpected official processor config: {processor_path}")
 
     prompt_path = checkpoint / "system_prompt.txt"
     prompt_bytes = prompt_path.read_bytes()
@@ -187,14 +176,10 @@ def _load_verified_processor(
         "shortest_edge": int(processor_config["min_pixels"]),
         "longest_edge": int(processor_config["max_pixels"]),
     }
-    tokenizer = AutoTokenizer.from_pretrained(
-        checkpoint, local_files_only=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, local_files_only=True)
     chat_template_path = checkpoint / "chat_template.json"
     if chat_template_path.is_file():
-        chat_template = json.loads(
-            chat_template_path.read_text(encoding="utf-8")
-        )["chat_template"]
+        chat_template = json.loads(chat_template_path.read_text(encoding="utf-8"))["chat_template"]
     else:
         chat_template = tokenizer.chat_template
     if not chat_template:
@@ -246,9 +231,7 @@ def _make_runner(
     processor,
     system_prompt: str,
 ):
-    runner_type = (
-        QwenR2RLowRunner if profile == "low" else QwenR2RPanoramicRunner
-    )
+    runner_type = QwenR2RLowRunner if profile == "low" else QwenR2RPanoramicRunner
     runner = object.__new__(runner_type)
     runner.profile = "low_level" if profile == "low" else "panoramic"
     runner.processor = processor
@@ -256,9 +239,7 @@ def _make_runner(
     runner.history_image_cache_mode = mode
     runner.history_image_cache_enabled = mode == "rgb_bytes"
     runner.history_image_cache_key = _cache_key(profile)
-    runner.model = SimpleNamespace(
-        config=SimpleNamespace(max_position_embeddings=0)
-    )
+    runner.model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=0))
     if profile == "low":
         runner.graph_runtime = _IdentityGraphRuntime()
     else:
@@ -274,9 +255,7 @@ def _observation(profile: Profile, step: dict[str, Any]) -> Observation:
     if profile == "panoramic":
         metadata.update(
             {
-                "candidate_images": [
-                    candidate["image"] for candidate in step["candidates"]
-                ],
+                "candidate_images": [candidate["image"] for candidate in step["candidates"]],
                 "candidates": [
                     {
                         "relative_angle": candidate["relative_angle"],
@@ -307,10 +286,7 @@ def _tensor_signature(tensor: torch.Tensor) -> dict[str, object]:
 def _encoded_signature(
     encoded: dict[str, torch.Tensor],
 ) -> dict[str, dict[str, object]]:
-    return {
-        name: _tensor_signature(encoded[name])
-        for name in sorted(encoded)
-    }
+    return {name: _tensor_signature(encoded[name]) for name in sorted(encoded)}
 
 
 def _run_session(
@@ -328,16 +304,8 @@ def _run_session(
         processor=processor,
         system_prompt=system_prompt,
     )
-    memory_type = (
-        QwenR2RLowMemory
-        if profile == "low"
-        else QwenR2RPanoramicMemory
-    )
-    cache = (
-        HistoryImageCache.enabled()
-        if mode == "rgb_bytes"
-        else HistoryImageCache()
-    )
+    memory_type = QwenR2RLowMemory if profile == "low" else QwenR2RPanoramicMemory
+    cache = HistoryImageCache.enabled() if mode == "rgb_bytes" else HistoryImageCache()
     frames: tuple[torch.Tensor, ...] = ()
     responses: tuple[str, ...] = ()
     latencies: list[float] = []
@@ -383,47 +351,29 @@ def _run_session(
         before_calls = dict(render_calls)
         started = time.perf_counter_ns() if timed else 0
         if mode == "rgb_bytes":
-            encoded, entries = runner._prepare_batch_with_history_entries(
-                [observation], [memory]
-            )
+            encoded, entries = runner._prepare_batch_with_history_entries([observation], [memory])
             current_entry = entries[0]
             if current_entry is None:
                 raise RuntimeError("rgb_bytes preparation omitted current entry")
             before_entries = len(cache.entries)
-            cache = runner.commit_history_image_cache(
-                memory, current_entry
-            )
+            cache = runner.commit_history_image_cache(memory, current_entry)
             counters["appends"] += 1
-            counters["evictions"] += max(
-                0, before_entries + 1 - len(cache.entries)
-            )
+            counters["evictions"] += max(0, before_entries + 1 - len(cache.entries))
         else:
             encoded = runner._prepare_batch([observation], [memory])
             current_entry = None
         if timed:
-            latencies.append(
-                (time.perf_counter_ns() - started) / 1_000_000
-            )
+            latencies.append((time.perf_counter_ns() - started) / 1_000_000)
 
         current_kind = "low" if profile == "low" else "panorama"
-        current_kind_calls = (
-            render_calls[current_kind] - before_calls[current_kind]
-        )
+        current_kind_calls = render_calls[current_kind] - before_calls[current_kind]
         expected_current_kind_calls = history_renders + 1
         if current_kind_calls != expected_current_kind_calls:
-            raise RuntimeError(
-                "formal runner render count disagrees with cache accounting"
-            )
-        candidate_count = (
-            len(step["candidates"]) if profile == "panoramic" else 0
-        )
-        candidate_calls = (
-            render_calls["candidate"] - before_calls["candidate"]
-        )
+            raise RuntimeError("formal runner render count disagrees with cache accounting")
+        candidate_count = len(step["candidates"]) if profile == "panoramic" else 0
+        candidate_calls = render_calls["candidate"] - before_calls["candidate"]
         if candidate_calls != candidate_count:
-            raise RuntimeError(
-                "panoramic candidates must render exactly once per step"
-            )
+            raise RuntimeError("panoramic candidates must render exactly once per step")
 
         signatures.append(_encoded_signature(dict(encoded)))
         counters["hits"] += hits
@@ -459,11 +409,7 @@ def _run_session(
 
 
 def _pooled_mode(sessions: list[dict[str, object]]) -> dict[str, object]:
-    latencies = [
-        latency
-        for session in sessions
-        for latency in session["step_latency_ms"]
-    ]
+    latencies = [latency for session in sessions for latency in session["step_latency_ms"]]
     totals: dict[str, int] = {}
     for session in sessions:
         for name, value in session["counters"].items():
@@ -478,9 +424,7 @@ def _pooled_mode(sessions: list[dict[str, object]]) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--profile", choices=("low", "panoramic"), required=True
-    )
+    parser.add_argument("--profile", choices=("low", "panoramic"), required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--iterations", type=int, default=5)
@@ -491,12 +435,8 @@ def main() -> int:
 
     checkpoint = args.checkpoint.expanduser().resolve(strict=True)
     manifest = args.manifest.expanduser().resolve(strict=True)
-    steps = _load_visuals(
-        _load_manifest(manifest), args.profile, manifest.parent
-    )
-    processor, system_prompt, checkpoint_contract = (
-        _load_verified_processor(checkpoint, args.profile)
-    )
+    steps = _load_visuals(_load_manifest(manifest), args.profile, manifest.parent)
+    processor, system_prompt, checkpoint_contract = _load_verified_processor(checkpoint, args.profile)
 
     warmups = {
         mode: _run_session(
@@ -569,10 +509,7 @@ def main() -> int:
         },
         "execution_order": execution_order,
         "sessions": sessions,
-        "pooled_step": {
-            mode: _pooled_mode(per_mode[mode])
-            for mode in ("none", "rgb_bytes")
-        },
+        "pooled_step": {mode: _pooled_mode(per_mode[mode]) for mode in ("none", "rgb_bytes")},
         "parity": {
             "all_processor_tensor_dtype_shape_hash_exact": parity,
             "reference_processor_tensors": reference,

@@ -93,9 +93,9 @@ def test_installed_kernel_applies_only_to_verified_layouts(export, tmp_path):
     result = installer.install(root, "testgpu", root=profiles)
     assert result["verified_layouts"] == 1
     profile = tuned.load_profile(profiles / "testgpu")
-    assert profile.ops["gated_residual"]["evidence"]["run_id"] == "run-1"
+    assert profile.ops["gated_residual"]["variants"]["v_task"]["evidence"]["run_id"] == "run-1"
     op = KernelSelection(profile).resolve("gated_residual")
-    calls = profile.kernel("gated_residual").fn.__globals__["run"].__globals__["CALLS"]
+    calls = profile.kernel("gated_residual").fn.__globals__["_VARIANTS"][0].run.__globals__["CALLS"]
     x, gate = torch.ones(1, 2, 4), torch.full((1, 1, 4), 2.0)
     torch.testing.assert_close(op(x, x, gate), x + x * gate)
     assert calls == [(1, 2, 4)]
@@ -115,7 +115,7 @@ def test_reinstall_requires_replace_and_matching_environment(export, tmp_path, m
     root, environment = export
     profiles = tmp_path / "tuned"
     installer.install(root, "testgpu", root=profiles)
-    with pytest.raises(ContractError, match="already installed"):
+    with pytest.raises(ContractError, match="already verify"):
         installer.install(root, "testgpu", root=profiles)
     installer.install(root, "testgpu", root=profiles, replace=True)
     monkeypatch.setattr(tuned, "current_environment", lambda: {**environment, "device_name": "Other"})
@@ -127,7 +127,7 @@ def test_edited_installed_kernel_is_rejected(export, tmp_path):
     root, _ = export
     profiles = tmp_path / "tuned"
     installer.install(root, "testgpu", root=profiles)
-    (profiles / "testgpu" / "gated_residual" / "kernel.py").write_text(
+    (profiles / "testgpu" / "gated_residual" / "v_task" / "kernel.py").write_text(
         KERNEL + "\n# edit\n", encoding="utf-8"
     )
     with pytest.raises(ValueError, match="sha256"):
@@ -153,3 +153,55 @@ def test_installed_kernel_receives_only_tensor_arguments(export, tmp_path):
     x, gate = torch.ones(1, 2, 4), torch.full((1, 1, 4), 2.0)
     assert kernel.applies(x, x, gate, 0.5) and not kernel.applies(x, x, gate, 0.25)
     torch.testing.assert_close(kernel.fn(x, x, gate, 0.5), x + x * gate)
+
+
+def _second_task(export_root, tmp_path, monkeypatch, shape):
+    """A copy of the export whose task verified ``shape`` instead, under its own identity."""
+    import shutil
+
+    other = tmp_path / "other"
+    shutil.copytree(export_root, other)
+    replay = json.loads((other / "task" / "replay.json").read_text(encoding="utf-8"))
+    gate = [1, 1, shape[-1]]
+    replay["cases"] = {
+        "case": {"inputs": [_spec(shape), {**_spec(shape), "storage": 1}, {**_spec(gate), "storage": 2}]}
+    }
+    (other / "task" / "replay.json").write_text(json.dumps(replay), encoding="utf-8")
+    monkeypatch.setattr(
+        installer.TaskPackage,
+        "load",
+        lambda path: SimpleNamespace(root=path, identity="other" if path.parent == other else "task"),
+    )
+    return other
+
+
+def test_tasks_of_one_operator_install_as_dispatched_variants(export, tmp_path, monkeypatch):
+    """Layouts split across tasks are all served; a call goes to the variant that verified it."""
+    root, _ = export
+    other = _second_task(root, tmp_path, monkeypatch, [1, 3, 4])
+    profiles = tmp_path / "tuned"
+    installer.install(root, "testgpu", root=profiles)
+    result = installer.install(other, "testgpu", root=profiles)
+    assert result["variants"] == ["v_task", "v_other"]
+    profile = tuned.load_profile(profiles / "testgpu")
+    assert profile.ops["gated_residual"]["verified_layouts"] == 2
+    kernel = profile.kernel("gated_residual")
+    first, second = (variant.run.__globals__["CALLS"] for variant in kernel.fn.__globals__["_VARIANTS"])
+    op = KernelSelection(profile).resolve("gated_residual")
+    gate = torch.full((1, 1, 4), 2.0)
+    for rows in (2, 3, 5):
+        x = torch.ones(1, rows, 4)
+        torch.testing.assert_close(op(x, x, gate), x + x * gate)
+    assert first == [(1, 2, 4)] and second == [(1, 3, 4)]  # (1, 5, 4) fell back
+
+
+def test_overlapping_variant_needs_replace_and_then_takes_over(export, tmp_path, monkeypatch):
+    root, _ = export
+    other = _second_task(root, tmp_path, monkeypatch, [1, 2, 4])
+    profiles = tmp_path / "tuned"
+    installer.install(root, "testgpu", root=profiles)
+    with pytest.raises(ContractError, match="already verify"):
+        installer.install(other, "testgpu", root=profiles)
+    result = installer.install(other, "testgpu", root=profiles, replace=True)
+    assert result["variants"] == ["v_other"]
+    assert not (profiles / "testgpu" / "gated_residual" / "v_task").exists()

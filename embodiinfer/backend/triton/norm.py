@@ -1,4 +1,4 @@
-"""Inference RMSNorm kernels owned by VVLA."""
+"""Inference RMSNorm kernels owned by EmbodiInfer."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def rms_norm(
 ) -> torch.Tensor:
     """Normalize independent rows with decode arithmetic; multi-row use is opt-in."""
     if not supports_rms_norm(inputs, weight, allow_multiple_rows=allow_multiple_rows):
-        raise ValueError("unsupported input for VVLA Triton RMSNorm")
+        raise ValueError("unsupported input for EmbodiInfer Triton RMSNorm")
     output = torch.empty_like(inputs)
     width = inputs.shape[-1]
     rows = inputs.numel() // width
@@ -122,7 +122,7 @@ def add_rms_norm(
     if residual.shape != update.shape or not supports_rms_norm(
         residual, weight, allow_multiple_rows=allow_multiple_rows
     ):
-        raise ValueError("unsupported input for VVLA Triton residual RMSNorm")
+        raise ValueError("unsupported input for EmbodiInfer Triton residual RMSNorm")
     if not update.is_contiguous() or update.dtype != residual.dtype:
         raise ValueError("residual RMSNorm inputs must share contiguous layout and dtype")
     summed = torch.empty_like(residual)

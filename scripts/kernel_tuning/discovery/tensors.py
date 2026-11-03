@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -35,15 +34,6 @@ def flatten(value: Any, tensors: list[torch.Tensor]) -> Any:
             index = len(tensors)
             tensors.append(value)
         return {"tensor": index}
-    if (
-        type(value).__module__ == "embodiinfer.backend.triton.sampling"
-        and type(value).__name__ == "GreedyWorkspace"
-    ):
-        return {
-            "greedy_workspace": {
-                field.name: flatten(getattr(value, field.name), tensors) for field in fields(value)
-            }
-        }
     if isinstance(value, (tuple, list)):
         return {"tuple" if isinstance(value, tuple) else "list": [flatten(x, tensors) for x in value]}
     if isinstance(value, dict) and all(isinstance(key, str) for key in value):
@@ -73,10 +63,6 @@ def restore(recipe: Any, tensors: list[torch.Tensor]) -> Any:
         return tuple(result) if kind == "tuple" else result
     if kind == "dict":
         return {key: restore(item, tensors) for key, item in value.items()}
-    if kind == "greedy_workspace":
-        from embodiinfer.backend.triton.sampling import GreedyWorkspace
-
-        return GreedyWorkspace(**{key: restore(item, tensors) for key, item in value.items()})
     raise ContractError(f"Unknown argument recipe: {kind}")
 
 
@@ -156,8 +142,6 @@ def tensor_outputs(result: Any) -> list[torch.Tensor]:
     recipe = flatten(result, tensors)
 
     def check(node: Any) -> None:
-        if "greedy_workspace" in node:
-            raise ContractError("Workspace outputs require explicit tensor returns")
         if "constant" in node and node["constant"] is not None:
             raise ContractError("Non-tensor results require a dedicated output contract")
         for key in ("tuple", "list"):

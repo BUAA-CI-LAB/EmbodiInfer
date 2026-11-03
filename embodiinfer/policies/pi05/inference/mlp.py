@@ -213,23 +213,28 @@ class MlpPlan:
             if key[-1] == scope:
                 del self.plans[key]
 
-    def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
+    def __call__(self, inputs: torch.Tensor, *, native: bool = False) -> torch.Tensor:
         """Fuse paired BF16 projections or share one calibrated gate/up encoding."""
         if self.paired is not None:
             matrix = inputs.reshape(-1, inputs.shape[-1]).contiguous()
             hidden = self.paired(matrix).reshape(*inputs.shape[:-1], -1)
             return self.down.apply(hidden, self.down.encode(hidden))
-        return self.project(inputs, self.gate.encode(inputs))
+        return self.project(inputs, self.gate.encode(inputs), native=native)
 
     def project(
-        self, inputs: torch.Tensor, encoded: EncodedActivation | None, *, norm: Any = None
+        self,
+        inputs: torch.Tensor,
+        encoded: EncodedActivation | None,
+        *,
+        norm: Any = None,
+        native: bool = False,
     ) -> torch.Tensor:
         """Fuse the selected GELU/product/down encoding after native GEMMs.
 
         ``inputs`` is the residual that ``norm`` normalized into ``encoded``; layers with BF16
         outlier channels need both to add those channels' contribution.
         """
-        output = self._project(inputs, encoded)
+        output = self._project(inputs, encoded, native=native)
         if self.side_down is not None:
             self._add_outliers(inputs, encoded, norm, output)
         return output
@@ -254,7 +259,9 @@ class MlpPlan:
         torch.mul(F.gelu(gate_up[:, :width]), gate_up[:, width:], out=hidden)
         output.view(-1, output.shape[-1]).addmm_(hidden, self.side_down)
 
-    def _project(self, inputs: torch.Tensor, encoded: EncodedActivation | None) -> torch.Tensor:
+    def _project(
+        self, inputs: torch.Tensor, encoded: EncodedActivation | None, *, native: bool = False
+    ) -> torch.Tensor:
         if getattr(self, "g_kn_fp8", None) is not None and self.runtime.fusion is not None:
             from ....backend.triton.geglu import prefix_geglu_fp8
 
@@ -473,7 +480,12 @@ class MlpPlan:
             return self.down.apply(inputs, result)
         gate, up = self.gate.apply(inputs, encoded), self.up.apply(inputs, encoded)
         if self.runtime.fusion is None:
-            hidden = F.gelu(gate, approximate=self.runtime.approximate) * up
+            if not self.runtime.config.fused_mlp and self.runtime.approximate == "tanh":
+                from ..modeling_pi05 import _op
+
+                hidden = _op(None, "gated_gelu", native)(gate, up)
+            else:
+                hidden = F.gelu(gate, approximate=self.runtime.approximate) * up
             return self.down.apply(hidden, self.down.encode(hidden))
         matrix = gate.reshape(-1, gate.shape[-1]).contiguous()
         key = (tuple(matrix.shape), matrix.device, self.runtime.workspace_key(matrix.device))

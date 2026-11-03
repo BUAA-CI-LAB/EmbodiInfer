@@ -1,4 +1,4 @@
-"""FlashInfer 0.1.2 building/input generation with strict KDA measurement gates.
+"""FlashInfer 0.1.2 building/input generation with EmbodiInfer's measurement gates.
 
 The upstream default evaluator permits numerical tolerances and only eager
 timing. We reuse its builders, generators, and eager timer and implement the
@@ -181,6 +181,20 @@ class FlashInferAdapter:
                 "device": self.device,
                 "capability": list(torch.cuda.get_device_capability(self.device)),
                 "total_memory": properties.total_memory,
+                "device_properties": {
+                    key: getattr(properties, key)
+                    for key in (
+                        "multi_processor_count",
+                        "warp_size",
+                        "max_threads_per_multi_processor",
+                        "regs_per_multiprocessor",
+                        "shared_memory_per_block",
+                        "shared_memory_per_multiprocessor",
+                        "L2_cache_size",
+                    )
+                    if hasattr(properties, key)
+                },
+                "power_mode": self._command(["nvpmodel", "-q"]),
                 "gpu_uuid": str(getattr(properties, "uuid", "unavailable")),
                 "hostname": platform.node(),
                 "platform": platform.platform(),
@@ -485,58 +499,44 @@ class FlashInferAdapter:
     def _build_reference(self, registry: Any) -> Any:
         return registry.build_reference(self.definition)
 
+    def profiled_workload(self) -> Any:
+        """The workload NCU evidence describes: the heaviest-weighted one, else the first."""
+        weights = self.cfg.weights
+        return max(self.traces, key=lambda trace: weights.get(trace.workload.uuid, 1.0)).workload
+
     def profile(self, solutions: dict[str, dict[str, Any]], output: Path) -> dict[str, Any]:
-        """Capture optional NCU evidence in a separate worker, never promotion timing."""
-        from scripts.kernel_tuning.artifacts import atomic_json
+        """Capture counters and assembly for every workload outside promotion timing."""
+        from benchmarks.kernel_tuning.profiling import collect
 
-        if not shutil.which("ncu"):
-            raise ContractError("profile: true requires ncu on PATH")
-        candidate = output / "candidate.json"
-        atomic_json(candidate, solutions["candidate"])
-        command = [
-            "ncu",
-            "--target-processes",
-            "all",
-            "--set",
-            "basic",
-            "--force-overwrite",
-            "--export",
-            str(output / "ncu"),
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--profile-once",
-            str(self.task.root),
-            str(candidate),
-        ]
-        with (output / "ncu.log").open("w", encoding="utf-8") as log:
-            subprocess.run(
-                command,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                check=True,
-                timeout=self.cfg.search.evaluation_timeout_seconds,
-            )
-        return {
-            "command": command,
-            "report": str(output / "ncu.ncu-rep"),
-            "workload": self.traces[0].workload.uuid,
-        }
+        return collect(self.task, solutions, output)
+
+    def profile_once(self, solution: dict[str, Any]) -> None:
+        """NCU worker body: compile and warm the candidate, then call it once under NVTX."""
+        import torch
+        from flashinfer_bench.compile import BuilderRegistry
+        from flashinfer_bench.data import Solution
+
+        runnable = BuilderRegistry.get_instance().build(self.definition, Solution.model_validate(solution))
+        workload = self.profiled_workload()
+        self._call(runnable, self._inputs(workload, self.cfg.seeds[0]))
+        torch.cuda.synchronize(self.device)
+        inputs = self._inputs(workload, self.cfg.seeds[0])
+        torch.cuda.synchronize(self.device)
+        with torch.cuda.nvtx.range("candidate"):
+            self._call(runnable, inputs)
+            torch.cuda.synchronize(self.device)
 
 
-if __name__ == "__main__":
-    # NCU child: one representative workload, excluded from optimization metrics.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from flashinfer_bench.compile import BuilderRegistry
-    from flashinfer_bench.data import Solution
-    from scripts.kernel_tuning.contracts import read_json
-
-    if len(sys.argv) != 4 or sys.argv[1] != "--profile-once":
-        raise SystemExit("Internal NCU worker; use tuning.yaml profile: true")
-    adapter = FlashInferAdapter(TaskPackage.load(Path(sys.argv[2])))
-    runnable = BuilderRegistry.get_instance().build(
-        adapter.definition, Solution.model_validate(read_json(Path(sys.argv[3])))
-    )
-    adapter._call(runnable, adapter._inputs(adapter.traces[0].workload, adapter.cfg.seeds[0]))
-    import torch
-
-    torch.cuda.synchronize(adapter.device)
+#: Variables the NCU worker needs from the evaluator; ``TRITON_*``, ``FIB_*``, ``CUDA_*`` too.
+_PROFILE_ENVIRONMENT = frozenset(
+    {
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "CPATH",
+        "LIBRARY_PATH",
+        "PYTHONPATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "HF_HUB_OFFLINE",
+        "TORCH_EXTENSIONS_DIR",
+    }
+)
