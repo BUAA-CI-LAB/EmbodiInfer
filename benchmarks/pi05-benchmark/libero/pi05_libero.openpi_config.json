@@ -1,0 +1,12 @@
+{
+  "action_horizon": 10,
+  "state_dim": 8,
+  "output_action_dim": 7,
+  "image_keys": ["base_0_rgb", "left_wrist_0_rgb"],
+  "tokenizer": "paligemma_tokenizer.model",
+  "norm_stats": "assets/physical-intelligence/libero/norm_stats.json",
+  "use_quantile_norm": true,
+  "discrete_state_input": false,
+  "delta_action_mask": [],
+  "dtype": "bfloat16"
+}

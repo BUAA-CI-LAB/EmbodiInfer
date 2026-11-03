@@ -27,6 +27,10 @@ class RotaryKernel:
             pointer,
         ]
         self.library.cc_rotary.restype = ctypes.c_int
+        self.library.cc_split_qkv_rope.argtypes = (
+            [pointer] * 6 + [ctypes.c_int] * 8 + [ctypes.c_float, pointer]
+        )
+        self.library.cc_split_qkv_rope.restype = ctypes.c_int
 
     def __call__(self, inputs: torch.Tensor, sine: torch.Tensor, cosine: torch.Tensor) -> torch.Tensor:
         """Apply reference rotation using FP32 sine/cosine and a distinct BF16 output."""
@@ -58,3 +62,55 @@ class RotaryKernel:
             if status:
                 raise RuntimeError(f"RoPE kernel launch failed: {status}")
         return output
+
+    def split_qkv_rope(
+        self,
+        qkv: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        batch: int,
+        tokens: int,
+        q_heads: int,
+        kv_heads: int,
+        head_dim: int,
+        *,
+        full_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        kv_offset: int = 0,
+        q_bthd: bool = False,
+        q_scale: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if q_bthd:
+            q_buf = torch.empty((batch, tokens, q_heads, head_dim), device=qkv.device, dtype=torch.bfloat16)
+        else:
+            q_buf = torch.empty((batch, q_heads, tokens, head_dim), device=qkv.device, dtype=torch.bfloat16)
+        if full_kv is not None:
+            k_buf, v_buf = full_kv
+            kv_total_t = k_buf.shape[2]
+        else:
+            k_buf = torch.empty((batch, kv_heads, tokens, head_dim), device=qkv.device, dtype=torch.bfloat16)
+            v_buf = torch.empty((batch, kv_heads, tokens, head_dim), device=qkv.device, dtype=torch.bfloat16)
+            kv_total_t = tokens
+            kv_offset = 0
+        with torch.cuda.device(qkv.device):
+            status = self.library.cc_split_qkv_rope(
+                qkv.data_ptr(),
+                cos.data_ptr(),
+                sin.data_ptr(),
+                q_buf.data_ptr(),
+                k_buf.data_ptr(),
+                v_buf.data_ptr(),
+                batch,
+                tokens,
+                q_heads,
+                kv_heads,
+                head_dim,
+                kv_total_t,
+                kv_offset,
+                1 if q_bthd else 0,
+                q_scale,
+                torch.cuda.current_stream(qkv.device).cuda_stream,
+            )
+            if status:
+                raise RuntimeError(f"split_qkv_rope kernel launch failed: {status}")
+        q_out = q_buf.transpose(1, 2) if q_bthd else q_buf
+        return q_out, k_buf, v_buf

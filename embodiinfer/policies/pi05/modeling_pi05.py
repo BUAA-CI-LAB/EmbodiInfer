@@ -67,6 +67,7 @@ from .processor_pi05 import Pi05Batch
 if TYPE_CHECKING:
     from ...engine.core import EngineCore
     from .inference.operators import Pi05OperatorPlans
+    from .inference.static_request import Pi05StaticRequest
 
 _INSTALL = "pi0.5 requires lerobot: run `uv sync --frozen --no-dev --group pi05`"
 _COMPILED_IMAGE_ENCODERS: dict[int, Any] = {}
@@ -342,6 +343,12 @@ def _prepare_fused_projection_weights(tower: Any) -> None:
             mlp.gate_proj._embodiinfer_fused_pair_weight = torch.cat(
                 (mlp.gate_proj.weight, mlp.up_proj.weight), dim=0
             ).contiguous()
+
+
+def _entry_dtype(tower: Any) -> torch.dtype:
+    """Dtype a tower runs in: its first projection's compute dtype."""
+    projection = tower.layers[0].self_attn.q_proj
+    return projection.compute_dtype if isinstance(projection, QuantizedLinear) else projection.weight.dtype
 
 
 def _mlp(
@@ -642,6 +649,8 @@ class Pi05Policy(FlowVLAPolicy):
         self._runtime = Pi05Runtime(self)
         if native_inference:
             self._decoder = Pi05FlowDecoder(self)
+        # Positions and RoPE tables of all-valid layouts, keyed by tower, shape, dtype and device.
+        self._valid_layouts: dict[tuple, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
 
     @property
     def execution_dtype(self) -> torch.dtype:
@@ -744,6 +753,36 @@ class Pi05Policy(FlowVLAPolicy):
         if self._native_attention is None and "triton" in (self.denoise_attention, self.prefix_attention):
             self._native_attention = get_split_kv_attention_backend("triton_split_kv")
 
+    def _valid_layout(
+        self,
+        tower,
+        batch_size: int,
+        start: int,
+        length: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        operators: Pi05OperatorPlans | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Positions ``start .. start + length - 1`` of all-valid rows and their RoPE tables.
+
+        They depend only on the layout, so captured graphs read tensors built once outside
+        capture instead of recomputing masks, cumulative sums and RoPE in every replay.
+        ``operators`` with RLinf numerics selects its FP32 half-width tables.
+        """
+        rlinf = operators is not None and operators.config.numerics == "openpi_rlinf"
+        key = (id(tower), rlinf, batch_size, start, length, dtype, device)
+        layout = self._valid_layouts.get(key)
+        if layout is None:
+            positions = torch.arange(start, start + length, device=device).expand(batch_size, -1).contiguous()
+            if rlinf:
+                tables = operators.rotary_tables(positions, tower.layers[0].self_attn.head_dim)
+            else:
+                tables = rope_tables(tower.rotary_emb, torch.empty(0, dtype=dtype, device=device), positions)
+            layout = (positions, *tables)
+            if not torch.cuda.is_current_stream_capturing():
+                self._valid_layouts[key] = layout
+        return layout
+
     def _get_optimizations(self) -> Pi05OperatorPlans | None:
         """Prepare instance-local CUDA operators lazily after engine placement."""
         config = getattr(self, "_optimization_config", None)
@@ -773,6 +812,9 @@ class Pi05Policy(FlowVLAPolicy):
         if runtime is not None:
             runtime.clear()
         self._kernel_selection = None
+        layouts = getattr(self, "_valid_layouts", None)
+        if layouts is not None:
+            layouts.clear()
         operators = getattr(self, "_fused_ops", None)
         if operators is not None:
             operators.clear()
@@ -844,6 +886,40 @@ class Pi05Policy(FlowVLAPolicy):
             raise ValueError("pi05 serving adapter requires a checkpoint path")
         return Pi05ServingAdapter(core=core, checkpoint=resolved, config=config)
 
+    def static_request(
+        self,
+        tokens: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+        *,
+        cameras: int,
+        height: int = 224,
+        width: int = 224,
+        steps: int | None = None,
+        frame_size: tuple[int, int] | None = None,
+    ) -> Pi05StaticRequest:
+        """Capture a fixed prompt and camera layout as one graph from uint8 frames to actions.
+
+        Control loops that keep their instruction then pay one graph launch and one wait per
+        observation; see :class:`~.inference.static_request.Pi05StaticRequest`. Frames of another
+        ``frame_size`` (height, width) than the model's ``height`` x ``width`` are resized on the
+        device exactly like OpenPI's Pillow ``resize_with_pad``.
+        """
+        if not self._native_enabled():
+            raise ValueError("Pi05 static requests require native CUDA eval/no-grad execution")
+        from .inference.static_request import Pi05StaticRequest
+
+        self._prepare_native_attention()
+        return Pi05StaticRequest(
+            self,
+            tokens,
+            token_mask,
+            cameras=cameras,
+            height=height,
+            width=width,
+            steps=steps or self.config.default_num_steps,
+            frame_size=frame_size,
+        )
+
     # ---- one Gemma decoder stack (our forward over the loaded weights) -------
     def _attn_sublayer(
         self,
@@ -873,36 +949,67 @@ class Pi05Policy(FlowVLAPolicy):
             if collected is not None:
                 collected.append(cache)
             return operators.project_attention(attn.o_proj, out.reshape(B, S, -1), expert=expert)
-        if self.attention == "eager" or openpi_rlinf:
-            q, k, v = attn.q_proj(h), attn.k_proj(h), attn.v_proj(h)
-        else:
-            q, k, v = _fused_qkv(attn, h)
-        q = q.view(B, S, -1, hd).transpose(1, 2)  # [B, n_head, S, hd]
-        k = k.view(B, S, -1, hd).transpose(1, 2)  # [B, n_kv, S, hd]
-        v = v.view(B, S, -1, hd).transpose(1, 2)
-        if openpi_rlinf:
-            q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
-        else:
-            q, k = _apply_rope(
-                q,
-                k,
-                cos,
-                sin,
-                self.compile_backend == "inductor",
-                native_expert and q.dtype in (torch.bfloat16, torch.float16),
-                self._kernels,
+        # Thor and RTX 4090 presets run their own RoPE and attention kernels; other configurations
+        # resolve them through the kernel registry so device kernel profiles apply.
+        preset_kernels = operators is not None and operators.config.hardware in ("thor", "4090")
+        q_prescaled = False
+        if preset_kernels and operators.config.fused_mlp:
+            q, k, v = operators.project_qkv_rope(attn, h, cos, sin, B, S, expert=prefix_kv is not None)
+            q_prescaled = (
+                openpi_rlinf
+                and operators.rotary is not None
+                and hasattr(operators.rotary, "split_qkv_rope")
+                and hd == 256
             )
+        else:
+            if self.attention == "eager" or openpi_rlinf:
+                q, k, v = attn.q_proj(h), attn.k_proj(h), attn.v_proj(h)
+            else:
+                q, k, v = _fused_qkv(attn, h)
+            q = q.view(B, S, -1, hd).transpose(1, 2)  # [B, n_head, S, hd]
+            k = k.view(B, S, -1, hd).transpose(1, 2)  # [B, n_kv, S, hd]
+            v = v.view(B, S, -1, hd).transpose(1, 2)
+            native_rope = native_expert and q.dtype in (torch.bfloat16, torch.float16)
+            if openpi_rlinf:
+                q, k = operators.rotate(q, cos, sin), operators.rotate(k, cos, sin)
+            elif native_rope and preset_kernels:
+                from ...backend.triton.rotary import rotate_qk
+
+                q, k = rotate_qk(q, k, cos, sin)
+            else:
+                q, k = _apply_rope(
+                    q, k, cos, sin, self.compile_backend == "inductor", native_rope, self._kernels
+                )
         if collected is not None:  # prefix pass: cache this layer's K/V
-            # Contiguous like Inductor's outputs, so the cache layout (which
-            # layout-gated tuned kernels match) is the same with or without compile.
-            collected.append((k.contiguous(), v.contiguous()))
+            if preset_kernels:
+                collected.append((k, v))
+            else:
+                # Contiguous like Inductor's outputs, so the cache layout (which
+                # layout-gated tuned kernels match) is the same with or without compile.
+                collected.append((k.contiguous(), v.contiguous()))
+        # project_qkv_rope already folded 1/sqrt(head_dim) into openpi_rlinf queries.
+        split_scaling = 1.0 if q_prescaled else attn.scaling
         if native_expert and self.denoise_attention == "triton":
             # All action queries share the same prefix/suffix key validity.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
-            out = _op(self._kernels, "split_kv_attention", True)(
-                q, *prefix_kv, k, v, key_padding_mask, attn.scaling
-            )
+            if preset_kernels:
+                out = self._native_attention.attend_split(
+                    q, *prefix_kv, k, v, key_padding_mask=key_padding_mask, scaling=split_scaling
+                )
+            else:
+                out = _op(self._kernels, "split_kv_attention", True)(
+                    q, *prefix_kv, k, v, key_padding_mask, split_scaling
+                )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
+        if (
+            prefix_kv is not None
+            and operators is not None
+            and getattr(operators, "split_attention", None) is not None
+            and mask is None
+        ):
+            pk, pv = prefix_kv
+            out = operators.split_attention.attend_split_packed(q, pk, pv, k, v, scaling=split_scaling)
+            return operators.project_attention(attn.o_proj, out, expert=True)
         if prefix_kv is not None:  # denoise pass: attend [prefix ++ suffix]
             pk, pv = prefix_kv
             if operators is not None:
@@ -916,20 +1023,26 @@ class Pi05Policy(FlowVLAPolicy):
             # inside the reusable query-major attention backend.
             if mask is not None and mask.dtype != torch.bool:
                 mask = mask == 0
-            if openpi_rlinf:
+            if openpi_rlinf and not q_prescaled:
                 q = q * hd**-0.5
-            out = operators.attention.attend(
-                q, k, v, attn_mask=mask, scaling=1.0 if openpi_rlinf else attn.scaling
-            )
-            return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
+            scaling = 1.0 if openpi_rlinf else attn.scaling
+            if prefix_kv is not None and mask is None:
+                projected = operators.attend_project(attn, q, k, v, scaling)
+                if projected is not None:
+                    return projected
+            out = operators.attention.attend(q, k, v, attn_mask=mask, scaling=scaling)
+            return operators.project_attention(attn.o_proj, out, expert=prefix_kv is not None)
         if openpi_rlinf:
             return attn.o_proj(operators.reference_attention(q, k, v, mask).transpose(1, 2).reshape(B, S, -1))
         if native_prefix:
             # Prefix preparation supplies a shared key mask; masked query outputs are unused.
             key_padding_mask = None if mask is None else mask[:, :, :1, :]
-            out = _op(self._kernels, "split_kv_attention", True)(
-                q, k[:, :, :0], v[:, :, :0], k, v, key_padding_mask, attn.scaling
-            )
+            if preset_kernels:
+                out = self._native_attention.attend(q, k, v, attn_mask=key_padding_mask, scaling=attn.scaling)
+            else:
+                out = _op(self._kernels, "split_kv_attention", True)(
+                    q, k[:, :, :0], v[:, :, :0], k, v, key_padding_mask, attn.scaling
+                )
             return attn.o_proj(out.transpose(1, 2).reshape(B, S, -1))
         # K/V stay at num_kv_heads; the attention backend does the GQA repeat
         # (materialized for 'eager', broadcast for 'eager_bc').
@@ -950,21 +1063,18 @@ class Pi05Policy(FlowVLAPolicy):
         native_prefix=False,
         operators=None,
         cache_only=False,
+        rope=None,
     ):
         # Run the tower in its parameters' dtype. Under a selectively-cast
         # backbone (e.g. openpi's bf16-with-fp32-norms regime) the embeddings /
         # input projections outside the tower stay fp32, so the entry hidden
         # may arrive fp32; openpi casts prefix/suffix embeddings to the tower
         # dtype at exactly this boundary. No-op when dtypes already agree.
-        entry_projection = tower.layers[0].self_attn.q_proj
-        entry_dtype = (
-            entry_projection.compute_dtype
-            if isinstance(entry_projection, QuantizedLinear)
-            else entry_projection.weight.dtype
-        )
-        hidden = hidden.to(entry_dtype)
+        hidden = hidden.to(_entry_dtype(tower))
         context = None if operators is None else operators.action_context
-        if context is not None and tower is self._expert_tower:
+        if rope is not None:
+            cos, sin = rope
+        elif context is not None and tower is self._expert_tower:
             cos, sin = context[2:]
         elif operators is not None and operators.config.numerics == "openpi_rlinf":
             cos, sin = operators.rotary_tables(position_ids, tower.layers[0].self_attn.head_dim)
@@ -1058,9 +1168,21 @@ class Pi05Policy(FlowVLAPolicy):
         return hidden, collected
 
     # ---- pi0.5 integrates t: 1 -> 0 with dt = -1/N ---------------------------
+    # ``flow_schedule_rho`` != 1 integrates the same weights on the power grid
+    # t_i = (1 - i/N) ** rho instead; rho > 1 takes the smaller steps near the
+    # data end (t = 0), like EDM's power schedules. Schedules and captured
+    # graphs are cached per rho.
+    flow_schedule_rho: float = 1.0
+
     def flow_schedule(self, num_steps: int) -> list[tuple[float, float]]:
-        dt = -1.0 / num_steps
-        return [(1.0 + i * dt, dt) for i in range(num_steps)]
+        rho = float(self.flow_schedule_rho)
+        if not rho > 0:
+            raise ValueError("PI0.5 flow_schedule_rho must be positive")
+        if rho == 1.0:
+            dt = -1.0 / num_steps
+            return [(1.0 + i * dt, dt) for i in range(num_steps)]
+        times = [(1.0 - i / num_steps) ** rho for i in range(num_steps + 1)]
+        return [(times[i], times[i + 1] - times[i]) for i in range(num_steps)]
 
     # ---- stage 1: encode prefix (once) --------------------------------------
     def encode_prefix(self, batch: Pi05Batch, return_hidden: bool = False) -> Pi05Prefix:
@@ -1105,11 +1227,26 @@ class Pi05Policy(FlowVLAPolicy):
                 batch.masks,
                 self.compile_backend == "inductor",
             )
-        prefix_att_2d = self._make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
         if all_valid is None:
             all_valid = bool(prefix_pad_masks.all().item())
-        mask4d = None if all_valid else self._attention_mask_4d(prefix_att_2d)
+        rope = None
+        if all_valid and self.native_embeddings and self.compile_backend != "inductor":
+            # No padding: the prefix needs no mask, and positions and RoPE depend only on its length.
+            batch_size, length = prefix_pad_masks.shape
+            position_ids, *rope = self._valid_layout(
+                self._prefix_tower,
+                batch_size,
+                0,
+                length,
+                _entry_dtype(self._prefix_tower),
+                prefix_embs.device,
+                operators,
+            )
+            mask4d = None
+        else:
+            prefix_att_2d = self._make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+            position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+            mask4d = None if all_valid else self._attention_mask_4d(prefix_att_2d)
         native_prefix = self.prefix_attention == "triton" and self._native_enabled() and not return_hidden
         if native_prefix and not all_valid:
             # Every valid query sees the same bidirectional key set. Invalid
@@ -1159,6 +1296,7 @@ class Pi05Policy(FlowVLAPolicy):
                 native_prefix=native_prefix,
                 operators=operators,
                 cache_only=operators is not None and operators.config.prefix_kv_only,
+                rope=rope,
             )
         self._cached_prefix_meta = (prefix_pad_masks.shape[1], prefix_pad_masks.dtype, kv[0][0].dtype)
         return Pi05Prefix(
@@ -1193,15 +1331,21 @@ class Pi05Policy(FlowVLAPolicy):
         return cached[None, :]  # [1, suffix_len]; caller expands over batch
 
     def _embed_suffix(
-        self, x_t: torch.Tensor, t: torch.Tensor, *, skip_time: bool = False, skip_mask: bool = False
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        *,
+        skip_time: bool = False,
+        skip_mask: bool = False,
+        embeds: torch.Tensor | None = None,
     ):
         """Re-implements lerobot ``embed_suffix`` exactly (same weight modules),
         but builds the static attention mask graph-safely. ``skip_time`` is only
         used after the native runtime has explicitly prepared a fixed schedule.
         Generic denoise calls always compute the condition from their current
-        ``t`` input."""
+        ``t`` input. ``embeds`` supplies an already computed action embedding."""
         m = self._m
-        action_emb = m.action_in_proj(x_t)
+        action_emb = m.action_in_proj(x_t) if embeds is None else embeds
         adarms_cond = None
         if not skip_time:
             time_emb = self._sinusoidal(
@@ -1243,6 +1387,14 @@ class Pi05Policy(FlowVLAPolicy):
         self, x_t: torch.Tensor, t: torch.Tensor, prefix: Pi05Prefix, modulations=None
     ) -> torch.Tensor:
         m = self._m
+        hidden = self._denoise_hidden(x_t, t, prefix, modulations)
+        return m.action_out_proj(hidden.to(dtype=m.action_out_proj.weight.dtype))
+
+    def _denoise_hidden(
+        self, x_t: torch.Tensor, t: torch.Tensor, prefix: Pi05Prefix, modulations=None, embeds=None
+    ) -> torch.Tensor:
+        """Expert tower output for the action chunk, before the action output projection."""
+        m = self._m
         operators = self._get_optimizations()
         context = None if operators is None else operators.action_context
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self._embed_suffix(
@@ -1250,6 +1402,7 @@ class Pi05Policy(FlowVLAPolicy):
             t,
             skip_time=modulations is not None,
             skip_mask=context is not None,
+            embeds=embeds,
         )
 
         if context is not None:
@@ -1270,8 +1423,7 @@ class Pi05Policy(FlowVLAPolicy):
             or (operators is not None and operators.config.numerics == "openpi_rlinf")
             else None,
         )
-        suffix_out = hidden[:, -m.config.chunk_size :].to(dtype=m.action_out_proj.weight.dtype)
-        return m.action_out_proj(suffix_out)
+        return hidden[:, -m.config.chunk_size :]
 
     def _action_context(
         self, prefix: Pi05Prefix, suffix_pad_masks: torch.Tensor, suffix_att_masks: torch.Tensor
@@ -1326,9 +1478,10 @@ class Pi05Policy(FlowVLAPolicy):
         return Pi05Prefix(kv, pad)
 
     def cuda_graph_variant(self, prefix: Pi05Prefix) -> object | None:
+        # Full-loop graphs bake the time grid, so its rho is part of the key.
         if self.native_inference:
-            return prefix.prefix_pad_masks.shape[1], prefix.all_valid
-        return prefix.all_valid
+            return prefix.prefix_pad_masks.shape[1], prefix.all_valid, float(self.flow_schedule_rho)
+        return prefix.all_valid, float(self.flow_schedule_rho)
 
     def allocate_static_prefix_from_live(
         self,
@@ -1356,11 +1509,13 @@ class Pi05Policy(FlowVLAPolicy):
         dtype: torch.dtype,
         variant: object | None,
     ) -> Pi05Prefix:
-        if self.native_inference and isinstance(variant, tuple):
-            length, all_valid = variant
+        if self.native_inference and isinstance(variant, tuple) and len(variant) == 3:
+            length, all_valid, _ = variant
             if self._cached_prefix_meta is None or length != self._cached_prefix_meta[0]:
                 raise ValueError("PI0.5 graph layout requires its live prefix")
             variant = all_valid
+        elif isinstance(variant, tuple):
+            variant = variant[0]
         prefix = self.allocate_static_prefix(batch_size, device, dtype)
         prefix.all_valid = bool(variant)
         return prefix

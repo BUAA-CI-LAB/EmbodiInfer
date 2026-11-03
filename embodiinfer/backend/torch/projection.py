@@ -24,6 +24,7 @@ class Projection:
         workspace_key: Callable[[torch.device], WorkspaceKey] | None = None,
         *,
         contiguous_matmul: bool = False,
+        triton_small_m: bool = False,
     ) -> None:
         """Preserve the validated weight quantizer and native GEMM layouts."""
         if precision not in ("bf16", "fp8", "nvfp4"):
@@ -34,7 +35,10 @@ class Projection:
             raise ValueError("Calibrated projection maximum must be finite and positive")
         if precision != "bf16" and (backend is None or weight.device.type != "cuda"):
             raise ValueError("Low precision projections require CUDA and an activation quantizer")
-        if precision != "bf16" and not all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
+        has_scaled = all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")) or (
+            precision == "fp8" and hasattr(torch, "_scaled_mm")
+        )
+        if precision != "bf16" and not has_scaled:
             raise RuntimeError("Calibrated projections require the scaled_mm API tested in Torch 2.13")
         if precision != "bf16":
             minimum_sm = (10, 0) if precision == "nvfp4" else (8, 9)
@@ -42,6 +46,7 @@ class Projection:
                 raise ValueError(f"{precision} native GEMM requires SM {minimum_sm} or newer")
         self.precision, self.maximum, self.backend = precision, maximum, backend
         self.contiguous_matmul, self.bf16_matrix = contiguous_matmul, None
+        self.triton_small_m = triton_small_m
         self.workspace_key = workspace_key or (
             lambda device: ("stream", torch.cuda.current_stream(device).cuda_stream)
         )
@@ -57,7 +62,9 @@ class Projection:
             self.weight_scale = torch.where(
                 maximum_weight > 0, maximum_weight / 448.0, torch.ones_like(maximum_weight)
             )
+            self.weight_scale_1d = self.weight_scale.reshape(1)
             self.weight = (values / self.weight_scale).clamp(-448, 448).to(torch.float8_e4m3fn)
+            self.weight_t = self.weight.t()
         else:
             plan = backend.plan(weight.detach().contiguous(), 4).quantize(weight.detach().contiguous())
             self.weight, self.weight_scale, self.weight_blocks = (
@@ -85,20 +92,51 @@ class Projection:
             if key[-1] == scope:
                 del self.plans[key]
 
+    def _swap_projection(self) -> bool:
+        """Whether the CUTLASS weight-stationary NVFP4 GEMM (cuDNN-identical bits) serves this weight."""
+        swap = getattr(self, "_swap", None)
+        if swap is None:
+            from ..cuda import cutlass_projection
+
+            swap = self._swap = (
+                self.output_dim % 256 == 0
+                and self.input_dim % 256 == 0
+                and cutlass_projection.available(self.device)
+            )
+        return swap
+
     def apply(self, inputs: torch.Tensor, encoded: EncodedActivation | None) -> torch.Tensor:
         """Run the selected native GEMM with BF16 outputs and fused FP4 global scales."""
-        if (
-            inputs.shape[-1] != self.input_dim
-            or inputs.device != self.device
-            or inputs.dtype != torch.bfloat16
-        ):
-            raise ValueError("Projection input width, dtype or device changed")
-        if self.precision != "bf16" and (encoded is None or encoded.scale is None):
-            raise ValueError("Low precision projections require encoded activations and a global scale")
-        shape = (*inputs.shape[:-1], self.output_dim)
-        matrix = inputs.reshape(-1, inputs.shape[-1]).contiguous()
         if self.precision == "bf16":
-            if self.contiguous_matmul:
+            if (
+                inputs.shape[-1] != self.input_dim
+                or inputs.device != self.device
+                or inputs.dtype != torch.bfloat16
+            ):
+                raise ValueError("Projection input width, dtype or device changed")
+        else:
+            if encoded is None or encoded.scale is None:
+                raise ValueError("Low precision projections require encoded activations and a global scale")
+            expected_cols = self.input_dim if self.precision == "fp8" else self.input_dim // 2
+            if (
+                inputs.device != self.device
+                or inputs.dtype != torch.bfloat16
+                or encoded.output.shape[-1] != expected_cols
+            ):
+                raise ValueError("Projection input width, dtype or device changed")
+        shape = (*inputs.shape[:-1], self.output_dim)
+        if self.precision == "bf16":
+            matrix = inputs.reshape(-1, inputs.shape[-1]).contiguous()
+            if (
+                self.triton_small_m
+                and matrix.shape[0] <= 64
+                and matrix.shape[1] in (1024, 2048, 4096)
+                and self.device.type == "cuda"
+            ):
+                from ..triton.geglu import triton_linear
+
+                output = triton_linear(matrix, self.bf16_weight)
+            elif self.contiguous_matmul:
                 if self.bf16_matrix is None:
                     if self.device.type == "cuda" and torch.cuda.is_current_stream_capturing():
                         raise RuntimeError("Warm contiguous BF16 weights before capture")
@@ -107,27 +145,93 @@ class Projection:
             else:
                 output = F.linear(matrix, self.bf16_weight)
         elif self.precision == "fp8":
-            output = F.scaled_mm(
-                encoded.output,
-                self.weight.t(),
-                encoded.scale,
-                F.ScalingType.TensorWise,
-                self.weight_scale,
-                F.ScalingType.TensorWise,
-                output_dtype=torch.bfloat16,
-            )
+            q_in = encoded.output
+            rows = q_in.shape[0]
+            if self.triton_small_m and rows <= 64 and q_in.shape[1] in (1024, 2048, 4096):
+                from ..triton.geglu import triton_linear_fp8
+
+                output = triton_linear_fp8(q_in, self.weight, encoded.scale, self.weight_scale_1d)
+            elif all(hasattr(F, name) for name in ("scaled_mm", "ScalingType")):
+                output = F.scaled_mm(
+                    q_in,
+                    self.weight_t,
+                    encoded.scale,
+                    F.ScalingType.TensorWise,
+                    self.weight_scale,
+                    F.ScalingType.TensorWise,
+                    output_dtype=torch.bfloat16,
+                )
+            else:
+                output = torch._scaled_mm(
+                    q_in,
+                    self.weight_t,
+                    scale_a=encoded.scale.reshape(1),
+                    scale_b=self.weight_scale_1d,
+                    out_dtype=torch.bfloat16,
+                    use_fast_accum=True,
+                )
+            if output.shape[0] != rows:
+                output = output[:rows]
         else:
-            output = F.scaled_mm(
-                encoded.output.view(torch.float4_e2m1fn_x2),
-                self.weight.t().view(torch.float4_e2m1fn_x2),
-                [encoded.blocked, encoded.scale],
-                [F.ScalingType.BlockWise1x16, F.ScalingType.TensorWise],
-                [self.weight_blocks, self.weight_scale],
-                [F.ScalingType.BlockWise1x16, F.ScalingType.TensorWise],
-                [F.SwizzleType.SWIZZLE_32_4_4, F.SwizzleType.NO_SWIZZLE],
-                [F.SwizzleType.SWIZZLE_32_4_4, F.SwizzleType.NO_SWIZZLE],
-                output_dtype=torch.bfloat16,
-            )
+            rows = encoded.output.shape[0]
+            if (
+                not getattr(encoded, "dynamic", False)
+                and self.output_dim >= 512
+                and self.output_dim % 64 == 0
+                and self.input_dim >= 512
+                and self.input_dim % 64 == 0
+                and torch.cuda.get_device_capability(self.device) == (11, 0)
+            ):
+                from ..cuda.cudnn_mlp import cudnn_nvfp4_linear
+
+                key = (
+                    "cudnn_nvfp4_out",
+                    rows,
+                    self.output_dim,
+                    int(encoded.scale.data_ptr()),
+                    self.device,
+                    self.workspace_key(self.device),
+                )
+                if key not in self.plans:
+                    if torch.cuda.is_current_stream_capturing():
+                        raise RuntimeError("Warm cuDNN NVFP4 linear buffers before graph capture")
+                    out_buf = torch.empty((rows, self.output_dim), device=self.device, dtype=torch.bfloat16)
+                    comb_s = (
+                        encoded.scale.reshape(1).float() * self.weight_scale.reshape(1).float()
+                    ).contiguous()
+                    self.plans[key] = (out_buf, comb_s)
+                out_buf, comb_s = self.plans[key]
+                if rows > 256 and self._swap_projection():
+                    from ..cuda.cutlass_projection import cutlass_swap_linear
+
+                    # Weight tiles serve every token at once; 128-row token tiles re-read the
+                    # weights for the short last tile of a few hundred tokens (526 = 4 * 128 + 14).
+                    cutlass_swap_linear(
+                        encoded.output, encoded.blocked, self.weight, self.weight_blocks, comb_s, out_buf
+                    )
+                else:
+                    cudnn_nvfp4_linear(
+                        encoded.output,
+                        encoded.blocked,
+                        self.weight,
+                        self.weight_blocks,
+                        comb_s,
+                        None,
+                        out_buf,
+                    )
+                output = out_buf
+            else:
+                output = F.scaled_mm(
+                    encoded.output.view(torch.float4_e2m1fn_x2),
+                    self.weight.t().view(torch.float4_e2m1fn_x2),
+                    [encoded.blocked, encoded.scale],
+                    [F.ScalingType.BlockWise1x16, F.ScalingType.TensorWise],
+                    [self.weight_blocks, self.weight_scale],
+                    [F.ScalingType.BlockWise1x16, F.ScalingType.TensorWise],
+                    [F.SwizzleType.SWIZZLE_32_4_4, F.SwizzleType.NO_SWIZZLE],
+                    [F.SwizzleType.SWIZZLE_32_4_4, F.SwizzleType.NO_SWIZZLE],
+                    output_dtype=torch.bfloat16,
+                )
         return output.reshape(shape)
 
 
@@ -161,3 +265,20 @@ class CalibratedMatmulBackend(CalibratedProjectionBackend):
     ) -> Projection:
         """Pack BF16 matrices on first warmup; calibrated GEMMs are unchanged."""
         return Projection(weight, maximum, precision, quantizer, workspace_key, contiguous_matmul=True)
+
+
+class CalibratedTritonBackend(CalibratedProjectionBackend):
+    """Use weight-streaming Triton tiles for small-M projections and native GEMMs for large M."""
+
+    def plan(
+        self,
+        weight: torch.Tensor,
+        maximum: float,
+        precision: Precision,
+        quantizer: ActivationQuantizer | None,
+        workspace_key: Callable[[torch.device], WorkspaceKey],
+    ) -> Projection:
+        """Pack weights for small-M Triton execution and large-M native GEMMs."""
+        return Projection(
+            weight, maximum, precision, quantizer, workspace_key, contiguous_matmul=False, triton_small_m=True
+        )

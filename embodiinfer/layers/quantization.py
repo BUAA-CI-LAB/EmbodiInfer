@@ -96,3 +96,6 @@ projection_backends.register_lazy("cublaslt", "embodiinfer.backend.cuda.cublaslt
 projection_backends.register_lazy(
     "flashinfer_cublaslt", "embodiinfer.backend.flashinfer.projection", "FlashInferCublasLtBackend"
 )
+projection_backends.register_lazy(
+    "triton_small_m", "embodiinfer.backend.torch.projection", "CalibratedTritonBackend"
+)

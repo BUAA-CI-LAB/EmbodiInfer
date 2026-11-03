@@ -101,7 +101,7 @@ construction can opt into the same embeddings with `native_embeddings=True`; the
 existing embedding path remains the default. CUDA `EngineConfig(dtype="auto")`
 preserves mixed checkpoint tensor dtypes and uses the policy's `execution_dtype` for
 inputs and decoder state. Explicit dtypes still cast uniformly; CPU remains FP32.
-See the [AGX comparison](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md#agx-orin-mixed-precision-2026-09-17)
+See the [AGX comparison](https://github.com/BUAA-CI-LAB/EmbodiInfer/blob/main/benchmarks/pi05-benchmark/README.md#其他平台与早期结果)
 for measured latency, output parity and the CPU-offload memory tradeoff.
 
 ## Pi05 fused operator configuration

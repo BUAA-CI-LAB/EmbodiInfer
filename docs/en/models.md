@@ -124,10 +124,18 @@ policy = make_policy(
 | `strict` | Thor, Spark, Orin, RTX 4090 | BF16 / BF16 | LeRobot |
 | `w4a16` | Orin SM87 | GPTQ INT4 weights / BF16 activations in both MLP towers | `openpi_rlinf` |
 | `w8a8-w4a16` | Orin SM87 | Rotated native INT8 prefix / GPTQ W4A16 action | `openpi_rlinf` |
-| `bf16` | Thor, Spark | BF16 / BF16 | `openpi_rlinf` |
-| `bf16-fp8` | Thor, Spark | BF16 / protected FP8 | `openpi_rlinf` |
+| `bf16` | Thor, Spark, RTX 4090 | BF16 / BF16 | `openpi_rlinf` |
+| `bf16-fp8` | Thor, Spark, RTX 4090 | BF16 / calibrated FP8 | `openpi_rlinf` |
+| `fp8-bf16` | RTX 4090 | Protected FP8 / BF16 | `openpi_rlinf` |
+| `fp8-fp8` | RTX 4090 | Protected FP8 / calibrated FP8 | `openpi_rlinf` |
 | `nvfp4-bf16` | Thor, Spark | NVFP4 / BF16 | `openpi_rlinf` |
 | `nvfp4-fp8` | Thor, Spark | NVFP4 / protected FP8 | `openpi_rlinf` |
+| `nvfp4-nvfp4` | Thor | SmoothQuant NVFP4 with BF16 outlier channels / SmoothQuant NVFP4 | `openpi_rlinf` |
+
+The bundled Thor `nvfp4-nvfp4` calibration carries per-channel SmoothQuant scales (`smooth`) for
+every MLP's gate/up input and lists the prefix down-projection channels (`outliers`) that run in
+BF16 beside the NVFP4 path; see
+[NVFP4 calibration on Thor](pi05-performance.md#nvfp4-calibration-on-thor).
 
 These presets include execution choices, numerical semantics and calibration
 selection. The factory supplies required native policy options; deployment does
@@ -238,6 +246,13 @@ the intermediate K/V private, and returns owned outputs. Staged, recurrent and
 RTC-guided requests retain their existing paths. This option preserves the
 checkpoint's dtype and the caller's action horizon/step count; it has no preset
 that shortens them. Performance must be checked for the target workload.
+
+Fewer denoising steps are the caller's choice: `static_request(..., steps=N)`
+or `default_num_steps`. `Pi05Policy.flow_schedule_rho` (default 1, OpenPI's
+uniform grid) places the N Euler steps at t = (1 - i/N)^rho, so rho > 1 takes
+smaller steps near the data end. Schedules and graphs are cached per value, and
+a captured graph keeps the grid it was captured with. LIBERO success rates for
+2–4 steps are on the [PI0.5 performance page](pi05-performance.md).
 The native Pi05 decoder exposes deterministic generation only; it does not
 implement the `RLDecoder` sampling or differentiable log-probability contract.
 

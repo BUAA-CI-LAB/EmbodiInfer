@@ -96,6 +96,20 @@ class FoldedFlashAttention:
         available = torch.cuda.get_device_capability() >= (8, 0)
         return available, None if available else "FlashAttention requires SM80 or newer"
 
+    @staticmethod
+    def _cudnn_prefix(query: torch.Tensor) -> bool:
+        return (
+            query.is_cuda
+            and query.is_contiguous()
+            and torch.cuda.get_device_capability(query.device)[0] >= 10
+        )
+
+    @staticmethod
+    def _fa4_prefix(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
+        from ..cuda import fa4
+
+        return fa4.supported(q, k, v)
+
     def attend(
         self,
         q: torch.Tensor,
@@ -110,6 +124,25 @@ class FoldedFlashAttention:
             raise ValueError("Folded FlashAttention requires a compact all-valid inference prefix")
         batch, heads, queries, width = q.shape
         folded = queries <= 16 and k.shape[1] == 1
+        if not folded and self._fa4_prefix(q, k, v):
+            from ..cuda import fa4
+
+            return fa4.attend(q, k, v, scaling)
+        if not folded and k.shape[1] == 1 and heads > 1 and self._cudnn_prefix(q):
+            # MQA prefix: every query row reads the same K/V, so heads fold into rows of one
+            # head for cuDNN's fused kernel, which handles 256-wide heads better than FlashAttention.
+            output = torch.ops.aten._scaled_dot_product_cudnn_attention(
+                q.reshape(batch, 1, heads * queries, width),
+                k,
+                v,
+                None,
+                False,
+                0.0,
+                False,
+                False,
+                scale=scaling,
+            )[0]
+            return output.reshape(batch, heads, queries, width)
         query = q.transpose(1, 2).reshape(batch, 1, queries * heads, width) if folded else q
         with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
             output = F.scaled_dot_product_attention(

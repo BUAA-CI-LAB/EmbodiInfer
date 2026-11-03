@@ -180,6 +180,7 @@ def _dynamic_time_policy():
     policy._embed_suffix = Pi05Policy._embed_suffix.__get__(policy, type(policy))
     policy._get_optimizations = lambda: None
     policy._action_context = Pi05Policy._action_context.__get__(policy, type(policy))
+    policy._denoise_hidden = Pi05Policy._denoise_hidden.__get__(policy, type(policy))
     return policy
 
 

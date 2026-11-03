@@ -99,7 +99,7 @@ Native inference optimizations reduced mean end-to-end latency by **47.7% for
 
 | Policy | Before | Optimized | Optimized throughput |
 |---|---:|---:|---:|
-| [π0.5](benchmarks/pi05-benchmark/README.md#pi05-原生优化2026-09-09) | 74.33 ms | **38.89 ms** | **25.71 observations/s** |
+| [π0.5](benchmarks/pi05-benchmark/README.md#其他平台与早期结果) | 74.33 ms | **38.89 ms** | **25.71 observations/s** |
 | [GR00T N1.7](benchmarks/gr00t-benchmark/README.md#4090-原生优化2026-09-09) | 45.51 ms | **31.30 ms** | **31.95 observations/s** |
 
 Recorded on September 9, 2026: RTX 4090, BF16, batch size 1, and 1,600 LIBERO-10

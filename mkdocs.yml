@@ -50,7 +50,9 @@ nav:
   - Serving:
       - Serving: serving.md
       - Parallelism: parallelism.md
-  - Performance: benchmark.md
+  - Performance:
+      - Benchmarks: benchmark.md
+      - PI0.5 on Thor and RTX 4090: pi05-performance.md
   - Design:
       - Architecture: architecture.md
   - Reference:

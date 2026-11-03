@@ -1,936 +1,155 @@
 # PI0.5 Benchmark
 
-## 非量化 prefix BF16 GELU/product 融合（2026-10-14）
+PI0.5 的推理性能与数值核验结果。
 
-新增默认关闭的 `Pi05OptimizationConfig(prefix_gelu_fusion=True)`，复用已有 Torch
-BF16 GELU 查表及乘法舍入，直接读取 packed gate/up 的 row-strided views，合并两个
-pointwise kernel。gate/up 和 down GEMM、action expert、checkpoint 原 BF16/FP32、
-噪声、50×32 动作和完整十步 solver 均不变。可替换的 `GatedGeluBackend` 位于
-`layers/`；`cuda_packed` 实现在 `backend/cuda/`，不构造或调用量化器。政策层按
-layer/layout/graph/stream 持有临时输出，warmup 后才可 capture；refit/迁移/销毁会
-释放图及工作区。新开关不启用已有量化配方或 Thor/Spark paired GEMM。
+## Jetson AGX Thor 与 RTX 4090（2026-11）
 
-对照是未修改的 main `4650e8eadb0c2a461c46991be7d715b726928157`，218 个包内源文件
-逐一匹配 Git 对象，启用已证明字节等价的 KV workspace、prefix tail skip 和
-action context reuse，关闭 norm fusion。candidate 仅增加新 pointwise 开关。
-这些已有开关的收益已归入 baseline；本节是新增实现的增量，不使用下一节组合的
-3.6% 作为新增收益。最终生产源码全部按文件摘要绑定到 GPU 验收。
+所有引擎都运行 FlashRT v0.2.0 自带的 PI0.5 基准脚本 `examples/thor/pi05.py`，只替换模型加载和每次调用：同一份 `RLinf-Pi05-LIBERO-SFT` 权重，FlashRT `pi05_libero.npz` 的 8 个 LIBERO 观测轮流输入，13 token prompt，B=1、2 路 224×224 相机、10 步去噪、动作长度 10。每轮预热 200 次、计时 1,000 次并取 P50，同一设备上的各引擎交替运行 3 轮，表中为 3 轮 P50 的平均（ms）。Thor 为 MAXN 模式，GPU / 内存 / CPU 频率锁定在 1575 MHz / 4266 MHz / 2.6 GHz；RTX 4090 为默认频率。
 
-沿用下一节的同一模型/夹具摘要、原参数精度、四组输入与 seed、同步计时范围。
-独立 main 自重复误差为零，因此门槛保持 `maxabs=RMS=relativeL2=0` 且原字节一致。
-四组逐层 KV/逐步 AE/最终归一化与物理动作各 70 个量全部通过，共 280 项；诊断与
-正常捕获输出、独立 main 动作数组、变输入/重复/不 alias、两条非默认 stream、
-refit 失效/恢复、捕获失败回退均通过。两路夹爪各四组 `>0.5` 诊断无翻转。
-FP32 全模型提升的独立诊断见下一节；新算子只声明 BF16 支持，不把 FP32 误差
-用来放宽主门槛。其他模型的真实权重 GPU 精度没有由本节建立。
+| 设备 | 精度档 | EmbodiInfer 预设 | EmbodiInfer | FlashRT | APXinf | Embodied.cpp | OpenPI |
+|---|---|---|---:|---:|---:|---:|---:|
+| Jetson AGX Thor | FP4 | `nvfp4-nvfp4` | **20.04**（49.9 Hz） | 21.07 | — | — | — |
+| Jetson AGX Thor | FP8 | `fp8-fp8` | **33.60**（29.8 Hz） | 40.70 | 40.88 | — | — |
+| Jetson AGX Thor | 16 位 | `bf16` | **61.63**（16.2 Hz） | 69.24（FP16） | 67.12 | 223.97 | 261.18 |
+| RTX 4090 | 8 位 | `fp8-fp8` | **17.06**（58.6 Hz） | 22.06 | 40.62（INT8） | — | — |
+| RTX 4090 | 16 位 | `bf16` | **30.08**（33.2 Hz） | 31.93（FP16） | 32.06 | 57.48 | — |
 
-算子 CUDA 测试在 RTX 4090/Torch 2.7.1+cu118 与 L20/Torch 2.10+cu128 各通过四项：
-奇数宽度/row stride、变输入、穷举有限 BF16 查表、capture/replay 与输出 clone。
-CPU 全套 762 passed、152 skipped；Ruff 与中英文 strict docs 通过。
+Thor 的两个 FP4 引擎在另一次交替运行中测得，同样 3 轮、同一套设置。Thor 上 8 次固定种子调用的动作与 OpenPI 参考的余弦相似度（平均 / 最差）：`nvfp4-nvfp4` 0.997182 / 0.995833，`fp8-fp8` 0.999785 / 0.999716，`bf16` 0.999995 / 0.999993。RTX 4090 的 `bf16` 与 `fp8-fp8` 在 RLinf LIBERO 验证集（10 个观测 × 5 个噪声种子）上与 strict BF16 预设的动作余弦相似度为 0.999997 与 0.99996。
 
-最终独立、无 profiler 的 RTX 4090 同卡配对数据如下。每组预热五次，两轮各 60 次，
-交替 A/B 与 B/A；全部原始样本保留，capture/cache 计数在计时前后不变。
-
-| P50 / P95（ms） | untouched main + 已有等价配置 | 仅增加 prefix GELU 融合 |
-|---|---:|---:|
-| 完整请求，轮 1 | 70.989 / 71.030 | 70.064 / 70.090 |
-| 完整请求，轮 2 | 71.127 / 71.176 | 70.193 / 70.241 |
-| GPU-resident 两图 replay，轮 1 | 70.579 / 70.631 | 69.643 / 69.677 |
-| GPU-resident 两图 replay，轮 2 | 70.601 / 70.624 | 69.658 / 69.687 |
-
-完整请求的 P50 新增收益约 **1.3%**，mean 也从 70.948→70.014、71.136→70.199 ms
-下降。replay 包含静态 GPU 输入复制、prefix/loop replay、两图 KV clone/copy 和
-独立输出 clone；排除 H2D、D2H、EngineCore 打包和物理恢复。这些成本全部计入完整
-请求。不同作业的绝对延迟不可横向比较；不宣称其他 batch、模型、GPU 或闭环收益。
-
-首次生产计时波动较大，保留了 candidate 约 379 ms 的长尾样本，该轮 mean
-为 76.332→80.864 ms，下一轮为 80.131→79.025 ms。没有删掉这个样本。完成独立
-profiler 作业后才另起计时作业，得到上表；不能把首次整轮吞吐也写成收益。
-
-独立 Nsight CUDA graph-node 记录确认四次请求有 68 次新 BF16 strided kernel，
-原 BF16 GELU 68→0，对应 BF16 乘法 280→212。其余聚合计数有小幅变化，不据此
-声称所有 kernel 计数严格相同，也不把 profiler 时长替代同步 wall。
-筛选过的其他路径未纳入：cuBLASLt gate/up 最快等价微测仅约 0.9%，down 的 8 个
-算法均被严格门拒绝；视觉 FP32 packed QKV 的 18 项微测虽完全一致，延迟约
-0.065→0.071 ms，反而变慢；现有 paired GEMM 明确不支持 SM89 的 Thor/Spark 配方，
-没有伪造硬件 profile。
-
-公开复现入口（配方与实际 checkpoint/夹具必须匹配）：
+Thor 的 `nvfp4-nvfp4` 延迟可以一条命令复现：脚本在 FlashRT v0.2.0 的 `examples/thor/pi05.py` 测速流程中换入 EmbodiInfer（[`flashrt_harness.py`](flashrt_harness.py)），独立运行 3 次，每次预热 200 次、计时 1,000 次，最后打印每次的 P50 和平均值；`PRESET=fp8-fp8` 或 `PRESET=bf16` 测其余两档。
 
 ```bash
-python benchmarks/pi05-benchmark/ablate_nonquant.py --checkpoint /models/pi05 --inputs /data/inputs.pt --out devlocal/nonquant/gelu --stages baseline kv_prefix_context kv_prefix_context_gelu --physical-action-dim 14 --gripper-indices 6 13 --gripper-threshold 0.5 --gripper-comparison gt
-python -m pytest tests/test_packed_gelu.py -q
+FLASHRT_ROOT=/path/to/FlashRT CHECKPOINT=/path/to/RLinf-Pi05-LIBERO-SFT \
+NORM_STATS=/path/to/physical-intelligence/libero/norm_stats.json \
+EMBODIINFER_CUTLASS_DIR=/path/to/cutlass EMBODIINFER_FA4_DIR=/path/to/fa4 \
+bash benchmarks/pi05-benchmark/thor_fp4.sh
 ```
 
-`kv_prefix_context` 与 `kv_prefix_context_gelu` 的 incremental pair 隔离新增开关；
-runner 在未通过逐层/逐步/夹爪精度门时不会计时。真实权重和录制输入不随仓库分发。
+Thor 上 LIBERO-spatial 任务 0 的闭环：同一初始状态和输入帧，每个控制步重新决策，控制周期 50 ms，三个引擎都完成任务。
 
-## 非量化整请求捕获与精度验收（2026-10-14）
-
-本次新增默认关闭的 `request_cuda_graph=True`：在 native CUDA 推理和
-`EngineConfig(use_cuda_graph=True, capture_full_loop=True)` 下，将 prefix 与原完整
-去噪循环合成一个图，省去两图边界的公开 KV clone/copy。通用捕获管理负责 stream、
-精度模式、独立返回值和销毁；Pi05 负责静态输入、调度、refit 失效与有界缓存。
-checkpoint、混合 BF16/FP32、初始噪声、solver、动作长度和执行范围保持不变。
-原两阶段、RTC、流水线与其他模型后端继续使用原契约。
-
-`norm_fusion`、`kv_workspace`、`prefix_kv_only`、`reuse_action_context` 已存在于 main，
-本次对它们做单项和递增组合测量。本次实际修复是 native AdaRMS 的参考选择：native
-缓存路径采用 Triton 归约，Torch-mean 合约的 CUDA norm fusion 不能直接替代它。
-修复限于非量化 `lerobot`；其他数值/校准配方保留原契约。修复后的 native
-自适应 norm/residual 保留原 Triton 算术；prefix 的 Torch-reference
-融合仍可使用。此前差异没有通过放宽门槛处理，也不据此断言闭环任务精度退化。
-设计与生命周期见 [0001 提案](../../docs/proposals/0001-static-loop-capture.md)。
-
-### 固定门槛与实测范围
-
-基线为未修改的 `4650e8eadb0c2a461c46991be7d715b726928157`。独立 main GPU 参考的
-218 个包内文件逐一与 Git 对象 SHA256 匹配；四组最终动作对本分支 baseline、norm
-修复、组合和 request graph 的 16 项字节比较均通过。基线自身重复误差为零。
-逐层 prefix K/V、每步 AE 输入/time/velocity/积分状态、最终归一化与物理动作的门槛
-预先固定为 `maxabs=RMS=relativeL2=0` 且源 dtype/字节一致；非有限值失败。
-修复后的 norm 与两条组合链全部通过，包括诊断快照与正常捕获输出一致性。
-
-环境：单 RTX 4090、driver 550.90.07、Torch 2.7.1+cu118、Transformers 5.3.0、
-LeRobot 0.5.1；checkpoint `pi05_robotwin_sx_v051` 的模型 SHA256 为
-`9a5381c3260fc58fdb4b90d17b93f9090bcbfbcd8e0287f9bf2acea2477a2bc3`。
-保留 255 个 BF16 和 558 个 FP32 参数张量，B1、50×32 动作、完整十步去噪，
-按 checkpoint mean/std 恢复其中 14 个物理动作通道。两条录制流各一帧、三相机，
-seed 1000/2026，共四组输入；夹具 SHA256 为
-`d46ad7ac88d8a9ebda9cdcbac7be126e4e1cf9f8e71c50ec6bc88d0e5858a7d7`。
-夹爪通道 6/13 的 `>0.5` 仅是显式诊断分类，均无翻转；控制器仍使用连续坐标。
-录制输入与权重不随仓库分发，这些结果不建立其他观测、batch、模型或闭环成功率保证。
-
-真实模型的变输入/重复请求、返回值不 alias、非默认 stream、多 policy、refit 后旧图
-失效以及注入捕获失败恢复均通过；另有 216 项 CUDA 环境子系统测试和五项 norm 契约回归通过。
-最终 runtime 的八份动作数组再次逐字节匹配独立 main，重复误差为零。FP32 全模型提升仅作诊断：与 checkpoint 原精度的归一化
-动作 maxabs 为 0.00938–0.01165，不改变主验收门槛。为控制显存，诊断释放临时
-packed MLP 副本；GEMM 形状与算术保持不变，生产/计时路径不使用该策略。
-
-### 完整请求计时
-
-每个配对实验在同一 GPU 上交替 A/B 与 B/A，预热每组五次，两轮各 60 次；不同
-作业各自重测本地 baseline。同步 wall 覆盖准备好的 CPU batch → H2D → prefix →
-全部去噪 → D2H/EngineCore 打包 → checkpoint 反归一化，包含所有边界拷贝。
-不含图像解码/tokenization、网络、加载、冷编译/capture、warmup 或机器人执行。
-下表均来自未启用 profiler 的测量；不同作业的绝对延迟不能横向求加速比。
-
-| 同卡配对（P50 / P95，ms） | baseline | candidate |
-|---|---:|---:|
-| 新 request graph 单独，完整请求 | 79.661 / 79.709 | 79.690 / 79.733 |
-| 同作业，仅 GPU graph replay | 78.953 / 78.979 | 78.958 / 78.988 |
-| 已有 KV+prefix+context，norm 关闭，轮 1 | 75.073 / 75.118 | 73.013 / 73.053 |
-| 同组合，轮 2 | 75.086 / 75.125 | 73.040 / 73.063 |
-| 修复 norm + 已有四开关 + 新 request graph，轮 1 | 77.445 / 77.499 | 74.622 / 74.664 |
-| 同组合，轮 2 | 77.440 / 77.489 | 74.638 / 74.729 |
-| 已有四开关含 norm 修复 → 再加 request graph，轮 1 | 74.842 / 74.871 | 74.672 / 74.702 |
-| 同增量，轮 2 | 74.838 / 74.901 | 74.685 / 74.723 |
-
-最后组合较各自 native baseline 的约 3.6% 包含 main 已有机制，不是本次新增实现
-的独立收益。已有 prefix 单项的两轮 P50 为 77.853→76.217、77.856→76.228 ms。
-request graph 的独立结果没有稳定的完整请求收益；组合中的小增量也不能推广到其他
-工作负载。因此新开关保持关闭，不能把这批数据写成普遍加速或精度无损保证。
-
-### 复现入口与协议边界
-
-在匹配的 Pi05 独立环境中使用可信、同 checkpoint 的 CPU 预处理夹具：
-
-```bash
-python benchmarks/pi05-benchmark/validate_nonquant.py --checkpoint /models/pi05 --inputs /data/inputs.pt --out devlocal/nonquant/request --physical-action-dim 14 --gripper-index 6 --gripper-threshold 0.5 --gripper-comparison gt --fp32-diagnostic
-python benchmarks/pi05-benchmark/ablate_nonquant.py --checkpoint /models/pi05 --inputs /data/inputs.pt --out devlocal/nonquant/matrix --stages baseline kv kv_prefix kv_prefix_context kv_prefix_context_request --physical-action-dim 14 --gripper-indices 6 13 --gripper-threshold 0.5 --gripper-comparison gt
-```
-
-维数、夹爪语义和统计必须按实际部署声明；上例对应本次诊断，不能猜测其他机器的
-阈值。输出包含逐量 maxabs/RMS/relativeL2、原始张量/计时、源码和输入摘要。
-`--profile` 单独导出 Torch CUDA trace；`--profile-cuda-range` 为 Nsight 发出每配置
-一个 `cudaProfilerStart/Stop` 窗口，必须检查外部 kernel 记录后才算采集成功。当前
-Torch/CUPTI 环境的 graph replay 在 profiler 退出时复现超时，相关尝试不构成证据。
-Profiler 观测开销不进入上表。
-
-另用现有 Nsight Systems 2023.4.4 的 CUDA graph node trace 成功采集 baseline、
-修复 norm 的四开关组合和加入 request graph 的组合，各覆盖四次预热后的完整请求。
-有实际 kernel 记录，非 CPU 时间线替代。三窗口 kernel 次数为
-33,892 / 31,036 / 31,008，GEMM 占各自 kernel 累计时长的 70.5% / 71.7% / 71.7%。
-组合再加入 request graph 时，D2D 拷贝事件由 1,328 降到 1,060，符合消除边界
-缓冲拷贝的机制；H2D/D2H 事件均保留。该观察不等同于稳定 wall 收益。
-已有 prefix-tail 跳过让两种大 prefix GEMM 各从 72 次降至 68 次，属于已有开关的
-效果。kernel 计数和累计时长用于定位计算与拷贝成本，不冒充完整请求延迟。
-
-
-通用同精度 split-KV 调优在 `benchmarks/attention_split.py`，显式选择
-`--splits 1 2 4 8 16` 并事先声明 `--atol` / `--rtol`。改变归约顺序可能被严格门槛
-拒绝；production 默认选择保持不变，没有自动推广。微内核结果不能替代动作验收。
-
-本次不修改协议或 EmbodiRun gitlink。vvla 清理合并后，main 的 primary
-schema/transport tag 为 `embodiinfer.policy.*` 和 `0x454D4249/4A`（EMBI/EMBJ），
-与 EmbodiRun `1d4221ab` 部署线一致；旧 `vvla.policy.*` 请求拼写仍作为输入别名接受。
-可用只读预检核对实际客户端：
-
-```bash
-python scripts/check_serving_compatibility.py --client-source /path/to/actual/client.py --embodirun /path/to/EmbodiRun
-```
-
-预检不修改子模块，实际客户端缺失时只报告未验证。
-
-## Orin NX 原生 W8A8 prefix / W4A16 action（2026-10-12）
-
-新增 opt-in `preset="w8a8-w4a16"`，部署参数与权重 bundle 见[模型说明](https://embodiinfer.readthedocs.io/en/latest/models/#opt-in-fused-operators)。
-Prefix 的17套 MLP 使用独立 trial30 校准的 H128/SmoothQuant alpha0.5 W8A8；
-action expert 保留 group64 GPTQ W4A16。整数 GEMM 融合 BF16 缩放/舍入和精确
-GeGLU，CUDA 编码融合通道缩放、旋转和逐 token 量化。Down 编码采用已验证的512线程布局。
-Prefix QK 使用私有 TF32 cuBLAS handle 与执行计划私有 scratch；action QK 保持严格
-FP32，softmax 保持 FP32，概率/PV 保持 BF16，vision 不变，不修改全局 Torch 精度。
-
-设备为 Orin NX SM87/8 SM、GPU918MHz，Torch2.9.1/CUDA12.6/cuBLASLt12.6.4，
-沿用下节同一 checkpoint 与 GPTQ archive。INT8 manifest SHA256：
-`44f8d44092160ddaebe8ba935705eb82087d289d560f2fb0d101da66eae409ad`。
-B1、horizon10、完整10-step；公共同步 wall 计时包含 vision、prefix/KV刷新、action
-解码，不包含预处理、H2D、加载、编译/捕获和模拟器。每条观测预热十次后测18次。
-
-| 观测 | 冻结实验组合 wall P50 ms | 最终生产实现 wall P50 ms |
-|---|---:|---:|
-| 1 | 322.189 | 321.948 |
-| 210 | 336.841 | 338.329 |
-| 490 | 338.250 | 338.215 |
-
-两列来自独立进程和不同测量轮次，仅验证迁移保留了原性能，不能把细小差异解释为
-新增加速，也不是相对原 EmbodiInfer BF16 的加速比。八条录制观测、全部32维动作
-逐位等于冻结实验组合；graph/eager/replay、更换图像/噪声、独立返回值、非默认stream
-通过。验证加载的213个运行时源码摘要与最终工作树一致。
-
-此前冻结实验组合的复用 Object/Goal trial46、seed47、chunk5 闭环筛选为19/20，
-原 BF16 为20/20，先前 W8A8 为19/20；19个严格匹配状态没有新增失败或成功。
-这些小样本已用于开发筛选，不能证明原 BF16 成功率非劣，也不是本次迁移的新闭环证据。
-NX 仍通过已加载模型接口验证实际 checkpoint 张量和本仓库 forward；为了避免无用
-临时 MLP 打包导致的 allocator 失败，夹具直接加载非 MLP 张量。初始失败日志保留。
-checkpoint factory 仍需匹配的 LeRobot/Transformers 环境验证。
-
-最后一轮选择性原生 W4A4 仅尝试 prefix gate/up，使用同一独立校准 divisor 与原始
-checkpoint 权重、逐输出 W4/逐 token A4，CUTLASS3.9.2的SM80整数Tensor Core后端
-在SM87上运行。SASS确认`IMMA.16864.S4.S4.SAT`，整数CPU子集、graph/replay/stream
-一致。计时包含旋转/量化、materialized INT32 GEMM及融合缩放/GeGLU epilogue：
-
-| Prefix层 | W8A8 ms | W4A4 ms | 重建 relative L2 | 预先固定门槛 |
+| 引擎 | 决策次数 | 策略延迟 P50（ms） | 频率 | 完成用时 |
 |---|---:|---:|---:|---:|
-|0|4.185|3.883|0.05801|0.02000|
-|8|4.204|3.874|0.15902|0.04641|
-|16|4.214|3.877|0.15524|0.05021|
+| OpenPI · PyTorch BF16 | 74 | 265.52 | 3.8 Hz | 23.68 s |
+| FlashRT · NVFP4 | 71 | 22.79 | 43.9 Hz | 5.17 s |
+| **EmbodiInfer · `nvfp4-nvfp4`** | 68 | 20.00 | 50.0 Hz | 4.76 s |
 
-每层3712个独立校准token，三层完整算子收益中位数7.87%，低于预先固定20%扩展门槛，
-且三层均未通过质量门槛。因此停止扩展，没有W4A4端到端/闭环结果；其kernel和CUTLASS
-依赖不进入生产代码。这只拒绝本次固定配方，不能推广为所有W4A4方法的硬件上限。
+![Thor 上 OpenPI、FlashRT 与 EmbodiInfer 的 LIBERO 闭环对比](../../docs/assets/pi05/libero-thor-comparison.webp)
 
-## Orin NX 校准 W4A16（2026-10-12）
+2 倍速播放，画面中的计时为真实时间；原视频见 [libero-thor-comparison.mp4](../../docs/assets/pi05/libero-thor-comparison.mp4)。
 
-部署使用 `device_type="orin", preset="w4a16", calibration="/models/pi05-gptq/manifest.json"`。
-group64 GPTQ 仅压缩两套 MLP 权重，激活保持 BF16，attention 保持 FP32 QK/softmax、
-BF16 query/probability，vision 保留原 MHA。使用完整十步 diffusion，B1、horizon10。
-配方包含 prefix GEMM/GeGLU、严格 residual/norm、RoPE/KV/layout 融合以及 BF16 Q/O
-cuBLASLt 配置；它是 INT4 weight-only 路径，不是 Blackwell NVFP4。
+Thor 的 `nvfp4-nvfp4` 校准对两个塔的 gate/up 做 SmoothQuant 后再打包 NVFP4，并让 prefix 第 16 层 down 投影的 128 个离群通道走 BF16 旁路（说明见[性能文档](../../docs/zh/pi05-performance.md#thor-上的-nvfp4-校准)）。同一任务初始状态 0–29 各一局：
 
-真实权重验证使用 Jetson Orin NX SM87/8 SM、GPU 918 MHz、Torch 2.9.1/CUDA 12.6、
-cuBLASLt 12.6.4。checkpoint SHA256 为
-`4616e4c1966a5fb063b442ea5d69857f45e873222d839b794634d87d252ab9e7`，
-GPTQ manifest SHA256 为
-`acb66bcca3e599dc66ed2a0f9d28992f53c98539be7bf4cd86d4c44bac3946c4`。
-八条录制观测的完整 32 维动作逐位等于冻结的已校准 GPTQ 实现，graph/eager 逐位一致。
-这是迁移正确性验证，不能解释为 W4 与原 BF16 的逐位一致或任务成功率不下降。
-NX 的现有 LeRobot/Transformers 安装不匹配；此轮验证通过已加载模型接口和共享真实
-checkpoint 张量的容器适配，全部 forward 使用本仓库实现，未修改设备环境。
-checkpoint factory 的真实加载尚需在项目规定的匹配依赖环境中验证。
-
-迁移延迟使用三条观测、每条九次同步 wall 请求，完成预热及正确性检查后计时：
-
-| 路径 | 观测 1 ms | 观测 210 ms | 观测 490 ms |
+| 引擎 · 配置 | 成功 | 2 秒后碗仍在盘上 | 碗与盘中心距离 |
 |---|---:|---:|---:|
-| 冻结 GPTQ 实现，后置独立进程对照 | 395.638 | 405.500 | 400.221 |
-| EmbodiInfer `w4a16`，prefix + 完整 decoder | 395.483 | 405.144 | 400.135 |
+| EmbodiInfer · `nvfp4-nvfp4`，就近舍入打包 | 18/30 | 10/30 | 2.45 cm |
+| **EmbodiInfer · `nvfp4-nvfp4`** | **25/30** | **21/30** | **1.85 cm** |
+| FlashRT · NVFP4 | 26/30 | 24/30 | 1.91 cm |
 
-双方全部动作仍逐位一致。这是迁移性能检查，不是相对原 EmbodiInfer BF16 的加速比。
-最终提交源码的独立进程复测中，观测 210 的 prepared graph P50 为 407.660 ms，
-同次公共请求的 GPU/wall P50 为 411.814/411.874 ms，全部 32 维仍逐位一致。
-后一次额外预热十次；各进程存在波动，不把表中不足 1 ms 的差异解释为加速。
-
-后续 vision BF16 GEMM 筛选了 11 组 cuBLASLt bias 配置；五组 down 配置未通过
-逐位一致性检查。up 的初筛收益没有在固定双方输出缓冲的 ABBA 复测中保持：
-两个候选分别慢 13.48% 和 2.63%，均未进入配方。
-
-后续 M128 prefix tile 让两组 M64 warp 共享压缩权重加载。最终源码保持其余
-15 个 Marlin GPU 函数的机器码与旧版一致，并保留原 K 累加与 BF16/GeGLU 舍入。
-对照基线为本 PR 已有 W4A16 路径（`a7bb38e`），仅衡量这项增量优化。
-两套完整 prepared GPU 图分别捕获 prefix 和十步 action，每条观测双方各预热
-十次，再按 ABBA 顺序测九轮；不含预处理、H2D 和公共调用的 host 开销。
-
-| 观测 | 首轮旧版 → M128 ms | 新进程旧版 → M128 ms |
-|---|---:|---:|
-| 1 | 406.408 → 405.140 | 407.604 → 404.661 |
-| 210 | 421.071 → 413.952 | 429.282 → 421.537 |
-| 490 | 418.321 → 412.265 | 426.251 → 421.170 |
-
-两轮按三条观测统计的中位延迟降低分别为 1.45% 和 1.19%。最新八条观测的
-全部 32 维动作及 prefix K/V 逐位一致；此轮不新增任务成功率结论。
-早期只共享 action 图的 prefix 对照没有用作最终组合收益；未隔离旧 kernel 的
-版本在整套组合中仅有 0.41%，已拒绝。解码调度、单缓冲和三 block 候选也未合入。
-
-在匹配的 LeRobot 环境中，可沿用下文的独立源码对照入口：
-
-```bash
-python benchmarks/pi05-benchmark/compare_optimizations.py \
-  --role candidate --source /workspace/EmbodiInfer --device orin --preset w4a16 \
-  --calibration /models/pi05-gptq/manifest.json \
-  --checkpoint /models/pi05 --inputs /data/inputs.pt \
-  --matmul-precision highest --out runs/orin-w4a16
-```
-
-原 BF16 基线仍使用下文的冻结 PR 前源码和独立进程。新增融合不能进入基线。
-权重校准、图像预处理、H2D、冷启动/编译/捕获和模拟器均须与准备好的 GPU 推理计时分开报告。
-
-## Pi05 推理优化的验证入口
-
-新实现通过 `Pi05OptimizationConfig` 显式启用。优化结果见下文独立基线与三平台验证；
-其后的历史实验使用各自独立口径。候选算子验证可使用保持原 attention/MLP 的 BF16 配置：
-
-```json
-{
-  "activation": "gelu_pytorch_tanh",
-  "norm_fusion": true,
-  "kv_workspace": true
-}
-```
-
-保存为独立 JSON，在一份新的 benchmark YAML 中设置：
-
-```yaml
-dtype: auto
-compile_backend: none
-native_inference: true
-prefix_cuda_graph: true
-cuda_graph: true
-optimizations: ./fused.json
-```
-
-`benchmark.py` 和 `compare.py` 接受 `optimizations`，并记录配方内容；前者相对
-YAML 解析配方路径，后者也将配方内容计入 profile 摘要。报告额外记录 CUDA 源码
-摘要。不要覆盖现有结果。`compare.py` 保留原 50-action 协议，测量前仍需要
-十观测动作检查；它不适用于仅支持 horizon=10 的 Thor/Spark paired-GEMM 配置。
-
-按相同 LeRobot 权重、预处理、随机种子和全部去噪步，使用 recorded 对比入口：
-
-```bash
-CUDA_HOME=/path/to/cuda .venv/bin/python compare_recorded.py \
-  --checkpoint /models/pi05 --tokenizer /models/tokenizer \
-  --samples /data/recorded/sample.json --out runs/fused-parity \
-  --warmup 3 --modes lerobot embodiinfer_sdpa_graph embodiinfer_fused_graph \
-  --optimizations /path/to/fused.json
-```
-
-脚本保存完整归一化/物理动作和逐请求误差，不会自动宣称通过。依次检查
-K/V-only（`norm_fusion: false`）、严格融合、alternative attention 和 paired GEMM；
-保持权重、dtype、输入/noise、horizon 和去噪步一致。Thor/Spark paired-GEMM profile
-限制为匹配 GPU、标准模型尺寸、B1、推理 horizon=10、10-step。
-
-FP8/NVFP4 可分别配置 `prefix_layers` 和 `action_layers`，每层独立选择 gate/up
-与 down 的精度；空配置保持该 tower 为 BF16。要求本地 checkpoint SHA256 和
-匹配的 activation/numerics 语义。默认 LeRobot 使用 `gelu_pytorch_tanh`，不能直接
-复用 exact-GELU profile 的 scale。完整 RLinf profile 和冻结配方见下文。
-NVFP4 需要 Blackwell，
-mixed GEMM 需要 Torch 2.13 的 `scaled_mm` API；新路径支持 CUDA Graph，暂不组合
-Inductor、全局量化或 TP。配置与安装要求见
-[模型文档](../../docs/en/models.md#opt-in-fused-operators)。
-
-算子通过 `layers` 的契约与注册表选择，CUDA/Triton/Torch 实现在各自 backend；
-通用 Projection 已移出 Pi05。JSON 可增加 `operators` 映射，例如
-`{"normalization": "torch", "quantization": "torch", "gelu_mul": "torch", "norm_quant": null}`
-选择参考路径。CUDA residual/norm/quant 融合需要 CUDA norm 与 quantizer 配套，
-参考组合使用 `norm_quant: null` 进行分开执行。硬件 tile/tail 参数归 Triton backend。
-Torch quantizer 仅支持 FP8；NVFP4 的分开执行对照使用 Torch normalization/GELU、
-CUDA quantizer 与原生 GEMM，不能将其描述为纯 Torch NVFP4 实现。
-
-本地验证包括 4090 上的严格算子逐位检查、FP8 完整 10-step graph、更新输入、
-graph eviction/capture failure、refit 失效及参数身份保持。它们使用小型模型，
-不作为 LeRobot 全模型延迟或任务质量结果。NVFP4 正向检查需在 Blackwell 执行。
-
-### PR 加速比的基线
-
-本 PR 的性能基线是加入新优化之前的 EmbodiInfer BF16，保留其原有
-Inductor、Triton attention、prefix/full-loop CUDA Graph 和缓存优化。使用 PR 前
-提交 `05d603714dd3dcb48c5210810847395da13272aa` 的独立源码目录及独立进程；
-基线不导入新增的 ops、`Pi05OptimizationConfig` 或修改后的 policy/runtime。
-沿用原 checkpoint 的 BF16 transformer 与 FP32 视觉/projector/norm/action/time
-精度区域，不额外改变基线 dtype。
-
-下文的 `optimized_rlinf_bf16` / “完整优化 BF16 runtime” 是候选配置。FP8/NVFP4
-相对它的加速只表示量化的额外收益；整个 PR 的加速比应计算为上述原 EmbodiInfer
-延迟除以候选延迟。RLinf profile 改变了视觉精度、GELU 和 time/RoPE 数值配置，性能对照需
-同时报告动作差异，不能自动视为无损优化。
-
-`compare_optimizations.py` 对独立 checkout 进行计时，检查实际 package 导入路径，
-拒绝包含新增优化实现的 baseline 目录，保存完整动作、实际配方、源码/权重/input 摘要
-和每次分段计时。B1/H10/完整十步，六条核验观测逐条预热三次，roundrobin 两轮
-各 30 次；`highest` 和允许 TF32 的 `high` 分别运行。两种角色使用同一 Python
-环境，候选通过设备 preset 展开并记录完整配置：
-
-```bash
-python benchmarks/pi05-benchmark/compare_optimizations.py \
-  --role baseline --source /reference/embodiinfer-before-pr \
-  --baseline-revision 05d603714dd3dcb48c5210810847395da13272aa \
-  --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
-  --matmul-precision highest --out runs/original-bf16-highest
-
-python benchmarks/pi05-benchmark/compare_optimizations.py \
-  --role candidate --source /workspace/EmbodiInfer \
-  --device thor \
-  --checkpoint /models/RLinf-Pi05-LIBERO-SFT --inputs /data/inputs.pt \
-  --matmul-precision highest --out runs/optimized-highest
-```
-
-### 原 EmbodiInfer BF16 与优化配置的对照（2026-10-10）
-
-按上述独立源码/进程协议完成 Thor/Spark 补测，以下均为六观测、60 次请求的同步
-wall P50。加速比统一为 **原 EmbodiInfer BF16 wall P50 / 候选 wall P50**。
-原有 Inductor、Triton attention 和两个 CUDA Graph 在 baseline 中均开启；运行时
-检查所有 EmbodiInfer 模块来自冻结的 PR 前源码，未导入新增 optimization 模块。
-“原数值配置 BF16 ops”保留 LeRobot 原 dtype/GELU/time/RoPE；其余候选使用完整
-RLinf 优化 profile。两组的 CUDA Graph 缓存计数在测量前后均不变，六观测输出
-均为有限值且重复逐位一致；这不是候选与原 baseline 逐位一致的声明。
-
-FP32 GEMM precision = `high`，baseline 保留原有的 TF32 选项：
-
-| 配置 | Thor ms | 相对原 BF16 | Spark ms | 相对原 BF16 |
-|---|---:|---:|---:|---:|
-| 原 EmbodiInfer BF16 / Inductor | 102.787 | 1.000× | 109.329 | 1.000× |
-| 原数值配置 BF16 ops | 93.468 | 1.100× | 109.098 | 1.002× |
-| 完整优化 BF16 | 70.189 | 1.464× | 81.308 | 1.345× |
-| 完整优化 / FP8 action | 63.494 | 1.619× | 75.744 | 1.443× |
-| 完整优化 / NVFP4 prefix | 64.593 | 1.591× | 71.021 | 1.539× |
-| 完整优化 / NVFP4 prefix + FP8 action | 58.054 | 1.771× | 65.758 | 1.663× |
-
-FP32 GEMM precision = `highest`，不与上一组交叉计算加速比：
-
-| 配置 | Thor ms | 相对原 BF16 | Spark ms | 相对原 BF16 |
-|---|---:|---:|---:|---:|
-| 原 EmbodiInfer BF16 / Inductor | 189.137 | 1.000× | 129.545 | 1.000× |
-| 原数值配置 BF16 ops | 178.819 | 1.058× | 129.791 | 0.998× |
-| 完整优化 BF16 | 69.787 | 2.710× | 83.391 | 1.553× |
-| 完整优化 / FP8 action | 63.056 | 2.999× | 75.342 | 1.719× |
-| 完整优化 / NVFP4 prefix | 64.715 | 2.923× | 69.109 | 1.874× |
-| 完整优化 / NVFP4 prefix + FP8 action | 58.025 | 3.260× | 65.038 | 1.992× |
-
-完整优化的收益包含 BF16 视觉路径、camera batching、prefix/context 优化和数值
-profile 变化，不能全部归因于新增 kernel。分段计时中，`highest` 的 Thor BF16
-prefix 均值从 153.19 降至 35.79 ms，diffusion 从 35.95 降至 34.03 ms；Spark
-分别为 90.08 → 44.41 ms、39.28 → 38.61 ms。这只能定位到 prefix 阶段，尚未
-进一步分离其中视觉精度、布局和算子的贡献。
-
-相对同设备/precision 的原 BF16，六观测中完整优化 BF16 的 full32 动作相对 L2
-最大值为 0.197–0.254%，组合低精度为 1.966–2.192%；LIBERO7 对应为
-0.177–0.240% / 1.944–2.170%。这些是归一化动作差异，没有任务成功率结论。
-原始动作、每次计时、实际导入文件清单、两份源码归档、launch 脚本及 SHA256
-清单保存在本地忽略目录 `runs/pr5-original-baseline-20261010/`，运行
-`collect_summary.py` 可重新计算全部对照。两轮在同一进程内连续测量，未据此
-估计独立运行的置信区间，也不将几个百分点的差异解释为稳定加速。
-
-## openpi_rlinf 数值约定与推理验证（2026-10-10）
-
-完整配方显式设置 `numerics="openpi_rlinf"`，对应 RLinf 的 `openpi_rlinf` 推理实现，使用 BF16 视觉 encoder/projector、exact GELU、FP32
-time/RoPE、BF16 query prescaling、separate Q/K/V、连续 BF16 down 矩阵布局、
-action arithmetic / prefix lookup GEGLU，并启用 active-camera batching、prefix
-compaction、末层仅生成 K/V、action context 复用。仅设置 `numerics` 不会自动启用
-所有优化开关；完整配方明确选择各项优化。既有 LeRobot 默认语义保持不变。
-
-部署直接选择设备和完整预设：
+各引擎的版本、配置与加速比见 [PI0.5：Thor 与 RTX 4090 性能对比](../../docs/zh/pi05-performance.md)。部署时直接选择设备和预设，预设名按 prefix MLP、action MLP 的精度排列，配置说明见[模型文档](../../docs/en/models.md#opt-in-fused-operators)：
 
 ```python
-make_policy(
-    "pi05",
-    checkpoint="/models/RLinf-Pi05-LIBERO-SFT",
-    device_type="thor",
-    preset="nvfp4-fp8",
-)
+make_policy("pi05", checkpoint="/models/RLinf-Pi05-LIBERO-SFT", device_type="thor", preset="nvfp4-nvfp4")
 ```
 
-Spark 使用对应设备名称。预设 `bf16`、`bf16-fp8`、`nvfp4-bf16`、`nvfp4-fp8`
-分别对应本节四组完整配方；组合名称按 prefix MLP、action MLP 排列。
-预设包含执行组合、明确的 `openpi_rlinf` 数值约定和校准选择，factory 自动配置
-native 路径、默认 prefix capture、horizon=10 和完整十步。不需要部署方再组合
-这些内部选项。其他精度组合可使用显式格式对名称，但仍需要对应校准。
-`inference/calibration/rlinf_libero.json` 的 schema 2 按设备、prefix/action、目标
-格式组织保护选择和激活范围，并保存 checkpoint identity 与数值语义。内置数据
-只覆盖已测的 prefix NVFP4、受保护 action FP8；可分别或组合选用。其他部分/格式
-组合需要自己的校准数据，缺失时明确报错。文件名指实际权重来源，不是优化 preset。
+## RTX 4090 上的 LIBERO 官方评测（2026-11）
 
-自定义权重通过 `calibration` 传入独立校准数据路径。`from_json`/`to_json` 保留完整
-配置导入导出，供消融和记录实验使用。`strict` preset 保持 LeRobot tanh-GELU
-及 dtype 语义，支持 Thor/Spark/Orin/4090 的严格融合与 K/V 复用。更细的算子、
-数值约定和逐层精度选择可以直接构造 `Pi05OptimizationConfig`；
-`from_preset(device, name)` 用于检查预设的完整展开结果。校准与 checkpoint、
-硬件、部分、格式和数值语义绑定，不能混用。本节性能只覆盖已测组合，
-没有推及所有可表达配置。
+OpenPI 官方 `pi05_libero` 权重（转为 PyTorch）配合官方 `examples/libero/main.py`（不做修改），LIBERO-spatial
+10 个任务 × 50 次，每次推理执行动作块的前 5 步。EmbodiInfer 使用 `fp8-fp8` 预设和这份权重自己的 FP8 标定；
+少步配置沿用训练好的权重，只把去噪步放在幂次网格 t<sub>i</sub> = (1 − i/N)<sup>ρ</sup> 上
+（`Pi05Policy.flow_schedule_rho`，ρ = 1 即均匀网格）。
 
-Thor/Spark 使用相同权重、fixture、noise、B1/H10/完整十步与 `highest` 进行冻结
-参考核验。四种精度配置分别为 BF16、受保护 action FP8、prefix NVFP4，以及
-prefix NVFP4/action FP8 组合。FP8 保留八组 BF16 投影保护选择；prefix NVFP4 使用
-冻结激活范围。没有按核验输出重新校准或调整门限。
+| 配置 | 去噪步数 | 成功率 | 延迟 P50 | 频率 |
+|---|---|---:|---:|---:|
+| OpenPI · PyTorch BF16 | 10 | 494/500 · 98.8% | — | — |
+| **EmbodiInfer · `fp8-fp8`** | **2，ρ = 3** | **495/500 · 99.0%** | **13.34 ms** | **75.0 Hz** |
+| EmbodiInfer · `fp8-fp8` | 3，ρ = 1 | 495/500 · 99.0% | 13.79 ms | 72.5 Hz |
+| EmbodiInfer · `fp8-fp8` | 2，ρ = 1 | 491/500 · 98.2% | 13.33 ms | 75.0 Hz |
+| EmbodiInfer · `fp8-fp8` | 3，ρ = 2 | 490/500 · 98.0% | 13.80 ms | 72.5 Hz |
+| EmbodiInfer · `fp8-fp8` | 4，ρ = 1 | 489/500 · 97.8% | 14.21 ms | 70.4 Hz |
 
-六条核验观测的有效 prefix K/V、十步完整 32 维 velocity、最终动作、graph/eager
-以及改用相反 noise 后的 graph 回放均与**对应精度的冻结参考**逐位一致。
-这不表示低精度与 BF16 等价，也没有任务成功率结论。性能以本文件上一节的
-独立原 EmbodiInfer BF16 对照为准；不同 profile、计时范围及统计量不得交叉相除。
+延迟由 `libero/latency.py` 在空闲 GPU 上测得；同条件下 EmbodiInfer 10 步为 17.08 ms（58.5 Hz），OpenPI 在闭环中
+每次推理约 200 ms。标定细节和计时口径见 [PI0.5 性能页](../../docs/zh/pi05-performance.md)。
 
-运行环境为下文记录的 Python 3.12、Torch 2.13、Triton 3.7.1、Transformers 5.3
-及 LeRobot 0.5.1。最终算子/CUDA Graph 回归在 Thor/Spark 各为 87 passed、
-1 个按架构跳过。完整 tensor、逐层/逐步误差、冻结参考源码、配方、graph 检查
-及环境摘要保存在本地忽略目录 `runs/pr5-complete-migration-20261010/`。
-Orin 不支持本次原生 FP8/NVFP4 profile，使用其支持的 BF16 路径。
+![RTX 4090 上 OpenPI、FlashRT 与 EmbodiInfer 的 LIBERO 闭环对比](../../docs/assets/pi05/libero-4090-comparison.webp)
 
-后续三平台实验保留 LeRobot 数值语义，量化范围也不同，单独报告其条件和失败结果。
+任务 6、初始状态 2，三个引擎都用 10 步去噪、各自独占 GPU，按真实时间播放：每个控制步 50 ms，请求新动作块的步再加上推理时间。OpenPI BF16 每次推理 202.0 ms、8.89 s 完成，FlashRT FP8 23.6 ms、5.32 s，EmbodiInfer `fp8-fp8` 18.6 ms、5.17 s。原视频见 [libero-4090-comparison.mp4](../../docs/assets/pi05/libero-4090-comparison.mp4)。
 
-## 三平台 LeRobot-profile 验证（2026-10-10）
-
-验证源码基于 `8555ef48ee2901f2e70193e2c441916629612510`，另加 query-major
-的旧版 BMM API capability 检查。三台机器使用同一份真实 RLinf-Pi05-LIBERO-SFT
-权重，812 个 tensor 严格映射到 LeRobot adapter；权重 SHA256 为
-`4616e4c1966a5fb063b442ea5d69857f45e873222d839b794634d87d252ab9e7`。
-这不是历史实验中的 LeRobot-SFT 权重。执行语义保持当前 adapter 的 tanh GELU、
-原 RoPE 与原生 dtype，**不验证 RLinf/JAX 对齐或任务成功率**。
-
-统一 B1、完整 10 个去噪步，两个真实 224×224 相机和一个 masked 空相机。
-从 LIBERO-10 每任务首段首帧取得十条真实观测；0/3/6/9 用于量化校准，其余六条
-用于核验。输入 fixture SHA256 为
-`264f9cc39cc9500c815095215ff3905a1ebf2973670795a1caad7d5285e60a2c`。
-图像数值先按 BF16 舍入，再以 FP32 存入共享 fixture；三台设备读取同一份数据。
-噪声由 NumPy `default_rng(1000 + observation_index)` 生成，三设备一致。
-每条核验观测预热两次，随后 roundrobin 计时 30 次；CUDA Event 覆盖视觉/前缀
-和全部 diffusion，**不含 CPU 预处理、输入传输、动作后处理、加载、编译或预热**。
-这些结果不是机器人请求端到端延迟，也不与下文 1,600 帧实验混用。
-
-模型保留 BF16 文本/action transformer，以及 FP32 视觉塔、projector、norm、
-action/time 投影等原生精度区域。`highest` / `high` 是 Torch FP32 GEMM precision；
-后者允许 TF32，包含该组的 FP32-tensor 参考。两组分别比较，未统一将视觉塔转成 BF16。
-Thor/Spark 为 Python 3.12、Torch 2.13.0（分别 cu132/cu130）、Triton 3.7.1、
-Transformers 5.3.0、LeRobot 0.5.1。Thor/Orin 均为 MAXN mode 0，未修改时钟/功耗设置。
-Orin 的完整模型使用已有 Python 3.12、Torch 2.6.0/cu128、Triton 3.2.0 容器及
-相同模型依赖；**Torch 低于 LeRobot 声明的最低版本，因此属于旧环境兼容实测，
-不是受支持环境认证**。主机 Torch 2.8/cu126 另行验证算子，未混入模型延迟。
-
-### 性能对照
-
-以下延迟为 GPU elapsed 均值。`existing_inductor` 未启用新增优化配方；“新路径”已经
-使用新增 ops，不能用它充当原 EmbodiInfer BF16 基线。
-
-FP32 GEMM precision = `highest`
-
-| 设备 | Horizon | 原 Inductor ms | 新路径 ms | 延迟降低 |
-|---|---:|---:|---:|---:|
-| AGX Thor | 10 | 189.02 | 178.68 | +5.47% |
-| AGX Thor | 50 | 205.59 | 202.05 | +1.72% |
-| DGX Spark | 10 | 131.11 | 132.20 | -0.83% |
-| DGX Spark | 50 | 135.19 | 143.65 | -6.26% |
-| AGX Orin | 10 | 525.08 | 532.62 | -1.44% |
-| AGX Orin | 50 | 558.82 | 540.74 | +3.23% |
-
-FP32 GEMM precision = `high`（允许 TF32）
-
-| 设备 | Horizon | 原 Inductor ms | 新路径 ms | 延迟降低 |
-|---|---:|---:|---:|---:|
-| AGX Thor | 10 | 103.08 | 93.25 | +9.53% |
-| AGX Thor | 50 | 119.81 | 116.43 | +2.82% |
-| DGX Spark | 10 | 109.39 | 110.48 | -1.00% |
-| DGX Spark | 50 | 113.16 | 121.66 | -7.51% |
-| AGX Orin | 10 | 363.41 | 373.38 | -2.74% |
-| AGX Orin | 50 | 399.62 | 381.51 | +4.53% |
-
-`existing_inductor` 是原有 Inductor + 原 Triton attention + prefix/full-loop
-CUDA Graph；新路径也开启 graphs，但不组合 Inductor。新路径在 H10 的 Thor/Spark
-使用 `paired_flash`，其余使用 `folded_flash`。H10 是显式改变推理 horizon，
-不是把默认 H50 的动作截断；checkpoint 名义 horizon 仍为 50。
-单组 30 次测量不能证明跨进程稳定收益，约几个百分点的差异需进一步复测。
-Spark 上原有 Inductor 更优，不能把相对 native SDPA 的收益宣称为超越原有最佳路径。
-
-### 正确性与限制
-
-在查看优化候选输出前，按每条观测的 native BF16 与同 precision 的 FP32-tensor
-参考差异冻结门限：max-abs / RMSE 各取两倍，下限 `1e-4` / `1e-5`。保存全部
-32 维归一化动作，数值门限检查 LIBERO 的前七维。K/V-only 在三台设备的全部
-32 维输出均逐位一致；所列 BF16 路径通过六条门限检查，重复输出逐位一致，
-计时前后图缓存数量保持不变。融合 norm/MLP 与 alternative attention 的完整模型
-输出存在浮点差异，不能称为逐位无损，也不能据此推断任务成功率。
-
-Orin 本地 FP32 模型遇到大块 CUDA 分配失败；后续运行复用对应 Thor run 的
-FP32 参考，逐项核对权重/input hash、horizon、B、steps、noise 和 matmul precision。
-已有 H10 的 Orin/Thor FP32 参考在全部 32 维最大差异为 `1.49e-6`；更换参考未改变
-Orin 的 BF16 baseline 输出。原始失败日志保留，未将失败尝试计入性能表。
-
-统一 action-MLP FP8 在 Thor/Spark 分别仅通过 2/6、1/6 条核验，最大误差
-0.02301/0.02279；NVFP4 均为 0/6，最大误差 0.04663/0.04528。校准固定使用四条
-独立观测和 10% headroom，未按候选结果调整门限。**这些配方不推荐部署**。
-该实验量化全部 action MLP，与保护八组敏感投影的 FP8 配置、以及
-NVFP4 prefix / BF16 action 配置的量化范围不同，其误差结果需分别报告。
-Orin 不具备本实现要求的 FP8/NVFP4 原生 GEMM 能力。硬件 profile 未覆盖 Orin 的
-paired GEMM，query-major 在其 Torch 2.6 模型环境中因 BMM API 缺失明确不可用。
-
-首轮 attention/operator 回归：Thor/Spark 各 73 passed、1 skipped；Orin 主机
-70 passed、4 skipped；Orin 模型容器 68 passed、6 skipped。可选能力按实际硬件/API
-跳过，包含 NVFP4、scaled_mm 和旧版 query-major；不是把未执行的能力记为通过。
-
-### 低精度范围补测
-
-`prefix_layers` 与 `action_layers` 独立选择每层精度。原有全局 `quantization` 在
-这些实验中为 `None`，且 policy 会在加载前拒绝它与 `optimizations` 同时开启。
-
-补测固定 B1/H10/完整十步、`highest`、相同权重/input/noise 和原冻结门限。
-FP8 使用 Thor/Spark 各自冻结的八组 BF16 保护选择（28/36 组 FP8），
-全部激活范围按当前 adapter 的四条独立观测重新校准；不复用旧 scale，
-也不按六条核验结果调整保护选择。NVFP4 只量化 prefix MLP，action 保持 BF16。
-本轮 LeRobot-profile 执行全部 18 层 prefix MLP；RLinf profile 省略最后一层
-不影响输出的 MLP，因此两组计时不能作为同一数值 profile 的对照。
-
-| 配置 | Thor 通过数 | Thor 最大动作差 | Spark 通过数 | Spark 最大动作差 |
-|---|---:|---:|---:|---:|
-| 受保护 action FP8 | 5/6 | 0.008395 | 5/6 | 0.012037 |
-| prefix NVFP4 / action BF16 | 0/6 | 0.083918 | 0/6 | 0.062972 |
-
-二者均可执行完整 CUDA Graph，重复动作逐元素一致，计时期间图缓存稳定。
-CUDA 融合与分开执行对照的完整 32 维动作在两台设备上均逐位一致；FP8 使用
-Torch norm/GELU/encoder 对照，NVFP4 使用 Torch norm/GELU 与同一 CUDA encoder/GEMM。
-后者只能排除 pointwise 融合带来的额外误差，不能视为独立 NVFP4 编码器验证。
-本轮 native BF16 动作与同设备首轮 baseline 也逐位一致。
-
-**能够运行低精度、通过算子回归、通过数值门限是不同结论。** 补测配方仍未
-全部通过门限，未作为默认或部署推荐。LeRobot 与 RLinf profile 的 GELU 和视觉
-精度不同，激活范围不能混用。本次补测没有运行闭环任务质量实验。
-
-补齐后的回归在 Thor/Spark 各为 80 passed、1 skipped，包含 prefix/action
-FP8/NVFP4 图回放、NVFP4 分开执行对照、组合 prefix NVFP4/action FP8，以及 refit 失效。
-原始报告、冻结格式选择、重新校准配方和环境记录保存在
-`runs/pr5-lowp-audit-20261010/`。Spark 首次选择 Torch 4-bit encoder 的显式失败
-单独保留；有效 NVFP4 分开执行对照来自 `lowp-prefix-reference-v1`，未覆盖失败报告。
-
-### 复跑与报告
-
-在仓库根目录及匹配的隔离环境执行，先准备兼容的 checkpoint JSON、完整 tokenizer
-和真实权重。不要改用缩小词表或随机输入：
+`libero/` 中的 `serve.py`、`calibrate.py`、`latency.py` 在 EmbodiInfer 环境中运行（另需 OpenPI 的
+`packages/openpi-client`），`observations.py`、`film.py` 在 OpenPI 的 LIBERO 客户端环境中运行。转换后的
+权重目录需带上原权重的 `assets/`；`--tokenizer` 指向 PaliGemma 的 `tokenizer.model`。
 
 ```bash
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-export CUDA_HOME=/path/to/cuda
-export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
-python benchmarks/pi05-benchmark/validate_optimizations.py \
-  --checkpoint /models/pi05 --dataset /data/libero/libero_10 \
-  --inputs /data/pi05-recorded.pt --export
-python benchmarks/pi05-benchmark/validate_optimizations.py \
-  --checkpoint /models/pi05 --inputs /data/pi05-recorded.pt \
-  --out /reports/pi05-h50-high --horizon 50 --matmul-precision high \
-  --warmup 2 --iterations 30 --modes native strict folded_flash existing_inductor
+# 在 OpenPI 仓库中转换官方权重
+python examples/convert_jax_model_to_pytorch.py --checkpoint-dir /ckpt/pi05_libero \
+  --config-name pi05_libero --output-path /ckpt/pi05_libero_pytorch
+cp -r /ckpt/pi05_libero/assets /ckpt/pi05_libero_pytorch/
+
+# FP8 标定：录制 LIBERO 观测，记录各层激活范围
+python libero/observations.py --out runs/libero/observations.npz
+python libero/calibrate.py --checkpoint /ckpt/pi05_libero_pytorch --tokenizer /models/paligemma/tokenizer.model \
+  --observations runs/libero/observations.npz --out runs/libero/calibration.json
+
+# 推理服务：每个配置 NAME:STEPS:RHO:PORT 一个端口；再在 OpenPI 仓库中运行官方评测
+python libero/serve.py --checkpoint /ckpt/pi05_libero_pytorch --tokenizer /models/paligemma/tokenizer.model \
+  --calibration runs/libero/calibration.json --serve s2_rho3:2:3:8000 s10:10:1:8001
+python examples/libero/main.py --args.port 8000
+
+# 延迟与视频
+python libero/latency.py --checkpoint /ckpt/pi05_libero_pytorch --tokenizer /models/paligemma/tokenizer.model \
+  --calibration runs/libero/calibration.json --observations runs/libero/observations.npz --out runs/libero/latency.json
+python libero/film.py --port 8000 --tasks 6 --inits 2 --label "EmbodiInfer FP8 | 2-step flow, rho=3" \
+  --out-dir runs/libero/films/s2_rho3
+python libero/stack.py runs/libero/films/*/task6_init2.mp4 -o runs/libero/compare.mp4
 ```
 
-分别以 `--matmul-precision highest` 和 `high` 运行。H10 使用 `--horizon 10`，
-在对应 Thor/Spark 上可增加 `paired` / `paired_flash`；`fp8` / `nvfp4` 会用独立
-校准观测生成本次配方并保留失败结果。小内存设备可指定
-`--fp32-reference /reports/matching-thor-run`，脚本会验证兼容性并记录外部参考 hash。
-设置 CUDA_HOME，并为 Inductor 提供匹配 Python 开发头文件；Spark 本次通过独立
-CPATH 提供头文件，未修改原环境。
+## 其他平台与早期结果
 
-补测可追加 `--precision-map /recipes/guarded-action-fp8.json` 或
-`--precision-map /recipes/prefix-nvfp4.json`。文件内 `action_layers` / `prefix_layers`
-各为 18 条只含 `gate_up` / `down` 格式选择的列表；脚本拒绝传入旧激活范围，
-使用独立校准观测重新采集，并另存 checkpoint-bound `*-recipe.json`。
-文件名作为模式名，多个映射可在同一进程中比较；对照算子可通过 `operators` 指定。
+各平台此前测得的结果汇总。权重、输入和计时范围逐行不同，只在行内对照，不与上表换算。
 
-原始 JSON、完整动作、逐样本门限、分段/墙钟时间、环境 spec/ledger 与 SHA256
-清单位于 `runs/pr5-multigpu-20261010/`；该目录按 benchmark 约定被 Git 忽略。
-`summary.json` 明确选用成功的复测轮次，`report.md` 为汇总；先前的依赖/分配器失败
-另行保留，不回填成成功结果。保留基准 commit 源码快照、兼容性补丁和实际执行的 benchmark 摘要；新报告还记录源码树 hash。
+| 平台 | 工作负载与计时 | EmbodiInfer | 对照 |
+|---|---|---|---|
+| DGX Spark | `RLinf-Pi05-LIBERO-SFT`，B=1、H=10，同步 wall P50 | NVFP4 prefix + FP8 action **65.76 ms**，完整优化 BF16 81.31 ms | 原 EmbodiInfer BF16 109.33 ms（加速 1.66× / 1.34×） |
+| Jetson Orin NX | `RLinf-Pi05-LIBERO-SFT`，B=1、H=10，同步 wall | `w8a8-w4a16` **321.9–338.3 ms**，`w4a16` 395.5–405.1 ms | — |
+| AGX Orin 32GB | 三相机 `pi05-chips-30000`，B=1、输出 50×12，P50 | eager + 完整去噪图 **2311.7 ms**，动作与 LeRobot 逐位一致 | LeRobot 2751.8 ms（1.19×） |
+| AGX Orin | `RLinf-Pi05-LIBERO-SFT`，LeRobot 数值语义，H=10，FP32 GEMM 允许 TF32，GPU elapsed 均值 | BF16 363.41 ms | — |
+| RTX 4090 | LIBERO-10 1,600 帧离线回放，B=1，E2E 均值 | 原生优化 **38.89 ms**（25.71 obs/s） | 原 EmbodiInfer 74.33 ms，PhyAI 41.31 ms，vla.cpp 79.36 ms，Embodied.cpp 89.99 ms |
+| Jetson AGX Thor | LIBERO-10 1,600 帧离线回放，B=1，E2E 均值，原生优化之前 | 164.05 ms | — |
 
-## 实验方法
+RTX 4090 上默认关闭的 `prefix_gelu_fusion` 另有约 1.3% 的完整请求收益，动作逐字节不变。
 
-模型：LeRobot `pi05_libero_finetuned_v044` 检查点，使用其 tokenizer、状态归一化及动作反归一化。数据：[LIBERO-datasets](https://huggingface.co/datasets/yifengzhu-hf/LIBERO-datasets) 的 `libero_10/*.hdf5`：任务文件名字典序取 10 个，每任务按 numeric demo ID 取前 10 段，每段包含首尾均匀取 16 帧，共 **1,600 帧**。
+## 数据与计时口径
 
-输入 agentview、wrist RGB、EEF position3 + axis-angle3 + gripper2 及任务指令。启用 Inductor 与完整去噪循环 CUDA Graph，10 个去噪步，每次输出 50×7 动作块。预热 10 次，在所选样本中均匀取点以覆盖任务。
+1,600 帧离线回放使用 LeRobot `pi05_libero_finetuned_v044` 检查点及其 tokenizer、状态归一化和动作反归一化。数据为 [LIBERO-datasets](https://huggingface.co/datasets/yifengzhu-hf/LIBERO-datasets) revision `f13aa24a3da8c43c7225569f28c562979fa0e35a` 的 `libero_10/*.hdf5`：任务文件名字典序取 10 个，每任务按 numeric demo ID 取前 10 段，每段含首尾均匀取 16 帧，共 1,600 帧。输入 agentview、wrist RGB、EEF position3 + axis-angle3 + gripper2 及任务指令，10 个去噪步，每次输出 50×7 动作块。
 
-统一 B=1、BF16、seed=42，正式测量 1 遍。计时从已解码 CPU RGB/状态开始，到 CPU 输出结束，包含预处理、模型执行、后处理及两端 CUDA 同步；磁盘读取/解码、模型加载和预热（含编译/图捕获）单独排除。**无需仿真**，不计算任务成功率、SR/SPL。
-
-指标：mean / P50 / P95 / P99 延迟、calls/s、action slots/s、tokens/s、CUDA 峰值 allocated/reserved、进程峰值 RSS，以及加载/预热时间。吞吐为总输出数除以总推理时间；action slots/s 不等于机器人控制频率。Thor 的 CPU/GPU 共享物理内存，RSS 与 CUDA 内存不能相加。
-
-本轮分段计时保留原端到端 `latency_ms`，额外记录 `model_timing_ms`：`prefill_ms` 为视觉/文本/状态编码的 CUDA elapsed，`decode_ms` 为全部去噪或 token 生成步骤的 CUDA elapsed，`gpu_inference_ms` 为二者合计；`pure_inference_ms` 为同一完整模型区间的同步墙钟时间，包含模型内部 CPU 调度及采样等待。输入预处理与输入 H2D 在计时前完成，动作反归一化、文本/动作解析及输出 D2H 在计时后执行。两段之间不插入同步；CUDA elapsed 包含流上的等待间隙，不是逐 kernel 时长相加。`model_calls_per_second` = 调用数 / 总纯推理墙钟时间，与原 E2E `calls_per_second` 分开报告。原 E2E 范围保留，但新测量含计时探针开销。新报告 schema 为 `rlinf_offline_performance_v2`，旧报告未测量的字段不回填。
+统一单卡、B=1、BF16、seed=42，预热 10 次，正式测量 1 遍。计时从已解码的 CPU RGB/状态开始，到 CPU 输出结束，包含预处理、模型执行、后处理及两端 CUDA 同步；磁盘读取/解码、模型加载和预热（含编译与图捕获）不计入。不运行仿真，不计算任务成功率。
 
 ## 运行
 
-在本目录执行，依赖配套的 EmbodiInfer 源码和本平台已验证的 Torch 环境。2026-09-07 的旧结果基于 `b86cce30ba57`；本轮分段计时需使用当前工作树中同时更新的 EmbodiInfer，实际 Python 源码摘要记录在报告的 `environment.source_python_sha256`。`setup_env.py` 为本目录创建独立 `.venv`；`benchmark.py` 自带数据采样和计时代码。
+在本目录执行。`setup_env.py` 为本目录创建独立 `.venv`，`benchmark.py` 自带数据采样和计时；`--platform` 可选 `thor` 或 `4090`，模型依赖分别见 `requirements-thor.txt` / `requirements-4090.txt`，模型与数据路径在 `config.yaml` 中设置，结果默认写入 `runs/`。
 
 ```bash
-# Thor: --platform thor；4090: --platform 4090，并选择一张空闲 GPU。
 CUDA_VISIBLE_DEVICES=0 python3 setup_env.py --platform thor --runtime-python /path/to/verified-runtime/bin/python --inference-root /path/to/EmbodiInfer
-# 修改 config.yaml 中的模型、数据路径；新结果默认写入 runs/。
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python benchmark.py --validate-data
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python benchmark.py
 ```
 
-Thor 使用 Torch 2.13.0+cu132，4090 使用 2.13.0+cu129，模型依赖分别见 `requirements-thor.txt` / `requirements-4090.txt`。`--config /path/to/config.yaml` 可使用另一份配置。选定数据缺失时会报错，不以随机输入替代。
-
-Transformers 5 的 GemmaTokenizer 需要包含完整词表的 `tokenizer.json`。只有 `tokenizer.model` 时可能静默加载成 5-token 词表。首次运行前，在实际使用的 Hugging Face 缓存目录执行下面的检查；缺少 JSON 时，脚本从已有的原始 SentencePiece 模型生成它，已有 JSON 时只核验。检查包含 10 个 LIBERO 任务指令、状态文本、空白和 Unicode，共 119 条文本，要求 token ID 与 SentencePiece 完全一致。`benchmark.py` 还会在加载权重前检查词表和三条不同指令，并把实际词表大小及 token ID 写入报告。
+Transformers 5 的 GemmaTokenizer 需要包含完整词表的 `tokenizer.json`，只有 `tokenizer.model` 时可能静默加载成 5-token 词表。首次运行前用 `prepare_tokenizer.py` 生成并核验：
 
 ```bash
-export HF_HOME=/path/to/huggingface-cache
-.venv/bin/python prepare_tokenizer.py \
-  --tokenizer-dir /path/to/huggingface-cache/hub/models--google--paligemma-3b-pt-224/snapshots/ACTUAL_SNAPSHOT \
-  --dataset-root /path/to/libero_10 \
-  --output runs/tokenizer-validation.json
+.venv/bin/python prepare_tokenizer.py --tokenizer-dir /path/to/paligemma-tokenizer --dataset-root /path/to/libero_10 --output runs/tokenizer-validation.json
 ```
 
-## 实验结果
-
-2026-09-08 修复 tokenizer 后，在 Thor MAXN 完成 1,600 帧分段计时。输入词表为 257,152 个 token；119 条文本与原始 SentencePiece 编码完全一致，见 tokenizer 核验 (`reports/thor/tokenizer-validation.json`)。保留 SDPA、Inductor 和完整 10 步去噪 CUDA Graph。预热后及测量结束均为 1 个 LoopGraph、1 个编译视觉编码器、1 个编译 prefix 编码器和 4 个编译推理 helper，测量中没有新图捕获。selection SHA256 为 `92be73f628b54f35c5f0ece7ea0e6babc4a6e3b3a4fd43adc0662bbfa516eb69`。
-
-| 模型 / 数据 | 硬件 / 日期 | Calls | E2E mean ms | Prefill mean ms | Decode mean ms | 纯推理 mean ms | E2E calls/s | 纯推理 calls/s |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| pi05-libero10 | Thor / 09-08 | 1,600 | 164.05 | 62.45 | 98.42 | 160.90 | 6.0956 | 6.2152 |
-| pi05-libero10 | RTX 4090 / 09-08 | 1,600 | 74.77 | 36.69 | 34.87 | 71.59 | 13.3735 | 13.9694 |
-
-Thor E2E P50/P95/P99 为 163.95/165.01/165.50 ms；完整模型 CUDA elapsed 为 160.87 ms，纯推理同步墙钟为 160.90 ms。两者都覆盖全部 10 个去噪步，不能当成单个去噪 step 的时间。一台单卡 RTX 4090 工作站已按相同完整词表、10 个去噪步和测量代码完成 1,600 帧；E2E P50/P95/P99 为 74.71/75.50/77.11 ms。两平台图捕获和编译数量在正式测量中均保持不变。
-
-另取 10 个跨任务观测，用相同权重、输入和逐观测随机种子，对比分段计时路径与当前普通 `EngineCore.execute`；`50×7` 物理动作逐元素完全一致，最大绝对差为 0，见 路径一致性记录 (`reports/thor/timing-parity.json`)。该检查针对同一进程内的两条执行路径，不宣称与旧报告或另一硬件的输出 SHA256 完全相同。
-
-4090 的 tokenizer 核验 (`reports/4090/tokenizer-validation.json`) 同样通过全部 119 条文本；路径一致性记录 (`reports/4090/timing-parity.json`) 的 10 个跨任务输出最大绝对差为 0。4090 原始 JSON SHA256 为 `2ab09a20c81d460da37755d96d2620aac25f1c4d8e2b763771724ae115e67571`，源码摘要为 `1ce73cd69d5fbfb03430eced40a58b89de474633a717505f0a469a45ccc4d0ec`。Thor 重跑后新增了独立 `prepare_tokenizer.py`，使完整目录摘要发生变化；两平台 `benchmark.py` 和 EmbodiInfer 推理源码一致。
-
-此前 Thor 的 tokenizer 缓存仅有 `tokenizer.model`，缺少 Transformers 5 使用的 `tokenizer.json`，实际加载为 5-token 词表，普通指令被编码为 `[2, 3]`。旧的 165.38 ms Thor 结果只保留为历史记录，不作为有效基线；同进程两条路径输出一致不能证明 tokenizer 本身正确。09-07 的旧 4090 环境没有复核，也不纳入当前对照。
-
-当前 Thor 报告包含逐调用数据、完整配置、样本摘要、实际词表、内存和编译/图回放状态。实际 Python 源码 SHA256 为 `c8c4a5785c3ab1a7539fdcd4ade75568dd9ecad6c559a99bcd539fbef76cfd45`，原始 JSON SHA256 为 `514ac8ff86eaafda56cf32905cf90dada812aa3c61390e767fd5c790aa1c5726`。这是 B=1、固定完整步数下的结果，未穷举所有 batch size 或优化组合。
-
-本轮 8 个 benchmark 共用 20260908223127.tar.gz (`../snapshots/20260908223127.tar.gz`) 和一份 SHA256 (`../snapshots/20260908223127.tar.gz.sha256`)。包内只包含必要脚本、依赖文件、README、实际运行配置、14 组 Thor 与 14 组 RTX 4090 分段计时报告，以及相关数值核验记录。PI0.5 使用修复 tokenizer 后的新结果；历史报告、模型框架、权重、原始数据和虚拟环境不进入本包。报告及快照不提交 Git。
-
-配套 EmbodiInfer 源码基线为 `72cba6e4ae05312bd93c69918709f9b792869e61`，使用本包附带的 benchmark 脚本。报告旁的 `*-config.json` 保存该次实际运行配置；复跑时调整本机模型、数据和输出路径，再传入 `--config`。同时设置 `HF_HOME` 指向通过 tokenizer 核验的缓存；原运行路径记录在配置的 `benchmark_context.HF_HOME`。两平台的采样、配置和源码核验见 协议核验记录 (`reports/4090/cross-hardware-protocol.json`)。
-
-## 4090 竞品对比（2026-09-09）
-
-使用一台 RTX 4090 24 GiB 工作站，驱动 `580.173.02`，GPU 测量串行执行。每组回放 LIBERO-10 的 10 个字典序任务文件、每任务前 10 个数字序 demo、每 demo 含首尾均匀取 16 帧，共 1,600 条离线观测；不启动仿真或机械臂。数据源 `yifengzhu-hf/LIBERO-datasets` revision `f13aa24a3da8c43c7225569f28c562979fa0e35a`。选帧 SHA256：`92be73f628b54f35c5f0ece7ea0e6babc4a6e3b3a4fd43adc0662bbfa516eb69`。
-
-检查点为 `pi05_libero_finetuned_v044_gitcode`，输入两个 224px 相机、状态和指令，10 步去噪，内部 `50×32`、输出物理动作 `50×7`。保持 MEAN_STD 归一化和完整 257,152 词表；119 条文本的 SentencePiece 对照来自既有 tokenizer 核验。EmbodiInfer 的额外空相机完全 masked，C++/PhyAI 仅计算两个有效视角。
-
-### 计时与配置
-
-E2E 从已解码的 CPU 图像/状态/指令到 CPU 物理 action chunk，包含预处理、噪声生成、H2D/D2H、同步、完整模型和后处理。完整推理只计 GPU 输入就绪后的视觉/文本编码与全部去噪。磁盘读取、图像解码、首次模型加载、初始化预热和凑批等待不计入；请求触发的 C++ 建图/更新/再预热计入 E2E。C++ 内置分段计时范围不同，完整推理列留空，避免混用。
-
-EmbodiInfer 为 BF16、SDPA、Inductor 和完整去噪 CUDA Graph；PhyAI 为原生 autotune、CUDA Graph、非量化运行。测量前覆盖 10 条跨任务参考并预热，batch 核验覆盖相同 10 条输入。正式测量期间 EmbodiInfer 的图/编译状态及 PhyAI 的 kernel 选择缓存保持稳定。各实现独立使用 `.venv`、`.venv-vlacpp`、`.venv-embodied`、`.venv-phyai`。
-
-### B=1 全量结果
-
-下表所有行都完成 1,600 条回放；数值核验通过条数单独列出。吞吐单位为真实 observation/s。
-
-| 实现 | 平均 E2E (ms) | 平均完整推理 (ms) | E2E 吞吐 (obs/s) | 数值核验 |
-| --- | ---: | ---: | ---: | ---: |
-| EmbodiInfer | 74.33 | 71.84 | 13.45 | 10/10 |
-| vla.cpp | 79.36 | — | 12.60 | 10/10 |
-| Embodied.cpp + correctness patch | 89.99 | — | 11.11 | 10/10 |
-| PhyAI | 41.31 | 39.14 | 24.21 | 9/10 |
-
-### Batch 吞吐扫描
-
-每个 batch 都处理独立观测和独立噪声；末批复制最后一条输入填充，填充槽位不计入吞吐。延迟为整批完成时间。C++ 公开接口仅支持 B=1。
-
-| 实现 | Batch | 平均整批 E2E (ms) | 平均整批完整推理 (ms) | E2E 吞吐 (obs/s) | 数值核验 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| EmbodiInfer | 2 | 118.01 | 112.21 | 16.95 | 10/10 |
-| EmbodiInfer | 8 | 423.01 | 408.01 | 18.91 | 10/10 |
-| EmbodiInfer | 16 | 848.15 | 819.54 | 18.86 | 10/10 |
-| EmbodiInfer | 32 | 1736.32 | 1676.58 | 18.43 | 10/10 |
-| PhyAI | 2 | 67.01 | 62.82 | 29.85 | 9/10 |
-| PhyAI | 4 | 120.37 | 112.10 | 33.23 | 9/10 |
-| PhyAI | 8 | 227.31 | 211.26 | 35.19 | 9/10 |
-| PhyAI | 16 | 446.48 | 414.31 | 35.84 | 10/10 |
-| PhyAI | 32 | 898.85 | 818.31 | 35.60 | 10/10 |
-
-EmbodiInfer 已测最高吞吐为 **B=8，18.91 obs/s**（该配置数值核验 10/10）。最高仅指实际完成测量的配置，不代表理论上限。
-PhyAI 已测最高吞吐为 **B=16，35.84 obs/s**（该配置数值核验 10/10）。最高仅指实际完成测量的配置，不代表理论上限。
-
-扫描停止原因保留在 诊断日志 (`reports/4090-competitors/diagnostics`)。
-
-- `phyai-autotune-fresh-batch-8`：FlashInfer 临时工作区不足，后续扩大工作区重试。
-- `phyai-autotune-unchecked-batch-2`：持久化 autotune 缓存导致捕获期间首次初始化，后续重新调优重试。
-- `phyai-autotune-workspace1024-batch-32`：FlashInfer 临时工作区不足，后续扩大工作区重试。
-- `phyai-autotune-workspace2048-batch-64`：FlashInfer 临时工作区不足，后续扩大工作区重试。
-- `phyai-autotune-workspace4096-batch-64`：CUDA 显存不足。
-- `phyai-autotune-workspace512-batch-16`：FlashInfer 临时工作区不足，后续扩大工作区重试。
-
-EmbodiInfer 前轮 PI0.5 B=4、GR00T B=2 各有一条参考超出数值门槛，未计完整性能；PI0.5 B=64、GR00T B=128 显存不足。本次按用户要求补测 PhyAI，保留 EmbodiInfer 既有结果。
-
-### 数值核验与继续计时
-
-每条观测使用 `np.random.default_rng(42 + 选帧序号)` 产生 FP32 高斯噪声，再舍入到 BF16，显式传给各引擎。先在 EmbodiInfer FP32 算术路径中使用相同 BF16 舍入权重/输入/噪声，测量相对 EmbodiInfer BF16 的差异；在查看竞品输出前，按每条观测分别冻结 max-abs/RMSE 门槛，取该差异两倍，下限 `1e-4/1e-5`。比较归一化动作，门槛与原始报告见 tolerance-contract.json (`reports/4090-competitors/tolerance-contract.json`)。这是数值筛选规则，不是官方任务正确性标准或任务成功率。
-
-`compare.py --mode measure` 默认要求同一配置的 10 条核验通过；`throughput.py` 默认也受该门槛约束。用户明确要求忽略精度问题后，PhyAI 使用 `--allow-numerical-mismatch` 完整测量：仍要求对应配置的核验记录、相同输入、正确输出形状及有限值，报告 `passed` 保留数值结果，`measurement_complete` 单独表示回放完成，`allow_numerical_mismatch` 记录本次选择。全量报告没有将失败核验改为通过。
-
-PhyAI 首次默认图模式和 autotune 均为 9/10 通过；关闭图复用也未解决数值差异。全量结果采用对应新配置的核验记录，具体通过条数见上表；门槛从未放宽。
-
-PhyAI 的 patch stem 使用 FP32 计算、Euler 状态使用 FP32 累加，EmbodiInfer 本配置为 BF16 状态；这是已确认的实现差别，尚未通过逐层对照证明它解释了全部误差。
-
-### 复现依赖与适配
-
-源码固定为 [vla.cpp](https://github.com/VinRobotics/vla.cpp) `f386c16347094eb2cb183edf39677cf1b6bcc750`、[Embodied.cpp](https://github.com/SEU-PAISys/Embodied.cpp) `1dad33f2c87ee1d390808cb5d776cd8c998f4a36`、[PhyAI](https://github.com/mingti-org/phyai) `a0abb211c4b05b21b766d0f6f6840eed72a8fcec`。C++ 构建为 CUDA 12.6.85、sm_89、Release；vla.cpp 使用 llama.cpp b10729、统一 `--use_fast_math` 保留 device LTO；Embodied.cpp 使用 llama.cpp b9016 及上游 pi05/groot-n1/cuda-parity 补丁。实际构建参数、差异和动态库 SHA256 见 build-provenance.json (`reports/4090-competitors/build-provenance.json`)，GGUF dtype 统计见 precision-provenance.json (`reports/4090-competitors/precision-provenance.json`)。
-
-`prepare_cpp.py` 记录转换摘要：vla.cpp 转换前仅移除原检查点 `model.` 命名空间，812 个 tensor 数值保持不变，并修正其硬编码的归一化元数据为实际 MEAN_STD；Embodied.cpp 直接接受原检查点。C++ 使用原生 BF16/F32 权重存储与 F32 激活，PI0.5 路径不支持通过全局开关切换 BF16 激活或统一 Flash Attention；Embodied.cpp SigLIP attention 为 auto。
-
-Embodied.cpp 应用 [常量存储修复](embodied-pi05-constants.patch)：保留持久图位置/mask/时间输入的存储，防止分配器复用覆盖；不改变权重、算术和步数。标注 `+ correctness patch`，另有 12 次重复/变形状回放核验 (`reports/4090-competitors/embodied-constants-replay.json`)，同一输入/噪声输出逐位一致。
-
-PhyAI 独立环境为 Torch 2.11.0/CUDA 13.0、Transformers 5.8.1、h5py 3.16.0。FlashQLA 0.1.2 要求 TVM-FFI 0.1.9，使用兼容的 CUTLASS DSL[cu13] 4.5.2；两个环境均通过 `uv pip check`。EmbodiInfer 沿用 Torch 2.13.0+cu129、Transformers 5.3.0。完整版本见 environments.json (`reports/4090-competitors/environments.json`)。
-
-PhyAI 的持久化 kernel 选择缓存会跳过某些后端预热，导致首次 cuDNN 分配发生在捕获期间。本次 B=1 和 PI0.5 补测设 `autotune_cache: null`，每个进程重新 autotune，初始化不计时，CUDA Graph 保持开启；GR00T B=2–64 保留原缓存路径，B=128 重新调优。默认工作区为 256 MiB，planner 不足时按新配置扩展至 512 MiB 或更大，具体容量写入对应报告；未修改 PhyAI 模型或 kernel 源码。
-
-复跑时将 `*-config.json` 中模型、数据、源码、库、参考目录与输出路径改为本机路径，设置 `PYTHONPATH` 指向 EmbodiInfer、`HF_HOME` 指向缓存。使用对应虚拟环境执行 `compare.py --config <配置> --mode check`，再为同一配置设置新 `gate_report/output` 后执行 `--mode measure --allow-numerical-mismatch`；批量使用 `throughput.py --config <配置> --batch-size N --output <新报告> --allow-numerical-mismatch`。输入、步数、噪声和冻结门槛保持不变。APXinf 本轮未取得可复现执行入口，未测。
-
-### 快照
-
-两模型共用 20260909105724.tar.gz (`../snapshots/20260909105724.tar.gz`) 和一份 SHA256 (`../snapshots/20260909105724.tar.gz.sha256`)。仅包含必要脚本、README、依赖/构建记录、实际配置、全量逐调用报告及相关核验；不含权重、原始数据集、虚拟环境、动态库。报告和压缩包均由 `.gitignore` 排除。
-
-远端实际 HEAD 为 `72cba6e4ae05312bd93c69918709f9b792869e61`，benchmark 使用本包版本；收集清单 (`reports/4090-competitors/collection-manifest.json`) 记录报告与脚本 SHA256，适配器变更另有逐文件差异。
-
-## PI0.5 原生优化（2026-09-09）
-
-分支 `perf/pi05-native-inference` 基于 `main@06e82ca80f6385079ef7390e32466180088b4d80`。
-迁入上游优化分支的固定时间表/AdaRMS 缓存、prefix graph、融合算子及梯度路径回退；
-模型布局、调度与缓存位于 `embodiinfer/policies/pi05/`，可复用张量算子位于
-`embodiinfer/backend/triton/`；分段 K/V attention 通过 `embodiinfer/layers/attention.py` 注册和选择。
-参考 PhyAI 的布局与缓存方法，增加有效相机裁剪、语言长度分档、自行实现的 Triton
-prefix/分段 KV 注意力，以及 Q/K RoPE 融合。运行环境**没有安装或导入 FlashInfer**；
-不用 PhyAI 或其他推理框架执行 EmbodiInfer 模型。
-
-### 相同 B=1 口径的完整回放
-
-复用上文同一 RTX 4090、检查点、BF16 输入/权重、10 个去噪步、50×7 物理动作和
-LIBERO-10 的 1,600 个样本。噪声为每条观测 `42+index`，固定数值阈值不变。
-所有布局在计时前预热，完整测量期间图数量/缓存数量不变；不计磁盘读取、解码、
-模型加载、编译与预热。新结果仅代表此 GPU 的 B=1，尚未重测 Thor 或 batch 吞吐。
-
-| 实现 | 平均 E2E (ms) | 平均完整推理 (ms) | E2E 吞吐 (obs/s) | 数值门槛 |
-| --- | ---: | ---: | ---: | ---: |
-| 原 EmbodiInfer | 74.33 | 71.84 | 13.45 | 10/10 |
-| 本分支 EmbodiInfer | 38.89 | 36.54 | 25.71 | 10/10 |
-| PhyAI（前述固定版本/环境） | 41.31 | 39.14 | 24.21 | 9/10 |
-
-新结果的 prefix / 完整去噪 CUDA elapsed 均值为 **22.31 / 14.21 ms**。
-相对原 EmbodiInfer，E2E 降低 **47.7%**，吞吐为原先的
-**1.91×**。
-动作核验使用既有逐样本冻结门槛；10/10 通过不等于与原实现逐位一致，也不代表
-仿真任务成功率。真实权重的同路径 eager/graph、后续请求输出隔离以及 refit 后重建
-另由 测试记录 (`reports/4090-native/native-v6/tests.log`) 验证（16 项通过）。
-完整 CPU 回归 (`reports/4090-native/cpu-final.log`) 为 407 通过、49 跳过；Ruff 与 diff 检查通过。
-
-运行源码 SHA256：`47236c7c5a86013b034b7467cb0815110ee3dc1a5c334f620323e1c2066ce147`；完整结果 SHA256：`b803b23302d5b67375c84b092d7aec58e2124b3d39337a530c32c249a77f0124`。
-收集及协议核验 (`reports/4090-native/verification.json`) 检查逐帧 ID、冻结门槛、配置、
-全部 1,600 行、均值/吞吐、图缓存稳定性，以及本地代码与实际运行版本的一致性。
-
-### 开启方式
-
-`make_policy("pi05", ...)` 或本目录 `benchmark.py` 配置增加以下参数；默认关闭，便于
-与原始路径对照。完整去噪图同时需要 `EngineConfig(use_cuda_graph=True,
-capture_full_loop=True)`。优化只用于 CUDA eval 推理；训练/梯度和任意时间的原始
-`denoise_step` 保留参考路径。`return_hidden=True` 保留原始 prefix 布局。
-
-```yaml
-native_inference: true
-prefix_cuda_graph: true
-prefix_attention: triton
-denoise_attention: triton
-compile_backend: inductor
-cuda_graph: true
-```
-
-`runtime.py` 拥有按形状/stream 缓存的 prefix/完整去噪图和每个时间步的 AdaRMS 投影；
-`backend/triton/split_kv_attention.py` 直接读取两段 K/V，按 KV 分片计算并稳定合并 softmax；
-`backend/triton/norm.py`、`activation.py`、`rotary.py` 分别提供 AdaRMS/门控残差、GELU 和 RoPE 融合。
-PI0.5 policy 负责构造模型所需的 mask、选择算子和管理缓存。语言 bucket 为
-16/32/48/64/96/128/160/200，只删除公共尾部 padding；完全 masked 的相机不再经过 SigLIP。
-残差与 RoPE 禁止跨 BF16 中间舍入做 FMA 融合，防止当前 Triton 版本消除舍入。
-refit、设备/dtype 迁移与 train/eval 切换会清理派生缓存。
-
-复现本表使用 实际配置 (`reports/4090-native/native-v6/check-config.json`)，修改本机路径后：
-
-```bash
-# 与上述独立 .venv 相同，不安装 FlashInfer。
-PYTHONPATH=/path/to/EmbodiInfer HF_HOME=/path/to/cache \
-  .venv/bin/python compare.py --config /path/to/check-config.json --mode check
-# 保持配置相同，仅把 output 改为新文件、gate_report 指向刚生成的 check 报告。
-PYTHONPATH=/path/to/EmbodiInfer HF_HOME=/path/to/cache \
-  .venv/bin/python compare.py --config /path/to/measure-config.json --mode measure
-```
-
-固定阈值与参考样本沿用竞品实验归档，首次重建流程仍使用 `compare.py` 的
-`reference` / `calibrate` 模式（用原始 baseline 配置关闭 native_inference，不能用待测优化校准）；
-比较前必须冻结阈值，不能根据新输出调整。
-
-本次 PI0.5 优化单独归档为 20260909123408.tar.gz (`../snapshots/20260909123408.tar.gz`)
-及 SHA256 (`../snapshots/20260909123408.tar.gz.sha256`)。只包含最终结果相关的脚本、
-本次 PI0.5 优化源码、实际配置、校验参考、原 EmbodiInfer/PhyAI 对照和逐帧报告；
-不含 checkpoint、完整数据集、虚拟环境或编译库。之前多模型快照保留。
-
-## AGX Orin mixed precision (2026-09-17)
-
-这是三相机、12 维动作的 `pi05-chips-30000` 微调 checkpoint 对照，与上面的
-LIBERO/Thor/4090 实验独立。AGX Orin 32GB、30W，PyTorch 2.8.0 / CUDA 12.6、
-Transformers 5.3.0、LeRobot 0.5.1。Gemma 权重 BF16，视觉、归一化、动作和时间
-投影 FP32；B=1、10 次去噪、内部 50×32、输出 50×12，未量化或缩短动作块。
-
-同一 episode 242 的 frame 0、18、23、27，种子 1000、0、2026，每配置 12 次。
-参考和候选显式检查 FP32 初始噪声逐元素一致；全部 600 个动作值均参与比较。
-各配置先预热一次，再顺序测量，当时无其他模型推理。所有模式在同一进程内
-保持相同 matmul precision；原始日志未单独记录该值，新复现脚本显式设置并记录。
-视觉 attention 各配置均为 SDPA，表中 eager/SDPA 指
-Gemma 骨干和动作专家。实际动作是反归一化、控制层裁剪前的 checkpoint 坐标。
-
-| 后端 | P50 ms | P95 ms | 最大归一化动作差 | 最大实际动作差 | GPU 峰值分配 MiB |
-|---|---:|---:|---:|---:|---:|
-| LeRobot | 2751.8 | 2823.7 | 0 | 0 | 7082 |
-| EmbodiInfer eager | 2565.7 | 2568.3 | 0 | 0 | 8072 |
-| EmbodiInfer eager + 完整去噪图 | **2311.7** | **2319.8** | **0** | **0** | 8106 |
-| EmbodiInfer SDPA | 2889.9 | 2897.5 | 0.06924 | 2.9954 | 8100 |
-| EmbodiInfer SDPA + 完整去噪图 | 2787.0 | 2792.0 | 0.06924 | 2.9954 | 8125 |
-
-测量从已解码 CPU 图像/状态进入预处理，到完整动作块反归一化并回到 CPU。
-包含设备传输、预处理、完整推理和后处理；排除磁盘/图像解码、加载、首次图捕获、
-相机采集、HTTP/Wi-Fi 和执行器。12 次样本的 P95 不代表长时间尾延迟保证。
-
-所选 eager + 图的中位延迟降低 **15.99%（1.19×）**；prefix 约 1964 ms，
-去噪约 341 ms，普通 EmbodiInfer eager 去噪约 592 ms。计算结构和模型规模未减小。
-单独插桩的线性层/卷积乘加计数约 4.787 TFLOPs，排除 attention 矩阵乘、归一化
-等算子，不是完整硬件 FLOPs。显存增加约 1 GiB 主要来自 Engine 将原先 CPU
-offload 的词嵌入搬到 GPU；图本身相对 EmbodiInfer eager 约增加 33 MiB。这里记录的是
-PyTorch GPU 分配，不能与 Jetson 进程 RSS 相加。
-
-种子 1000 的右夹爪完整轨迹逐元素一致，四帧峰值依次为 64.9038、69.2670、
-63.6015、67.3609。张开/闭合方向由实际标定决定；本实验不证明实机抓取成功率。
-SDPA 在此条件下既没有提速，也不满足逐位一致，因此没有作为这次默认替代。
-
-**代码与证据范围：** 上表在 EmbodiInfer 部署分支 `fix/pi05-mixed-inference-20260917`
-（基于提交 `6f65961`，加本次混合精度和原生嵌入改动）测得。迁入 inference
-主线后保留已有融合 SDPA / compact-layout 优化，故不能把表中 SDPA 数据当成
-当前主线所有优化组合的速度。迁入主线后已重新运行同一
-30,000-step checkpoint：4 帧 × 3 种子，完整 50×12 归一化和反归一化动作均
-与 LeRobot 逐元素一致（最大差 0）。本次回放复用已验证的部署流式加载器，
-候选执行的是 inference 仓库的 `LeRobotPi05Adapter`；不据此声称新加载器或
-新复现脚本已完成全量性能测量。AGX 小型组件和 CUDA 图验证通过，CPU 全套
-445 项通过、62 项按硬件/依赖跳过。性能数据不会因源码迁移自动视为重新测量。原始 60 次动作数组及统计保存在本次
-部署实验工作目录，不将 checkpoint、录制图像或机器人配置提交仓库。
-
-### 本地录制数据复现
-
-`compare_recorded.py` 复用 checkpoint 自带预处理/后处理，不依赖机器人服务。
-在独立、空闲的 GPU 上运行，使用匹配 checkpoint 的 LeRobot 环境：
-
-```bash
-PYTHONPATH=. python benchmarks/pi05-benchmark/compare_recorded.py \
-  --checkpoint /path/to/pretrained_model \
-  --tokenizer /path/to/paligemma-tokenizer \
-  --samples /path/to/frame-000/sample.json /path/to/frame-018/sample.json \
-            /path/to/frame-023/sample.json /path/to/frame-027/sample.json \
-  --seeds 1000 0 2026 --warmup 1 \
-  --out /path/to/new-run
-```
-
-每个 `sample.json` 包含 `state` 数组、`task` 字符串、`images` 对象；`images`
-将 checkpoint 相机角色名映射到同目录图片文件，如 `{"camera1": "camera1.png"}`。
-图片解码为 RGB CHW [0,1]。结果目录含运行条件、每次计时/动作误差和完整动作数组。
-当前脚本将全部权重放在 CUDA，参考和候选共享同一加载模型；每个观测形状都预热。
-这与历史部署实验的参考 CPU 词嵌入 offload、仅首帧预热不同，应以新生成条件和
-结果为准。`--modes lerobot embodiinfer_eager embodiinfer_eager_graph` 可只测逐位一致的候选；
-SDPA 结果始终单独报告误差。冷启动、CPU offload 和正式服务请求延迟不在该脚本
-的推理计时范围内。
+其他脚本：
+
+| 脚本 | 用途 |
+|---|---|
+| `compare.py`、`throughput.py` | 冻结数值门槛下的竞品 / 原生优化对比，以及 batch 吞吐 |
+| `compare_optimizations.py` | 独立源码、独立进程的原 BF16 与优化配置对照 |
+| `validate_optimizations.py` | 三平台 LeRobot profile 的数值核验与计时 |
+| `validate_nonquant.py`、`ablate_nonquant.py` | 非量化可选项的逐层精度验收与消融计时 |
+| `compare_recorded.py` | 本地录制观测的逐位对照与计时 |
+| `libero/serve.py` | 以 OpenPI websocket 协议提供 EmbodiInfer（多个步数 / ρ 配置共享权重）或 FlashRT 推理服务，供官方 LIBERO 客户端评测 |
+| `libero/observations.py`、`libero/calibrate.py` | 录制 LIBERO 观测；为 OpenPI 权重生成绑定 SHA256 的 FP8 激活范围 |
+| `libero/latency.py` | 各步数 / ρ 配置的单次推理延迟 |
+| `libero/film.py`、`libero/stack.py` | 按官方协议录制带推理频率的 LIBERO 视频，并横向或顺序拼接 |
+| `prepare_cpp.py` | vla.cpp / Embodied.cpp 的权重转换；Embodied.cpp 另需[常量存储补丁](embodied-pi05-constants.patch) |

@@ -13,7 +13,12 @@ from PIL import Image
 
 from embodiinfer.engine.serve.contracts import RawImage, RawPolicyRequest
 from embodiinfer.policies.pi05.checkpoints import checkpoint_format
-from embodiinfer.policies.pi05.checkpoints.openpi import OpenPiConfig
+from embodiinfer.policies.pi05.checkpoints.openpi import (
+    PALIGEMMA_EMBEDDING,
+    PALIGEMMA_HEAD,
+    OpenPiConfig,
+    restore_tied_embedding,
+)
 from embodiinfer.policies.pi05.checkpoints.orbax import convert_orbax_params
 from embodiinfer.policies.pi05.processor_pi05 import (
     LeRobotProcessor,
@@ -361,6 +366,50 @@ def test_openpi_statistics_reject_nan_and_bad_dimensions(openpi_recipe):
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="finite action_dim"):
         OpenPiProcessor(openpi_recipe)
+
+
+def _write_statistics(recipe, state_width, action_width):
+    stats = {
+        name: {"q01": [-2.0] * width, "q99": [2.0] * width, "mean": [0.5] * width, "std": [2.0] * width}
+        for name, width in (("state", state_width), ("actions", action_width))
+    }
+    Path(recipe.norm_stats).write_text(json.dumps({"norm_stats": stats}))
+
+
+def test_openpi_unpadded_state_statistics_leave_padding_at_zero(openpi_recipe):
+    # OpenPI's own exports keep the dataset width: 3 of the model's 4 features here.
+    _write_statistics(openpi_recipe, 3, 3)
+    processor = OpenPiProcessor(openpi_recipe)
+    seen = []
+    tokenize = processor.tokenize
+    processor.tokenize = lambda prompt, state: (seen.append(state.copy()), tokenize(prompt, state))[1]
+    images = {"base": torch.zeros(3, 224, 224), "wrist": torch.zeros(3, 224, 224)}
+    processor.prepare(torch.tensor([-2.0, 2.0, 1.0]), images, "pick")
+    expected = (np.array([-2.0, 2.0, 1.0], np.float32) + 2) / np.float32(4 + 1e-6) * 2 - 1
+    np.testing.assert_allclose(seen[0][:3], expected, rtol=0, atol=1e-6)
+    assert seen[0][3] == 0
+
+
+def test_openpi_unpadded_action_statistics_restore_their_features(openpi_recipe):
+    _write_statistics(openpi_recipe, 3, 3)
+    processor = OpenPiProcessor(replace(openpi_recipe, delta_action_mask=()))
+    normalized = torch.tensor([[0.0, -1.0, 1.0, 0.5]])
+    expected = (normalized.numpy()[:, :3] + 1) / 2 * (4 + 1e-6) - 2
+    np.testing.assert_array_equal(processor.restore_actions(normalized, torch.zeros(3)).numpy(), expected)
+
+
+def test_openpi_statistics_must_cover_their_features(openpi_recipe):
+    _write_statistics(openpi_recipe, 3, 2)
+    with pytest.raises(ValueError, match="covering its 3 features"):
+        OpenPiProcessor(openpi_recipe)
+
+
+def test_openpi_tied_embedding_is_named_after_its_head():
+    head = torch.ones(2)
+    assert restore_tied_embedding({PALIGEMMA_HEAD: head})[PALIGEMMA_EMBEDDING] is head
+    embedding = torch.zeros(2)
+    tensors = restore_tied_embedding({PALIGEMMA_HEAD: head, PALIGEMMA_EMBEDDING: embedding})
+    assert tensors[PALIGEMMA_EMBEDDING] is embedding
 
 
 def test_openpi_resize_preserves_aspect_ratio_and_black_padding(openpi_recipe):
