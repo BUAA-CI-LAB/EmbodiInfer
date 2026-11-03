@@ -37,6 +37,29 @@ class _Bf16Activation:
     output: torch.Tensor
 
 
+def smoothed_norm_scale(weight: torch.Tensor, smooth: torch.Tensor) -> torch.Tensor:
+    """FP32 RMSNorm scale (applied as ``1 + w``) whose output is divided by the SmoothQuant scales."""
+    return ((1.0 + weight.float()) * (1.0 / smooth) - 1.0).contiguous()
+
+
+def smoothed_adarms(
+    weight: torch.Tensor, bias: torch.Tensor, smooth: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """AdaRMS ``[scale, shift, gate]`` projection whose normalized output is divided by the scales.
+
+    ``x * (1 + scale) + shift`` becomes ``x * (1 + scale') + shift'`` with ``1 + scale' = (1 + scale) / s``
+    and ``shift' = shift / s``; the residual gate rows are unchanged.
+    """
+    inverse = 1.0 / smooth
+    width = inverse.numel()
+    folded_weight, folded_bias = weight.float().clone(), bias.float().clone()
+    folded_weight[:width] *= inverse[:, None]
+    folded_weight[width : 2 * width] *= inverse[:, None]
+    folded_bias[:width] = folded_bias[:width] * inverse + (inverse - 1.0)
+    folded_bias[width : 2 * width] *= inverse
+    return folded_weight.to(weight.dtype), folded_bias.to(bias.dtype)
+
+
 class CalibratedMlp(torch.nn.Module):
     """MLP dimensions backed by the checkpoint-bound external weight archive.
 
@@ -85,37 +108,56 @@ class MlpPlan:
             module.down_proj.weight.shape != tuple(reversed(module.gate_proj.weight.shape))
         ):
             raise ValueError("Optimized Pi05 MLP projection dimensions do not match")
+        gate_weight, up_weight, down_weight = (projection.weight.detach() for projection in projections)
+        if layer.smooth is not None:
+            smooth = torch.tensor(layer.smooth, dtype=torch.float32, device=gate_weight.device)
+            if smooth.numel() != gate_weight.shape[1]:
+                raise ValueError("SmoothQuant scales must match the MLP input width")
+            gate_weight = (gate_weight.float() * smooth).to(gate_weight.dtype)
+            up_weight = (up_weight.float() * smooth).to(up_weight.dtype)
+        self.side_gate_up = self.side_down = None
+        if layer.outliers is not None:
+            if not prefix or runtime.config.hardware != "thor":
+                raise ValueError("BF16 outlier channels require a Thor prefix NVFP4 MLP")
+            index = torch.tensor(layer.outliers, dtype=torch.long, device=gate_weight.device)
+            if int(index.max()) >= gate_weight.shape[0]:
+                raise ValueError("Outlier channels exceed the MLP width")
+            # Kept channels of the NVFP4 path no longer share block scales with the outliers.
+            self.side_gate_up = torch.cat((gate_weight[index], up_weight[index]), dim=0).t().contiguous()
+            self.side_down = down_weight[:, index].t().contiguous()
+            gate_weight, up_weight, down_weight = (w.clone() for w in (gate_weight, up_weight, down_weight))
+            gate_weight[index] = 0
+            up_weight[index] = 0
+            down_weight[:, index] = 0
         self.gate = runtime.projection.plan(
-            module.gate_proj.weight,
+            gate_weight,
             layer.gate_up_max,
             layer.gate_up,
             runtime.quantizer,
             runtime.workspace_key,
         )
         self.up = runtime.projection.plan(
-            module.up_proj.weight, layer.gate_up_max, layer.gate_up, runtime.quantizer, runtime.workspace_key
+            up_weight, layer.gate_up_max, layer.gate_up, runtime.quantizer, runtime.workspace_key
         )
         self.down = runtime.projection.plan(
-            module.down_proj.weight, layer.down_max, layer.down, runtime.quantizer, runtime.workspace_key
+            down_weight, layer.down_max, layer.down, runtime.quantizer, runtime.workspace_key
         )
         self.paired = None
         self.packed_fp8 = None
         if runtime.config.fused_mlp and layer.gate_up == "bf16":
-            self.paired = runtime.paired[prefix].plan(module.gate_proj.weight, module.up_proj.weight)
+            self.paired = runtime.paired[prefix].plan(gate_weight, up_weight)
         elif runtime.config.hardware in ("thor", "4090") and layer.gate_up == "fp8":
-            packed_w = torch.cat(
-                (module.gate_proj.weight.detach(), module.up_proj.weight.detach()), dim=0
-            ).contiguous()
+            packed_w = torch.cat((gate_weight, up_weight), dim=0).contiguous()
             self.packed_fp8 = runtime.projection.plan(
                 packed_w, layer.gate_up_max, "fp8", runtime.quantizer, runtime.workspace_key
             )
-            self.inter_size = module.gate_proj.weight.shape[0]
+            self.inter_size = gate_weight.shape[0]
             if layer.down == "fp8":
                 self.down_scale = torch.tensor(
-                    [layer.down_max / 448.0], device=module.gate_proj.weight.device, dtype=torch.float32
+                    [layer.down_max / 448.0], device=gate_weight.device, dtype=torch.float32
                 )
                 self.down_inv_scale = torch.tensor(
-                    [448.0 / layer.down_max], device=module.gate_proj.weight.device, dtype=torch.float32
+                    [448.0 / layer.down_max], device=gate_weight.device, dtype=torch.float32
                 )
                 if not prefix:
                     self.g_nk_fp8 = self.gate.weight
@@ -179,8 +221,40 @@ class MlpPlan:
             return self.down.apply(hidden, self.down.encode(hidden))
         return self.project(inputs, self.gate.encode(inputs))
 
-    def project(self, inputs: torch.Tensor, encoded: EncodedActivation | None) -> torch.Tensor:
-        """Fuse the selected GELU/product/down encoding after native GEMMs."""
+    def project(
+        self, inputs: torch.Tensor, encoded: EncodedActivation | None, *, norm: Any = None
+    ) -> torch.Tensor:
+        """Fuse the selected GELU/product/down encoding after native GEMMs.
+
+        ``inputs`` is the residual that ``norm`` normalized into ``encoded``; layers with BF16
+        outlier channels need both to add those channels' contribution.
+        """
+        output = self._project(inputs, encoded)
+        if self.side_down is not None:
+            self._add_outliers(inputs, encoded, norm, output)
+        return output
+
+    def _add_outliers(self, inputs: torch.Tensor, encoded: Any, norm: Any, output: torch.Tensor) -> None:
+        """Accumulate the outlier channels' BF16 GeGLU and down projection into ``output``."""
+        if norm is None or encoded is None:
+            raise RuntimeError("BF16 outlier channels need the residual and norm of the fused NVFP4 input")
+        rows = encoded.output.shape[0]
+        width = self.side_down.shape[0]
+        key = ("outliers", rows, inputs.device, self.runtime.workspace_key(inputs.device))
+        if key not in self.plans:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("Warm the BF16 outlier channels before graph capture")
+            self.plans[key] = (
+                torch.empty((rows, 2 * width), device=inputs.device, dtype=torch.bfloat16),
+                torch.empty((rows, width), device=inputs.device, dtype=torch.bfloat16),
+            )
+        gate_up, hidden = self.plans[key]
+        normalized = self.runtime.smoothed_normalize(norm, inputs)
+        torch.matmul(normalized.reshape(-1, normalized.shape[-1])[:rows], self.side_gate_up, out=gate_up)
+        torch.mul(F.gelu(gate_up[:, :width]), gate_up[:, width:], out=hidden)
+        output.view(-1, output.shape[-1]).addmm_(hidden, self.side_down)
+
+    def _project(self, inputs: torch.Tensor, encoded: EncodedActivation | None) -> torch.Tensor:
         if getattr(self, "g_kn_fp8", None) is not None and self.runtime.fusion is not None:
             from ....backend.triton.geglu import prefix_geglu_fp8
 

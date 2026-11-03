@@ -75,10 +75,73 @@ def test_custom_calibration_supports_other_tower_format_combinations(tmp_path, p
     )
 
 
-@pytest.mark.parametrize("preset", ["fp8-bf16", "bf16-nvfp4"])
-def test_bundled_calibration_rejects_unmeasured_formats(preset):
+def test_thor_nvfp4_calibration_carries_smoothquant_and_outlier_channels(tmp_path):
+    config = Pi05OptimizationConfig.from_preset("thor", "nvfp4-nvfp4")
+    for layers, width in ((config.prefix_layers, 2048), (config.action_layers, 1024)):
+        assert len(layers) == 18
+        assert all(layer.gate_up == layer.down == "nvfp4" and len(layer.smooth) == width for layer in layers)
+    assert [index for index, layer in enumerate(config.prefix_layers) if layer.outliers] == [16]
+    assert len(config.prefix_layers[16].outliers) == 128 and config.prefix_layers[16].down_max == 213.0
+    path = tmp_path / "thor-nvfp4.json"
+    config.to_json(path)
+    assert Pi05OptimizationConfig.from_json(path) == config
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        dict(gate_up="nvfp4", smooth=(1.0, 0.0)),
+        dict(gate_up="nvfp4", smooth=(1.0, float("inf"))),
+        dict(gate_up="bf16", smooth=(1.0, 2.0)),
+        dict(gate_up="nvfp4", outliers=(3, 3)),
+        dict(gate_up="nvfp4", outliers=(-1,)),
+        dict(gate_up="fp8", outliers=(3,)),
+    ],
+)
+def test_smoothquant_and_outlier_fields_reject_invalid_values(values):
+    with pytest.raises(ValueError):
+        MlpLayerPrecision(**values)
+
+
+def test_outlier_channels_are_prefix_only():
+    layer = MlpLayerPrecision("nvfp4", "nvfp4", 3.0, 4.0, outliers=(1, 2))
+    Pi05OptimizationConfig(prefix_layers=(layer,), checkpoint_sha256="1" * 64)
+    with pytest.raises(ValueError, match="prefix MLPs only"):
+        Pi05OptimizationConfig(action_layers=(layer,), checkpoint_sha256="1" * 64)
+
+
+def test_smoothquant_folds_preserve_the_gate_up_inputs():
+    from embodiinfer.policies.pi05.inference.mlp import smoothed_adarms, smoothed_norm_scale
+
+    generator = torch.Generator().manual_seed(0)
+    width, rows = 64, 5
+    tolerance = dict(rtol=1e-4, atol=1e-4)
+    x = torch.randn(rows, width, generator=generator)
+    weight = torch.randn(32, width, generator=generator)
+    smooth = torch.rand(width, generator=generator) * 3.75 + 0.25
+    norm = torch.randn(width, generator=generator)
+    reference = (x * (1 + norm)) @ weight.t()
+    folded = (x * (1 + smoothed_norm_scale(norm, smooth))) @ (weight * smooth).t()
+    torch.testing.assert_close(folded, reference, **tolerance)
+
+    condition = torch.randn(rows, 16, generator=generator)
+    dense = torch.randn(3 * width, 16, generator=generator)
+    bias = torch.randn(3 * width, generator=generator)
+
+    def modulated(dense_weight, dense_bias, gate_up):
+        scale, shift, gate = (condition @ dense_weight.t() + dense_bias).chunk(3, dim=-1)
+        return (x * (1 + scale) + shift) @ gate_up.t(), gate
+
+    reference, reference_gate = modulated(dense, bias, weight)
+    folded, folded_gate = modulated(*smoothed_adarms(dense, bias, smooth), weight * smooth)
+    torch.testing.assert_close(folded, reference, **tolerance)
+    torch.testing.assert_close(folded_gate, reference_gate)
+
+
+@pytest.mark.parametrize(("device", "preset"), [("thor", "fp8-bf16"), ("spark", "bf16-nvfp4")])
+def test_bundled_calibration_rejects_unmeasured_formats(device, preset):
     with pytest.raises(ValueError, match="18 .* MLP layer ranges"):
-        Pi05OptimizationConfig.from_preset("thor", preset)
+        Pi05OptimizationConfig.from_preset(device, preset)
 
 
 @pytest.mark.parametrize("device", ["thor", "spark"])

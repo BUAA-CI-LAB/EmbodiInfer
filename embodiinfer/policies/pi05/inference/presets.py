@@ -148,16 +148,6 @@ def _apply_calibration(
             continue
         choices = ranges.get(tower)
         rows = choices.get(precision) if isinstance(choices, dict) else None
-        if (
-            rows is None
-            and config.hardware == "thor"
-            and calibration == "rlinf_libero"
-            and formats == {"prefix": "nvfp4", "action": "nvfp4"}
-            and tower == "action"
-        ):
-            fp8_rows = devices.get("4090", {}).get("action", {}).get("fp8")
-            if isinstance(fp8_rows, list):
-                rows = [{**r, "gate_up": "nvfp4", "down": "nvfp4"} for r in fp8_rows]
         if not isinstance(rows, list) or len(rows) != 18:
             raise ValueError(f"Calibration requires 18 {tower} MLP layer ranges for {precision}")
         values = tuple(MlpLayerPrecision(**row) for row in rows)

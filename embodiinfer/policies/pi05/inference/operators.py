@@ -31,6 +31,7 @@ from ....layers.quantization import ActivationQuantizer, ProjectionBackend
 from ....layers.weight_only import weight_only_backends
 from ..embeddings import openpi_rlinf_rope_tables, rope_tables
 from .config import MlpLayerPrecision, Pi05OptimizationConfig
+from .mlp import smoothed_adarms, smoothed_norm_scale
 
 if TYPE_CHECKING:
     from ..modeling_pi05 import Pi05Policy, Pi05Prefix
@@ -205,6 +206,27 @@ class Pi05OperatorPlans:
         self._prefix_attention_index = {
             id(layer.self_attn): index for index, layer in enumerate(policy._prefix_tower.layers)
         }
+        # SmoothQuant divides each post-attention norm output by the scales its gate/up absorbed:
+        # through the RMSNorm scale in the prefix, through the AdaRMS projection in the expert.
+        self.smoothed_scales: dict[int, torch.Tensor] = {}
+        self.smoothed_projections: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        for tower, layers in (
+            (policy._prefix_tower, config.prefix_layers),
+            (policy._expert_tower, config.action_layers),
+        ):
+            for block, layer in zip(tower.layers, layers):
+                if layer.smooth is None:
+                    continue
+                norm = block.post_attention_layernorm
+                dense = getattr(norm, "dense", None)
+                reference = norm.weight if dense is None else dense.weight
+                smooth = torch.tensor(layer.smooth, dtype=torch.float32, device=reference.device)
+                if smooth.numel() != (reference.numel() if dense is None else reference.shape[0] // 3):
+                    raise ValueError("SmoothQuant scales must match the MLP input width")
+                if dense is None:
+                    self.smoothed_scales[id(norm)] = smoothed_norm_scale(norm.weight, smooth)
+                else:
+                    self.smoothed_projections[id(norm)] = smoothed_adarms(dense.weight, dense.bias, smooth)
         self.qkv_plans = {}
         self.split_attention = None
         if config.hardware == "4090" and config.fused_mlp and config.attention == "folded_flash":
@@ -746,6 +768,23 @@ class Pi05OperatorPlans:
         ):
             raise ValueError("Orin W4A16 launch profiles require B1, horizon10 and 10 denoise steps")
 
+    def smoothed_norm_scale(self, norm: Any) -> torch.Tensor | None:
+        """The RMSNorm scale to apply, divided by its MLP's SmoothQuant scales when it has them."""
+        return self.smoothed_scales.get(id(norm), getattr(norm, "weight", None))
+
+    def smoothed_normalize(self, norm: Any, inputs: torch.Tensor) -> torch.Tensor:
+        """BF16 RMSNorm of a prefix residual with the SmoothQuant-adjusted scale."""
+        if self.norm is None:
+            raise RuntimeError("Smoothed normalization requires the fused normalization backend")
+        return self._norm_plan(norm, inputs).normalize(
+            inputs, scale=self.smoothed_norm_scale(norm), modulation=None
+        )[0]
+
+    def adarms_projection(self, norm: Any, condition: torch.Tensor) -> torch.Tensor:
+        """AdaRMS ``[scale, shift, gate]`` for ``condition``, SmoothQuant-adjusted where calibrated."""
+        folded = self.smoothed_projections.get(id(norm))
+        return norm.dense(condition) if folded is None else F.linear(condition, *folded)
+
     def _norm_plan(self, norm: Any, inputs: torch.Tensor) -> Any:
         key = (id(norm), tuple(inputs.shape), inputs.device, self.workspace_key(inputs.device))
         if key not in self.norm_plans:
@@ -970,13 +1009,13 @@ class Pi05OperatorPlans:
             inputs,
             update,
             gate,
-            scale=getattr(norm, "weight", None) if modulation is None else None,
+            scale=self.smoothed_norm_scale(norm) if modulation is None else None,
             modulation=modulation,
             **({"residual_evict_last": True} if retain_residual else {}),
         )
         if not expert:
             self._discard_retired(update)
-        return residual, mlp.project(residual, encoded), next_gate
+        return residual, mlp.project(residual, encoded, norm=norm), next_gate
 
     def tower_forward(
         self,
@@ -1007,7 +1046,7 @@ class Pi05OperatorPlans:
             return (
                 None
                 if condition is None or norm.dense is None
-                else norm.dense(condition).float().contiguous()
+                else self.adarms_projection(norm, condition).float().contiguous()
             )
 
         tower_layers = self.config.action_layers if expert else self.config.prefix_layers

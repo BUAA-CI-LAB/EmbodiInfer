@@ -14,12 +14,20 @@ from ....layers.quantization import Precision
 
 @dataclass(frozen=True)
 class MlpLayerPrecision:
-    """Calibrated gate/up and down formats for one transformer MLP."""
+    """Calibrated gate/up and down formats for one transformer MLP.
+
+    ``smooth`` holds per-input-channel SmoothQuant scales: gate/up are packed as ``W * s``
+    and the preceding norm's output is divided by ``s``. ``outliers`` lists down-input
+    channels that a prefix NVFP4 MLP computes in BF16 beside the NVFP4 path; ``down_max``
+    then bounds only the remaining channels.
+    """
 
     gate_up: Precision = "bf16"
     down: Precision = "bf16"
     gate_up_max: float = 1.0
     down_max: float = 1.0
+    smooth: tuple[float, ...] | None = None
+    outliers: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         """Reject invalid precision names and activation ranges before packing."""
@@ -30,6 +38,25 @@ class MlpLayerPrecision:
             for value in (self.gate_up_max, self.down_max)
         ):
             raise ValueError("Activation maxima must be finite and positive")
+        if self.smooth is not None:
+            object.__setattr__(self, "smooth", tuple(self.smooth))
+            if not self.smooth or any(
+                type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+                for value in self.smooth
+            ):
+                raise ValueError("SmoothQuant scales must be finite and positive")
+            if self.gate_up == "bf16":
+                raise ValueError("SmoothQuant scales apply to quantized gate/up projections")
+        if self.outliers is not None:
+            object.__setattr__(self, "outliers", tuple(self.outliers))
+            if (
+                not self.outliers
+                or any(type(index) is not int or index < 0 for index in self.outliers)
+                or len(set(self.outliers)) != len(self.outliers)
+            ):
+                raise ValueError("Outlier channels must be distinct non-negative integers")
+            if self.gate_up != "nvfp4":
+                raise ValueError("BF16 outlier channels require NVFP4 gate/up projections")
 
 
 @dataclass(frozen=True)
@@ -106,6 +133,8 @@ class Pi05OptimizationConfig:
                 not isinstance(layer, MlpLayerPrecision) for layer in layers
             ):
                 raise ValueError(f"{name} must be a tuple of MlpLayerPrecision values")
+        if any(layer.outliers is not None for layer in self.action_layers):
+            raise ValueError("BF16 outlier channels apply to prefix MLPs only")
         if self.prefix_gelu_fusion and (
             self.numerics != "lerobot"
             or self.has_quantized_mlp

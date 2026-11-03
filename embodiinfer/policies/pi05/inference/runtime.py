@@ -379,6 +379,13 @@ class Pi05Runtime:
         cached = self.schedules.get(key)
         if cached is None:
             policy = self.policy
+            getter = getattr(policy, "_get_optimizations", None)
+            operators = getter() if getter is not None else None
+            project = (
+                (lambda norm, condition: norm.dense(condition))
+                if operators is None
+                else operators.adarms_projection
+            )
             rows = []
             norms = [
                 n
@@ -389,7 +396,7 @@ class Pi05Runtime:
             for time, dt in policy.flow_schedule(steps):
                 t = torch.full((state.shape[0],), time, device=state.device, dtype=state.dtype)
                 condition = policy._time_condition(t)
-                rows.append((t, dt, tuple(norm.dense(condition).float().contiguous() for norm in norms)))
+                rows.append((t, dt, tuple(project(norm, condition).float().contiguous() for norm in norms)))
             cached = self._remember(self.schedules, key, tuple(rows))
         return cached
 
