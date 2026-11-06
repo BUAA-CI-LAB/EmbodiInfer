@@ -30,11 +30,11 @@ FPS 为完整观测/s：首批按 `1000 × batch / 首批整批耗时(ms)` 计�
 
 ### 场景与配置
 
-单张 RTX 4090 24 GB、BF16，R2R val-unseen、seed=42 的冻结 256 集清单前 128 集，各取首帧，batch=1/2/4/8 分别计时 128/64/32/16 次真实批调用。CPU RGB → 完整 CPU actions，包含预处理；不含磁盘、加载、预热、重置和渲染。128 帧完整预热一遍再测一遍，每批清空历史和已学习的投机候选，保留图与编译结果；EmbodiInfer 配置 `firstframe.reset_speculative_prior=true`。下方历史首帧数据未采用这个候选重置规则，不混用。
+单张 RTX 4090 24 GB、BF16，R2R val-unseen、seed=42 的冻结 256 集清单前 128 集，各取首帧，batch=1/2/4/8 分别计时 128/64/32/16 次真实批调用。CPU RGB → 完整 CPU actions，包含预处理；不含磁盘、加载、预热、重置和渲染。128 帧完整预热一遍再测一遍，每批清空历史和已学习的投机候选，保留图与编译结果；EmbodiInfer 配置 `firstframe.reset_speculative_prior=true`。下方 2026-11-01 的首帧数据未采用这个候选重置规则，两表不混用。
 
 两侧使用相同 StreamVLN 权重 `f1f76c6`、输入、prompt 和 greedy 解码，repetition penalty=1.05、max new tokens=128；每组均得到 128 个有效输出、共 1,024 tokens。按 batch=1/2/4/8，官方与 EmbodiInfer 动作序列一致的帧数为 125/126/127/127（各 128 帧）。这里只比较性能，不报告导航精度。
 
-EmbodiInfer 基于 `2a3f053`，开启语法树投机、GPU 预处理、CUDA Graph、融合算子、GQA 和 packed prefill；本轮图回退为 0。[官方源码](https://github.com/InternRobotics/StreamVLN/tree/e48f6ff7e9201d93aae003e8f64b04c00cec13bc) 保持不变，使用原生 `generate`、FlashAttention 2、KV cache、`num_logits_to_keep=1` 和左侧 padding。
+EmbodiInfer 基于 `2a3f053`，开启语法树投机、GPU 预处理、CUDA Graph、融合算子、GQA 和 packed prefill；图回退为 0。[官方源码](https://github.com/InternRobotics/StreamVLN/tree/e48f6ff7e9201d93aae003e8f64b04c00cec13bc) 保持不变，使用原生 `generate`、FlashAttention 2、KV cache、`num_logits_to_keep=1` 和左侧 padding。
 
 驱动 580.82.07，450 W，CPU 线程数 4。EmbodiInfer：Torch 2.10.0 / CUDA 12.8 / Transformers 4.51.3 / Triton 3.6.0；官方独立环境：Torch 2.1.2+cu121 / Transformers 4.45.1 / FlashAttention 2.5.9.post1。这是各引擎可用环境的端到端比较。
 
@@ -56,7 +56,7 @@ for B in 1 2 4 8; do
 done
 ```
 
-## 首帧性能（历史数据，2026-11-01）
+## 首帧性能：BF16 / INT8（2026-11-01）
 
 | 数据集 | 精度 | Batch | 批调用数 | 整批 mean / P95 (ms) | 摊销 ms/观测 | 观测/s | 峰值 allocated (GiB) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -79,9 +79,9 @@ done
 
 ### 场景
 
-R2R / RxR val-unseen，各取与 [Thor](../thor/README.md) 相同的固定 128 集首帧和原指令，每集从空历史开始。同一组输入预热一遍后正式测量一遍；不渲染、不计算 SR/SPL，也不覆盖长历史复用。
+R2R / RxR val-unseen，各取与 [Thor](../thor/README.md) 相同的固定 128 集首帧和原指令，每集从空历史开始，与 Thor 页同协议（批次之间不重置已学习的投机候选）。同一组输入预热一遍后正式测量一遍；不渲染、不计算 SR/SPL，也不覆盖长历史复用。
 
-2026-11-01，单张 RTX 4090 24 GB，驱动 580.82.07，功耗上限 450 W；Torch 2.10.0 / CUDA 12.8 / Triton 3.6.0 / Transformers 4.51.3，CPU 线程数为 4。使用与 Thor 相同的权重版本和首帧脚本。投机解码、GPU 预处理、CUDA Graph、融合算子和 packed prefill 开启；本轮图缺失回退为 0。
+2026-11-01，单张 RTX 4090 24 GB，驱动 580.82.07，功耗上限 450 W；Torch 2.10.0 / CUDA 12.8 / Triton 3.6.0 / Transformers 4.51.3，CPU 线程数为 4。使用与 Thor 相同的权重版本和首帧脚本。投机解码、GPU 预处理、CUDA Graph、融合算子和 packed prefill 开启；图缺失回退为 0。
 
 计时从解码后的 CPU RGB 到 CPU actions，包含完整动作生成；不含加载、预热、PNG 解码、HTTP 和仿真。整批延迟与摊销每观测耗时分别统计。
 
@@ -100,7 +100,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. python benchmarks/vln_firstframe.py \
   --output results/rtx-4090/streamvln/firstframe/r2r-bf16-b1
 ```
 
-## 闭环导航（历史数据）
+## 闭环导航（R2R，B=1）
 
 | 数据集 | 精度 | 成功 / 128 | SR | SPL | 模型 mean / P95 (ms) | 模型调用数 | 整集耗时合计 (min) | 配置 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

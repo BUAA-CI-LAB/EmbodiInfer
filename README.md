@@ -123,7 +123,7 @@ BF16, `Arvil/Qwen2.5-VL-3B_rl_r2r_4000`, repeated R2R episode 1; means over five
 
 *RLinf integration is experimental: the upstream PR is unmerged, full HabitatLab training and convergence remain unvalidated, and the incremental/full-history logprob check has an outstanding mismatch (0.119415 vs 0.02 tolerance). See the [integration report][rlinf-report] for each experiment's validation scope.*
 
-More models, devices and historical measurements: [full benchmark index][benchmark-index].
+Latest results for every model and device, with coverage gaps: [full benchmark index][benchmark-index].
 
 <a id="supported-models"></a>
 
