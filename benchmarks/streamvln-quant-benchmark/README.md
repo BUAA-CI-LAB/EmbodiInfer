@@ -2,6 +2,8 @@
 
 仅展示 **batch=1** 下完整跑完的最终配置与结果。按 `设备/精度/` 查看结果，例如 `agx-orin/int8/`。
 
+这些结果在 2026-09-21 仓库首次公开之前测得，早于 10 月加入的投机解码、GPU 预处理等 StreamVLN 推理优化，未在当前代码上复测；在当时的实现下，各量化档均慢于同设备的 BF16。当前代码的 BF16 / INT8 首帧性能见 [StreamVLN benchmark](../streamvln-benchmark/README.md)。
+
 | 设备 | BF16 | FP8 | INT8 | NVFP4 |
 |---|---|---|---|---|
 | AGX Orin 32G | [结果](agx-orin/bf16/README.md) | — | [结果](agx-orin/int8/README.md) | — |
@@ -15,7 +17,7 @@ seed=42，逐帧推理，各 episode 保留自身生成历史，边界重置。�
 每个设备/精度目录仅保留一份开启可用优化的 `config.json`，以及对应的 README 和最终全量结果。必要脚本仅放在本模型 benchmark 根目录。
 
 - `config.json`：保留原测试机器的模型和数据路径；新输出写入同目录的 `runs/`。
-- `*.result.json`：最终原始结果，包含逐条动作、计时、环境与实际优化信息；仅在本地和 snapshot 中保存。
+- `*.result.json`：最终原始结果，包含逐条动作、计时、环境与实际优化信息；不提交 Git。
 
 E2E 是已解码 CPU 观测到 CPU 动作的完整耗时；Forward 是 GPU 输入就绪后的完整模型调用。两者均包含全部去噪或生成步骤，E2E 额外包含预处理、传输和后处理。加载、预热、磁盘读取及图像解码不计入。吞吐为观测数除以总 E2E 时间，内存为峰值 CUDA allocated。
 

@@ -38,7 +38,7 @@ FPS 为完整观测/s：首批按 `1000 × batch / 首批整批耗时(ms)` 计�
 
 单张 RTX 4090 24 GB、BF16，R2R val-unseen、seed=42 的冻结 256 集清单前 128 集，各取首帧；batch=1/2/4/8 分别计时 128/64/32/16 个请求批次，直到整批最后一个输出返回；原生引擎保留自己的动态调度。128 帧完整预热一遍后测一遍，每批清空历史、内容缓存和已学习的投机候选，保留图与编译结果；EmbodiInfer 配置 `firstframe.reset_speculative_prior=true`。计时从 CPU RGB 到完整 CPU actions，包含预处理；SGLang 包含本机 SRT 进程通信，不含磁盘、加载、预热、重置、HTTP 和渲染。
 
-三侧使用 `Arvil/Qwen2.5-VL-3B_rl_r2r_4000@1609873`，相同输入、prompt、greedy 解码、max new tokens=512。repetition penalty 统一为 1.0，避免引擎对输入前缀是否参与惩罚的语义差异；每帧 88 个图像 tokens；每组均有 128 个有效输出、2,688 个生成 tokens。下方历史首帧数据与此前“16 集 × 前 8 帧”的历史回放采用不同协议，不混用。
+三侧使用 `Arvil/Qwen2.5-VL-3B_rl_r2r_4000@1609873`，相同输入、prompt、greedy 解码、max new tokens=512。repetition penalty 统一为 1.0，避免引擎对输入前缀是否参与惩罚的语义差异；每帧 88 个图像 tokens；每组均有 128 个有效输出、2,688 个生成 tokens。下方 2026-11-01 的首帧数据采用不同的 repetition penalty 与投机候选重置规则，与本表不混用。
 
 | 引擎 | 本次启用的优化 |
 | --- | --- |
@@ -71,7 +71,7 @@ for B in 1 2 4 8; do
 done
 ```
 
-## 首帧性能（历史数据，2026-11-01）
+## 首帧性能：BF16 / INT8（2026-11-01）
 
 | 数据集 | 精度 | Batch | 批调用数 | 整批 mean / P95 (ms) | 摊销 ms/观测 | 观测/s | 峰值 allocated (GiB) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -94,9 +94,9 @@ done
 
 ### 场景
 
-R2R / RxR val-unseen，各取与 [Thor](../thor/README.md) 相同的固定 128 集首帧和原指令，每集从空历史开始。同一组输入预热一遍后正式测量一遍；不渲染、不计算 SR/SPL，也不覆盖长历史复用。
+R2R / RxR val-unseen，各取与 [Thor](../thor/README.md) 相同的固定 128 集首帧和原指令，每集从空历史开始，与 Thor 页同协议。同一组输入预热一遍后正式测量一遍；不渲染、不计算 SR/SPL，也不覆盖长历史复用。
 
-2026-11-01，单张 RTX 4090 24 GB，驱动 580.82.07，功耗上限 450 W；Torch 2.10.0 / CUDA 12.8 / Triton 3.6.0 / Transformers 4.51.3，CPU 线程数为 4。使用与 Thor 相同的权重版本和首帧脚本。投机解码、GPU 预处理、CUDA Graph、融合算子和 packed prefill 开启；本轮图缺失回退为 0。
+2026-11-01，单张 RTX 4090 24 GB，驱动 580.82.07，功耗上限 450 W；Torch 2.10.0 / CUDA 12.8 / Triton 3.6.0 / Transformers 4.51.3，CPU 线程数为 4。使用与 Thor 相同的权重版本和首帧脚本。投机解码、GPU 预处理、CUDA Graph、融合算子和 packed prefill 开启；图缺失回退为 0。
 
 计时从解码后的 CPU RGB 到 CPU actions，包含完整动作生成；不含加载、预热、PNG 解码、HTTP 和仿真。整批延迟与摊销每观测耗时分别统计。
 
@@ -117,7 +117,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. python benchmarks/vln_firstframe.py \
   --output results/rtx-4090/activevln/firstframe/r2r-bf16-b1
 ```
 
-## 闭环导航（历史数据）
+## 闭环导航（R2R / RxR，B=1）
 
 | 数据集 | 精度 | 成功 / 128 | SR | SPL | 模型 mean / P95 (ms) | 模型调用数 | 整集耗时合计 (min) | 配置 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
