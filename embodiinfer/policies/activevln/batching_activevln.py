@@ -713,12 +713,67 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
         self.counters["prefill_padding_tokens"] += tokens - total
         return entry.output[0].index_select(0, ends)
 
+    def _prewarm_resident_turn(self, row: PreparedActiveVLNTurn) -> None:
+        """Capture missing shapes under the runtime lock without invalidating borrowed KV."""
+        self._check_resident_memory(row.memory)
+        size = row.turn.input_ids.shape[1]
+        past = 0 if row.memory is None else row.memory.seq_len
+        query = self._query_bucket(size)
+        self._plan_rows([past], query, 1)
+        tree_queries = self._tree_query_sizes()
+        extent = min(
+            self.policy.max_context,
+            past + size + self.policy.max_new_tokens + max(tree_queries, default=0),
+        )
+        buckets = sorted({self._key_bucket(n) for n in range(past + size + 1, extent + 1)})
+        prefill_key = self._key_bucket(past + query)
+        packed = self._packs(query)
+        missing_prefill = (
+            self._packed_graph([size], query, [past]) is None
+            if packed
+            else (query, prefill_key) not in self.text_graphs
+        )
+        missing_decode = any((1, key) not in self.text_graphs for key in buckets)
+        missing_tree = any(
+            (width, key) not in self.tree_graphs for width in tree_queries for key in buckets if key >= width
+        )
+        grid = row.turn.image_grid_thw.detach().cpu()
+        vision_key = (tuple(grid.reshape(-1).tolist()), tuple(row.turn.pixel_values.shape))
+        missing_vision = vision_key not in self.vision_graphs
+        if not (missing_prefill or missing_decode or missing_tree or missing_vision):
+            return
+
+        # Capture can overwrite the arena; keep its address and the live lease intact.
+        saved_kv = self._row_kv(0, 0, past).clone() if past else None
+        self.capture_enabled = True
+        try:
+            if missing_vision:
+                self.vision(row.turn)
+            if missing_decode:
+                self._capture_contexts(1, buckets)
+            if missing_prefill:
+                if packed:
+                    self._capture_packed_contexts(query, [prefill_key], tokens=size)
+                else:
+                    self._capture_contexts(query, [prefill_key])
+            if missing_tree:
+                for width in tree_queries:
+                    self._capture_contexts(width, buckets, tree=True)
+        finally:
+            self.capture_enabled = False
+            self._set_resident_layout()
+            if saved_kv is not None:
+                self._row_kv(0, 0, past).copy_(saved_kv)
+
     def prewarm_prepared(self, prepared: PreparedActiveVLNBatch) -> None:
-        """Capture fresh full-history inputs and their decode shapes before prefill.
+        """Capture prepared input and decode shapes before prefill.
 
         Repeated calls reuse captured shapes. Capacity growth invalidates and
         recaptures graphs before any prefix is published. This does not consume
-        sampling RNG state or retain generated answers.
+        sampling RNG state or retain generated answers. Non-resident inputs must
+        contain fresh full histories. Resident inputs may continue the latest
+        memory: capture preserves its committed KV and lease. Reset the resident
+        session explicitly before supplying a fresh history for another session.
         """
         self._validate()
         if not self.use_cuda_graph:
@@ -729,8 +784,11 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             rows = prepared.turns
             if not 1 <= len(rows) <= self.batch_size:
                 raise ValueError("prepared batch does not fit this runtime")
-            if self.resident_kv or any(row.memory is not None for row in rows):
-                raise ValueError("prepared prewarming requires fresh, non-resident full histories")
+            if self.resident_kv:
+                self._prewarm_resident_turn(rows[0])
+                return
+            if any(row.memory is not None for row in rows):
+                raise ValueError("non-resident prepared prewarming requires fresh full histories")
             sizes = [row.turn.input_ids.shape[1] for row in rows]
             query = self._query_bucket(max(sizes))
             self._plan_rows([0] * self.batch_size, query, len(rows))
