@@ -634,14 +634,25 @@ invalidated by the next prefill or generation attempt. Cancellation/OOM does
 not commit replacement memory. Reusing complete B=1 calls in a Python loop was
 rejected because it does not provide tensor batching.
 
-Callers that already hold complete processed histories can call
+Callers that already hold processed inputs can call
 `runtime.prewarm_prepared(PreparedActiveVLNBatch(turns))` before `prefill`.
 It captures the combined image shape, padded or packed prefill, and scalar or
-grammar-tree decoding bounds for those histories. Repeated calls reuse graphs;
-storage growth recaptures them before publishing a prefix. Inputs must have no
-previous memory and use non-resident KV. Prewarming rejects a pending generation
-and preserves the sampling generator state. Weight refits require rebuilding the
-runtime and capturing against the new parameter buffers.
+grammar-tree decoding bounds for those inputs. Non-resident inputs must contain
+fresh full histories; storage growth recaptures graphs before publishing a prefix.
+Resident batch-one inputs may continue the latest memory. Missing shapes are
+captured after saving the committed KV prefix, which is restored even if capture
+fails; the fixed arena address and live lease are retained. When all shapes are
+cached, prewarming returns without copying KV. Call `reset_resident_kv()` before
+starting another resident session; stale memories and interleaved live sessions
+remain errors. Prewarming rejects a pending generation and preserves the sampling
+generator state. Weight refits that replace parameter buffers require rebuilding
+the runtime and capturing against the new addresses.
+
+The resident prepared-prewarm implementation has static validation only. CUDA
+replay and numerical parity still require checkpoint validation with identical
+inputs, BF16 weights, sampling seeds, and runtime switches against resident eager
+execution. Compare response tokens and token log-probabilities exactly across
+fresh histories, continuations, new graph shapes, and explicit session resets.
 
 For stochastic rollout, use `do_sample=True` with `grammar_tree_budget>0` and
 `tree_decode=False`. Grammar continuations propose work; verification still draws
