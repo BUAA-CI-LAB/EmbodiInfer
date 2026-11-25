@@ -112,9 +112,11 @@ class ActiveVLNBatchedRuntime(ActiveVLNGraphRuntime):
             raise ValueError("resident_kv must be a boolean")
         if resident_kv and (batch_size != 1 or kv_pool_tokens is None):
             raise ValueError("resident_kv requires batch_size=1 and an explicit kv_pool_tokens capacity")
+        if packed_prefill and kv_pool_tokens is None:
+            kv_pool_tokens = batch_size * policy.max_context
         if decode_linear and tree_fp32_projection:
             raise ValueError("decode_linear and tree_fp32_projection are alternative projections")
-        if packed_prefill and (kv_pool_tokens is None or attention_kernel != "gqa" or not cuda_graph):
+        if packed_prefill and (attention_kernel != "gqa" or not cuda_graph):
             raise ValueError("packed prefill requires CUDA graphs, a shared KV pool and the GQA kernel")
         if type(packed_prefill_bucket) is not int or packed_prefill_bucket < 1:
             raise ValueError("packed_prefill_bucket must be a positive Python integer")

@@ -645,6 +645,10 @@ class ActiveVLNPolicy(VLAPolicy):
         Sampled decoding follows the policy's temperature/top-p; phrase trees
         stay greedy-only, grammar trees verify either rule exactly.
 
+        Non-resident packed prefill defaults ``kv_pool_tokens`` to
+        ``batch_size * max_context`` when omitted. An explicit capacity is
+        preserved and validated.
+
         ``resident_kv=True`` requires batch one and explicit ``kv_pool_tokens``.
         It returns borrowed, append-only session memories in a fixed arena.
         Continue only the latest memory; reset the runtime between live sessions,
