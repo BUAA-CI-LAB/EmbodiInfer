@@ -17,4 +17,4 @@
 .venv/bin/python benchmark.py --config agx-orin/bf16/config.json
 ```
 
-原始全量结果：R2R (`r2r.result.json`)、RxR (`rxr.result.json`)（本地及 snapshot 提供，不提交 Git）。
+原始全量结果：R2R (`r2r.result.json`)、RxR (`rxr.result.json`)（不提交 Git）。

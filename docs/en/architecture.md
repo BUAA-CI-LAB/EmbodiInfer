@@ -286,7 +286,7 @@ RL integration adds a criterion of its own: rollout-side log-probability is re-s
 the actor, and the importance-ratio quantiles are compared against the native backend's
 own noise floor at `θ₀`.
 
-Measured results, including the engine-mechanism and RL-integration numbers, are on the
+Measured results, including the RL-integration numbers, are on the
 [Benchmark](benchmark.md) page.
 
 ## Limitations

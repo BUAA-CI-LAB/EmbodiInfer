@@ -102,24 +102,23 @@ python libero/film.py --port 8000 --tasks 6 --inits 2 --label "EmbodiInfer FP8 |
 python libero/stack.py runs/libero/films/*/task6_init2.mp4 -o runs/libero/compare.mp4
 ```
 
-## 其他平台与早期结果
+## 其他平台
 
-各平台此前测得的结果汇总。权重、输入和计时范围逐行不同，只在行内对照，不与上表换算。
+Jetson AGX Thor 与 RTX 4090 以外平台的结果。权重、输入和计时范围逐行不同，只在行内对照，不与上表换算。
 
-| 平台 | 工作负载与计时 | EmbodiInfer | 对照 |
-|---|---|---|---|
-| DGX Spark | `RLinf-Pi05-LIBERO-SFT`，B=1、H=10，同步 wall P50 | NVFP4 prefix + FP8 action **65.76 ms**，完整优化 BF16 81.31 ms | 原 EmbodiInfer BF16 109.33 ms（加速 1.66× / 1.34×） |
-| Jetson Orin NX | `RLinf-Pi05-LIBERO-SFT`，B=1、H=10，同步 wall | `w8a8-w4a16` **321.9–338.3 ms**，`w4a16` 395.5–405.1 ms | — |
-| AGX Orin 32GB | 三相机 `pi05-chips-30000`，B=1、输出 50×12，P50 | eager + 完整去噪图 **2311.7 ms**，动作与 LeRobot 逐位一致 | LeRobot 2751.8 ms（1.19×） |
-| AGX Orin | `RLinf-Pi05-LIBERO-SFT`，LeRobot 数值语义，H=10，FP32 GEMM 允许 TF32，GPU elapsed 均值 | BF16 363.41 ms | — |
-| RTX 4090 | LIBERO-10 1,600 帧离线回放，B=1，E2E 均值 | 原生优化 **38.89 ms**（25.71 obs/s） | 原 EmbodiInfer 74.33 ms，PhyAI 41.31 ms，vla.cpp 79.36 ms，Embodied.cpp 89.99 ms |
-| Jetson AGX Thor | LIBERO-10 1,600 帧离线回放，B=1，E2E 均值，原生优化之前 | 164.05 ms | — |
+| 平台 | 日期 | 工作负载与计时 | EmbodiInfer | 对照 |
+|---|---|---|---|---|
+| AGX Orin 32GB | 2026-11-02 | `pi05_base`，200 条 LIBERO-10 录制观测，整模型 BF16，B=1、10 步去噪，prefix 与完整去噪 CUDA Graph，均值 | agent 调优 kernel `orin_pi05_r2` **302.0 ms** | 同路径现有 Triton kernel 396.6 ms；加 Inductor 353.4 ms（[条件](../../docs/proposals/0008-kernel-tuning.md#93-orin_pi05_r2-in-uniform-bf16)） |
+| DGX Spark | 2026-10-10 | `RLinf-Pi05-LIBERO-SFT`，B=1、H=10，同步 wall P50 | NVFP4 prefix + FP8 action **65.76 ms**，完整优化 BF16 81.31 ms | 原 EmbodiInfer BF16 109.33 ms（加速 1.66× / 1.34×） |
+| Jetson Orin NX | 2026-10-12 | `RLinf-Pi05-LIBERO-SFT`，B=1、H=10，同步 wall | `w8a8-w4a16` **321.9–338.3 ms**，`w4a16` 395.5–405.1 ms | — |
+| AGX Orin 32GB | 2026-10-10 | `RLinf-Pi05-LIBERO-SFT`，LeRobot 数值语义，H=10，FP32 GEMM 允许 TF32，GPU elapsed 均值 | BF16 363.41 ms | — |
+| AGX Orin 32GB | 2026-09-17 | 三相机 `pi05-chips-30000`，B=1、输出 50×12，P50 | eager + 完整去噪图 **2311.7 ms**，动作与 LeRobot 逐位一致 | LeRobot 2751.8 ms（1.19×） |
 
-RTX 4090 上默认关闭的 `prefix_gelu_fusion` 另有约 1.3% 的完整请求收益，动作逐字节不变。
+AGX Orin 的 BF16 / INT8 LIBERO-10 回放见 [pi05-quant-benchmark](../pi05-quant-benchmark/README.md)。
 
-## 数据与计时口径
+## 离线回放数据与计时口径
 
-1,600 帧离线回放使用 LeRobot `pi05_libero_finetuned_v044` 检查点及其 tokenizer、状态归一化和动作反归一化。数据为 [LIBERO-datasets](https://huggingface.co/datasets/yifengzhu-hf/LIBERO-datasets) revision `f13aa24a3da8c43c7225569f28c562979fa0e35a` 的 `libero_10/*.hdf5`：任务文件名字典序取 10 个，每任务按 numeric demo ID 取前 10 段，每段含首尾均匀取 16 帧，共 1,600 帧。输入 agentview、wrist RGB、EEF position3 + axis-angle3 + gripper2 及任务指令，10 个去噪步，每次输出 50×7 动作块。
+`benchmark.py` 的 1,600 帧离线回放使用 LeRobot `pi05_libero_finetuned_v044` 检查点及其 tokenizer、状态归一化和动作反归一化。数据为 [LIBERO-datasets](https://huggingface.co/datasets/yifengzhu-hf/LIBERO-datasets) revision `f13aa24a3da8c43c7225569f28c562979fa0e35a` 的 `libero_10/*.hdf5`：任务文件名字典序取 10 个，每任务按 numeric demo ID 取前 10 段，每段含首尾均匀取 16 帧，共 1,600 帧。输入 agentview、wrist RGB、EEF position3 + axis-angle3 + gripper2 及任务指令，10 个去噪步，每次输出 50×7 动作块。
 
 统一单卡、B=1、BF16、seed=42，预热 10 次，正式测量 1 遍。计时从已解码的 CPU RGB/状态开始，到 CPU 输出结束，包含预处理、模型执行、后处理及两端 CUDA 同步；磁盘读取/解码、模型加载和预热（含编译与图捕获）不计入。不运行仿真，不计算任务成功率。
 

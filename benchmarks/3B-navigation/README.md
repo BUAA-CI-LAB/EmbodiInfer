@@ -1,6 +1,6 @@
 # 3B Navigation Real-Image Benchmarks
 
-Formal R2R-VLNCE aligned-RGB throughput results are recorded in [R2R_VLNCE_THROUGHPUT_REPORT.md](R2R_VLNCE_THROUGHPUT_REPORT.md).
+三个模型在 Thor 与 RTX 4090 上的延迟见 [qwenvl-benchmark](../qwenvl-benchmark/README.md)。本目录提供真实 RGB 输入上的逐样本 eager / CUDA Graph 一致性、算子级和编译缓存检查工具。
 
 本目录只发布使用真实 RGB 文件的三个 3B 导航模型 benchmark。脚本不生成
 random、zero、placeholder 或其他合成视觉输入，也没有 synthetic fallback。
@@ -21,12 +21,8 @@ random、zero、placeholder 或其他合成视觉输入，也没有 synthetic fa
   对比 Transformers top-level eager、自研 uncaptured forward 和 captured replay。
 - `benchmark_compile_cache.py`：纯 stdlib 多进程 launcher，验证空 cache producer、
   same-dir consumer 和 fresh-dir Mega-Cache consumer 的 FX/AOT persistent hit。
-- [`TRITON_REPORT.md`](TRITON_REPORT.md)：2026-08-22 RTX 4090 正式 Triton hybrid
-  kernel、full-policy 与 NaViDA paired-seeded 结果和正确性门禁。
-- [`TORCH_COMPILE_REPORT.md`](TORCH_COMPILE_REPORT.md)：2026-08-22 RTX 4090
-  precision-v2 的正式 8/8 kernel/full-policy 数据、正确性门禁与冷启动代价。
-- [`HISTORY_IMAGE_CACHE_REPORT.md`](HISTORY_IMAGE_CACHE_REPORT.md)：2026-08-22
-  CPU-only 8-step recurrent history RGB cache 正式结果、exact processor parity 与门禁。
+- `benchmark_history_image_cache.py`：连续单 session 的 history RGB cache 预处理测量。
+- `prepare_r2r_vlnce_manifest.py`：生成确定性的 R2R-VLNCE 真实 RGB manifest。
 
 ## 数据前置条件
 
@@ -255,8 +251,7 @@ JSON 的 `attention_backend` 记录 requested/resolved、是否 fallback、fallb
 kernel ABI、resolved config、layers backend 和 Triton version。backend resolution、
 Triton JIT 与 graph capture 均发生在 warmup/parity gate，排除在 timed window 外。
 
-正式结果必须保留原始 manifest 和真实图像资产的 provenance。仓库不再发布旧的
-synthetic/placeholder RTX 4090 数字。
+结果必须保留原始 manifest 和真实图像资产的 provenance。
 
 ## `torch.compile` / Inductor
 
@@ -456,9 +451,6 @@ python benchmarks/3B-navigation/benchmark_cuda_graph.py \
   --expected-physical-gpu 0 --output "$ARTIFACTS/panoramic-kernel.json"
 ```
 
-旧 Habitat-document smoke manifest 和对应报告仅保留为历史诊断，不是最终 R2R
-throughput 输入，也不得表述为 R2R trajectory evaluation。
-
 ## Recurrent history RGB cache preprocessing
 
 `benchmark_history_image_cache.py` 只测连续单 session 的真实图像
@@ -488,6 +480,3 @@ pooled-step mean/p50/p95/steps/s。`none` 不执行 cache lookup，因此 cache 
 零；其 raw history render 单独计数。
 `rgb_bytes` 每个 session 最多保存 16 MiB 的 immutable post-resize RGB recent
 suffix；Panoramic candidate 每一步照常处理且永不进入 cache。
-
-Persistent compile-cache producer/consumer measurements are documented in
-[COMPILE_CACHE_REPORT.md](COMPILE_CACHE_REPORT.md).

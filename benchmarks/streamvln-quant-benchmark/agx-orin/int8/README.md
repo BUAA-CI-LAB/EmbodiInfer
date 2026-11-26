@@ -17,4 +17,4 @@ INT8 native 后端；关闭语言 prefill 编译；开启视觉/decode CUDA Grap
 .venv/bin/python benchmark.py --config agx-orin/int8/config.json
 ```
 
-原始全量结果：R2R (`r2r.result.json`)、RxR (`rxr.result.json`)（本地及 snapshot 提供，不提交 Git）。
+原始全量结果：R2R (`r2r.result.json`)、RxR (`rxr.result.json`)（不提交 Git）。

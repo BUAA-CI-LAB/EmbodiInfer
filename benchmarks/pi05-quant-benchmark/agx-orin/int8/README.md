@@ -16,4 +16,4 @@ INT8 native 后端、CUDA Graph；预热 10 条。Inductor 编译关闭。开启
 .venv/bin/python benchmark.py --config agx-orin/int8/config.json
 ```
 
-原始全量结果：LIBERO-10 (`libero10.result.json`)（本地及 snapshot 提供，不提交 Git）。
+原始全量结果 `libero10.result.json` 不提交 Git。

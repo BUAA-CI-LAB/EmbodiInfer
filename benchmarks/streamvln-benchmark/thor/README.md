@@ -25,7 +25,7 @@
 
 R2R / RxR val-unseen，各取固定清单的 128 集首帧和原指令，每集从空历史开始。同一组输入预热一遍后正式测量一遍；不计算 SR/SPL，也不覆盖长历史复用。
 
-Thor MAXN，GPU 1575 MHz；Torch 2.13.0+cu132 / CUDA 13.2 / Triton 3.7.1 / Transformers 4.51.3。权重和图片均在本地。投机解码、GPU 预处理、CUDA Graph、融合算子和 packed prefill 开启；本轮图缺失回退为 0。
+Thor MAXN，GPU 1575 MHz；Torch 2.13.0+cu132 / CUDA 13.2 / Triton 3.7.1 / Transformers 4.51.3。权重和图片均在本地。投机解码、GPU 预处理、CUDA Graph、融合算子和 packed prefill 开启；图缺失回退为 0。
 
 计时从解码后的 CPU RGB 到 CPU actions，包含完整动作生成；不含加载、预热、PNG 解码、HTTP 和仿真。整批延迟与摊销每观测耗时分别统计。
 
@@ -41,7 +41,7 @@ PYTHONPATH=. python benchmarks/vln_firstframe.py \
   --output results/thor/streamvln/firstframe/r2r-bf16-b1
 ```
 
-## 闭环导航（历史数据）
+## 闭环导航（R2R）
 
 | 数据集 | 精度 | Batch | 成功 / 128 | SR | SPL | 整批 mean / P95 (ms) | 批调用数 | 整集耗时合计 (min) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -57,9 +57,9 @@ PYTHONPATH=. python benchmarks/vln_firstframe.py \
 
 同一台 Thor 推理、局域网 RTX 4090 运行 Habitat，固定 R2R val-unseen 128 集完整闭环。前进 0.25 m、转向 15°、最多 500 步；STOP 时距目标小于 3 m 记为成功。模型计时口径同上；整集耗时为 128 集耗时之和，包含仿真及通信，多 batch 时不等于运行墙钟时长。
 
-历史闭环原始数据保留在实验工作区，上表独立汇总，不并入首帧统计。两种精度的实际轨迹及调用数可能不同。
+闭环原始数据保留在实验工作区，上表独立汇总，不并入首帧统计。两种精度的实际轨迹及调用数可能不同。
 
-BF16 batch=8 的旧闭环计时因资源干扰疑点归档待复测，未列入有效结果；RxR 尚无完整闭环结果。B4/B8 的服务收集窗口为 10000 ms，B1/B2 为 1000 ms；满批立即执行，尾批等待计入整集耗时，不计入模型耗时。
+BF16 batch=8 的闭环计时因资源干扰疑点待复测，未列入结果；RxR 尚无完整闭环结果。B4/B8 的服务收集窗口为 10000 ms，B1/B2 为 1000 ms；满批立即执行，尾批等待计入整集耗时，不计入模型耗时。
 
 ### 复现
 
